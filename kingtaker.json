@@ -1,0 +1,13 @@
+{
+  "type": "GenericDir",
+  "param": { "items": {
+    "_imgui": { "type": "SystemImGuiConfig", "param": "" },
+    "_queue": { "type": "GenericDir", "param": {"items": {
+      "main": { "type": "SystemMainQueue", "param": {} },
+      "sub" : { "type": "SystemSubQueue", "param": {} },
+      "cpu" : { "type": "SystemCpuQueue", "param": {} }
+    } } },
+
+    "home": { "type": "GenericDir", "param": {"gui": {"shown": true}, "items": {} } }
+  } }
+}

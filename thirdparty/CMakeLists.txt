@@ -1,0 +1,165 @@
+include(FetchContent)
+
+
+if (KINGTAKER_STATIC)
+  set(BUILD_SHARED_LIBS OFF)
+else()
+  set(BUILD_SHARED_LIBS ON)
+endif()
+
+
+# ---- GLEW ----
+# repository: https://github.com/Perlmint/glew-cmake
+# license   :  Modified BSD License, the Mesa 3-D License (MIT) and the Khronos License (MIT).
+
+FetchContent_Declare(
+  glew
+  URL "https://github.com/Perlmint/glew-cmake/archive/refs/tags/glew-cmake-2.2.0.zip"
+)
+FetchContent_MakeAvailable(glew)
+
+if (KINGTAKER_STATIC)
+  add_library(glew ALIAS libglew_static)
+else()
+  add_library(glew ALIAS libglew_shared)
+endif()
+
+
+# ---- GLFW ----
+# repository: https://github.com/glfw/glfw
+# license   : zlib
+
+FetchContent_Declare(
+  glfw
+  URL "https://github.com/glfw/glfw/archive/refs/tags/3.3.4.zip"
+)
+
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(glfw)
+
+
+# ---- ImGUI ----
+# repository: https://github.com/ocornut/imgui/
+# license   : MIT
+
+FetchContent_Declare(
+  imgui
+  URL "https://github.com/ocornut/imgui/archive/747f7fdbbaa1fdd46d5115c7333ab0722a7c2afc.zip"
+)
+FetchContent_Populate(imgui)
+
+add_library(imgui)
+target_sources(imgui
+  PRIVATE
+    "${imgui_SOURCE_DIR}/imgui.cpp"
+    "${imgui_SOURCE_DIR}/imgui_demo.cpp"
+    "${imgui_SOURCE_DIR}/imgui_draw.cpp"
+    "${imgui_SOURCE_DIR}/imgui_internal.h"
+    "${imgui_SOURCE_DIR}/imgui_tables.cpp"
+    "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
+    "${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp"
+  PUBLIC
+    "${imgui_SOURCE_DIR}/imgui.h"
+    "${imgui_SOURCE_DIR}/imstb_rectpack.h"
+    "${imgui_SOURCE_DIR}/imstb_textedit.h"
+    "${imgui_SOURCE_DIR}/imstb_truetype.h"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.h"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.h"
+    "${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.h"
+)
+target_include_directories(imgui SYSTEM
+  PUBLIC
+    "${imgui_SOURCE_DIR}"
+    "${imgui_SOURCE_DIR}/backends"
+    "${imgui_SOURCE_DIR}/misc/cpp"
+)
+target_link_libraries(imgui
+  PRIVATE glfw
+)
+
+
+# ---- ImNodes ----
+# repository: https://github.com/rokups/ImNodes
+# license   : MIT
+
+FetchContent_Declare(
+  imnodes
+  URL "https://github.com/roblunx/ImNodes/archive/refs/heads/customized.zip"
+)
+FetchContent_Populate(imnodes)
+
+add_library(imnodes)
+target_link_libraries(imnodes
+  PRIVATE
+    imgui
+)
+target_include_directories(imnodes SYSTEM
+  PUBLIC
+    "${imnodes_SOURCE_DIR}"
+)
+target_sources(imnodes
+  PUBLIC
+    "${imnodes_SOURCE_DIR}/ImNodes.h"
+  PRIVATE
+    "${imnodes_SOURCE_DIR}/ImNodes.cpp"
+)
+
+
+# ---- linalg.h ----
+# repository: https://github.com/sgorsten/linalg
+# license   : Unlicense
+
+FetchContent_Declare(
+  linalg_h
+  URL "https://github.com/sgorsten/linalg/archive/a3e87da35e32b781a4b6c01cdd5efbe7ae51c737.zip"
+)
+FetchContent_Populate(linalg_h)
+
+add_library(linalg.h INTERFACE)
+target_include_directories(linalg.h SYSTEM
+  INTERFACE .  "${linalg_h_SOURCE_DIR}"
+)
+target_sources(linalg.h
+  INTERFACE
+    "${linalg_h_SOURCE_DIR}/linalg.h"
+    linalg.hh
+)
+
+
+# ---- MsgPack C++ ----
+# repository: https://github.com/msgpack/msgpack-c
+# license   : Boost
+
+FetchContent_Declare(
+  msgpack
+  URL "https://github.com/msgpack/msgpack-c/archive/refs/tags/cpp-4.0.3.zip"
+)
+
+set(MSGPACK_CXX20            ON)
+set(MSGPACK_BUILD_DOCS       OFF)
+set(MSGPACK_USE_STATIC_BOOST ${KINGTAKER_STATIC})
+
+FetchContent_MakeAvailable(msgpack)
+
+
+# ---- nlohmann/json ----
+# repository: https://github.com/nlohmann/json
+# license   : MIT 
+
+FetchContent_Declare(
+  nlohmann-json
+  URL "https://github.com/nlohmann/json/releases/download/v3.10.4/include.zip"
+)
+FetchContent_Populate(nlohmann-json)
+
+add_library(nlohmann-json INTERFACE)
+target_include_directories(nlohmann-json SYSTEM
+  INTERFACE
+    "${nlohmann-json_SOURCE_DIR}/single_include"
+)
