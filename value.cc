@@ -34,8 +34,8 @@ class PulseValue : public File, public iface::Node {
   static inline TypeInfo* type_ = TypeInfo::New<PulseValue>(
       "PulseValue", "pulse emitter");
 
-  PulseValue() :
-      File(type_), Node({}, {&out_}), out_(this), gui_(this) {
+  PulseValue() : File(type_), gui_(this) {
+    out_.emplace_back(new PulseEmitter(this));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object&) {
@@ -70,7 +70,7 @@ class PulseValue : public File, public iface::Node {
 
    private:
     PulseValue* owner_;
-  } out_;
+  };
 
   class GUI : public iface::GUI {
    public:
@@ -83,7 +83,7 @@ class PulseValue : public File, public iface::Node {
       const auto& style = ImGui::GetStyle();
 
       if (ImGui::Button("Z")) {
-        owner_->out_.Send(Pulse());
+        owner_->out_[0]->Send(Pulse());
       }
 
       ImGui::SameLine();
@@ -105,7 +105,8 @@ class ImmValue : public File, public iface::Node {
       "ImmValue", "immediate value");
 
   ImmValue(Value&& v = Integer{0}) :
-      File(type_), Node({}, {&out_}), value_(std::move(v)), out_(this), gui_(this) {
+      File(type_), value_(std::move(v)), gui_(this) {
+    out_.emplace_back(new Emitter(this));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
@@ -136,7 +137,7 @@ class ImmValue : public File, public iface::Node {
   class Emitter final : public CachedOutSock {
    public:
     Emitter(ImmValue* o) noexcept : CachedOutSock(o, "out", Integer{0}) { }
-  } out_;
+  };
 
   class GUI final : public iface::GUI {
    public:
@@ -188,7 +189,7 @@ class ImmValue : public File, public iface::Node {
         assert(false);
       }
       if (mod) {
-        owner_->out_.Send(Value(owner_->value_));
+        owner_->out_[0]->Send(Value(owner_->value_));
         owner_->lastmod_ = Clock::now();
       }
 

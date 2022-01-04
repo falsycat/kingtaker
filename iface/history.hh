@@ -43,7 +43,9 @@ class History::Command {
 template <typename T = History::Command>
 class SimpleHistory : public History {
  public:
-  SimpleHistory(std::vector<std::unique_ptr<T>>&& cmds = {}, size_t cur = 0) :
+  using CommandList = std::vector<std::unique_ptr<T>>;
+
+  SimpleHistory(CommandList&& cmds = {}, size_t cur = 0) :
       cmds_(std::move(cmds)), cursor_(cur) {
   }
   SimpleHistory(const SimpleHistory&) = delete;
@@ -101,7 +103,7 @@ class SimpleHistory : public History {
   size_t size() const noexcept { return cmds_.size(); }
 
  private:
-  std::vector<std::unique_ptr<T>> cmds_;
+  CommandList cmds_;
 
   size_t cursor_;
 };

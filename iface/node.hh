@@ -34,24 +34,31 @@ class Node {
   class OutSock;
   class CachedOutSock;
 
-  Node() = delete;
-  Node(std::vector<InSock*>&& in, std::vector<OutSock*>&& out) :
-      in_(std::move(in)), out_(std::move(out)) { }
+  using InSockList  = std::vector<std::shared_ptr<InSock>>;
+  using OutSockList = std::vector<std::shared_ptr<OutSock>>;
+
+  static inline bool Link(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
+  static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
+
+  Node(InSockList&& in = {}, OutSockList&& out = {}) :
+      in_(std::move(in)), out_(std::move(out)) {
+  }
   virtual ~Node() = default;
   Node(const Node&) = delete;
   Node(Node&&) = delete;
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
-  inline InSock* FindIn(std::string_view) const noexcept;
-  inline OutSock* FindOut(std::string_view) const noexcept;
+  inline std::shared_ptr<InSock> FindIn(std::string_view) const noexcept;
+  inline std::shared_ptr<OutSock> FindOut(std::string_view) const noexcept;
 
-  std::span<InSock*> in() noexcept { return in_; }
-  std::span<OutSock*> out() noexcept { return out_; }
+  std::span<const std::shared_ptr<InSock>> in() noexcept { return in_; }
+  std::span<const std::shared_ptr<OutSock>> out() noexcept { return out_; }
 
- private:
-  std::vector<InSock*> in_;
-  std::vector<OutSock*> out_;
+ protected:
+  // don't modify from subclass except in the constructor
+  InSockList  in_;
+  OutSockList out_;
 };
 
 
@@ -187,24 +194,36 @@ class Node::Sock {
 
 class Node::InSock : public Sock {
  public:
-  friend OutSock;
+  friend Node;
 
   InSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
   }
-  inline ~InSock();
 
   virtual void Receive(Value&&) noexcept { }
 
-  const std::unordered_set<OutSock*>& src() const noexcept { return src_; }
+  virtual void NotifyLink(const std::weak_ptr<OutSock>&) noexcept { }
+
+  void CleanConns() const noexcept {
+    auto& v = const_cast<decltype(src_)&>(src_);
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [](auto& e) { return e.expired(); }),
+            v.end());
+  }
+
+  std::span<const std::weak_ptr<OutSock>> src() const noexcept { return src_; }
 
  private:
-  std::unordered_set<OutSock*> src_;
+  std::vector<std::weak_ptr<OutSock>> src_;
 };
 
-class Node::CachedInSock : public Sock {
+class Node::CachedInSock : public InSock {
  public:
   CachedInSock(Node* o, std::string_view n, Value&& v) noexcept :
-      Sock(o, n), value_(std::move(v)) {
+      InSock(o, n), value_(std::move(v)) {
+  }
+
+  void Receive(Value&& v) noexcept override {
+    value_ = std::move(v);
   }
 
   const Value& value() const noexcept { return value_; }
@@ -215,33 +234,38 @@ class Node::CachedInSock : public Sock {
 
 class Node::OutSock : public Sock {
  public:
-  friend InSock;
+  friend Node;
+
+  static void Link() noexcept {
+  }
 
   OutSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
   }
-  inline ~OutSock();
 
   virtual void Send(Value&& v) noexcept {
     Value v_ = std::move(v);
     File::QueueSubTask(
         [this, v_]() {
-          for (auto dst : dst_) dst->Receive(Value(v_));
+          for (auto& dst : dst_) {
+            auto ptr = dst.lock();
+            if (ptr) ptr->Receive(Value(v_));
+          }
         });
   }
 
-  virtual void Link(InSock& dst) noexcept {
-    dst.src_.insert(this);
-    dst_.insert(&dst);
-  }
-  void Unlink(InSock& dst) noexcept {
-    dst.src_.erase(this);
-    dst_.erase(&dst);
+  virtual void NotifyLink(const std::weak_ptr<InSock>&) noexcept { }
+
+  void CleanConns() noexcept {
+    auto& v = const_cast<decltype(dst_)&>(dst_);
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [](auto& e) { return e.expired(); }),
+            v.end());
   }
 
-  const std::unordered_set<InSock*>& dst() const noexcept { return dst_; }
+  std::span<const std::weak_ptr<InSock>> dst() const noexcept { return dst_; }
 
  private:
-  std::unordered_set<InSock*> dst_;
+  std::vector<std::weak_ptr<InSock>> dst_;
 };
 
 class Node::CachedOutSock : public OutSock {
@@ -250,9 +274,12 @@ class Node::CachedOutSock : public OutSock {
       OutSock(o, n), value_(std::move(v)) {
   }
 
-  void Link(InSock& dst) noexcept override {
-    dst.Receive(Value(value_));
-    OutSock::Link(dst);
+  void Send(Value&& v) noexcept override {
+    value_ = std::move(v);
+    OutSock::Send(Value(v));
+  }
+  void NotifyLink(const std::weak_ptr<InSock>& dst) noexcept override {
+    dst.lock()->Receive(Value(value_));
   }
 
  private:
@@ -260,22 +287,49 @@ class Node::CachedOutSock : public OutSock {
 };
 
 
-Node::InSock* Node::FindIn(std::string_view name) const noexcept {
+bool Node::Link(const std::weak_ptr<OutSock>& out,
+                const std::weak_ptr<InSock>&  in) noexcept {
+  auto s_in  = in.lock();
+  auto s_out = out.lock();
+  if (!s_in || !s_out) return false;
+
+  s_in->src_.emplace_back(out);
+  s_out->dst_.emplace_back(in);
+
+  s_in->NotifyLink(out);
+  s_out->NotifyLink(in);
+  return true;
+}
+bool Node::Unlink(const std::weak_ptr<OutSock>& out,
+                  const std::weak_ptr<InSock>&  in) noexcept {
+  auto s_out = out.lock();
+  auto s_in  = in.lock();
+  if (!s_in || !s_out) return false;
+
+  auto& dst = s_out->dst_;
+  dst.erase(std::remove_if(dst.begin(), dst.end(),
+                           [&s_in](auto& e) {
+                             return e.expired() || e.lock().get() == s_in.get();
+                           }),
+            dst.end());
+  auto& src = s_in->src_;
+  src.erase(std::remove_if(src.begin(), src.end(),
+                           [&s_out](auto& e) {
+                             return e.expired() || e.lock().get() == s_out.get();
+                           }),
+            src.end());
+  return true;
+}
+
+std::shared_ptr<Node::InSock> Node::FindIn(std::string_view name) const noexcept {
   auto itr = std::find_if(in_.begin(), in_.end(),
                           [name](auto e) { return e->name() == name; });
   return itr != in_.end()? *itr: nullptr;
 }
-Node::OutSock* Node::FindOut(std::string_view name) const noexcept {
+std::shared_ptr<Node::OutSock> Node::FindOut(std::string_view name) const noexcept {
   auto itr = std::find_if(out_.begin(), out_.end(),
                           [name](auto e) { return e->name() == name; });
   return itr != out_.end()? *itr: nullptr;
-}
-
-Node::InSock::~InSock() {
-  for (auto src : src_) src->dst_.erase(this);
-}
-Node::OutSock::~OutSock() {
-  for (auto dst : dst_) dst->src_.erase(this);
 }
 
 }  // namespace kingtaker::iface
