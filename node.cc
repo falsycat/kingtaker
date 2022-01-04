@@ -23,8 +23,10 @@ namespace kingtaker {
 
 class NodeNet : public File {
  public:
-  static inline TypeInfo* type_ = TypeInfo::New<NodeNet>(
-      "NodeNet", "node network");
+  static inline TypeInfo type_ = TypeInfo::New<NodeNet>(
+      "NodeNet", "node network",
+      {"GenericDir"},
+      {typeid(iface::GUI)});
 
   using IndexMap = std::unordered_map<iface::Node*, size_t>;
   using NodeMap  = std::vector<iface::Node*>;
@@ -195,7 +197,7 @@ class NodeNet : public File {
 
   NodeNet() noexcept : NodeNet(Clock::now()) { }
   NodeNet(Time lastmod, NodeHolderList&& nodes = {}) noexcept :
-      File(type_),
+      File(&type_),
       lastmod_(lastmod), nodes_(std::move(nodes)), gui_(this), history_(this) {
   }
 
@@ -347,8 +349,8 @@ class NodeNet : public File {
         if (ImGui::BeginMenu("New")) {
           for (auto& p : File::registry()) {
             auto& t = *p.second;
-            if (!t.hasFactory()) continue;
-            if (ImGui::MenuItem(t.name())) {
+            if (!t.factory() || !t.CheckTagged("NodeNet")) continue;
+            if (ImGui::MenuItem(t.name().c_str())) {
               owner_->history_.AddNodeIf(NodeHolder::Create(t.Create()));
             }
           }

@@ -39,8 +39,9 @@ std::string File::StringifyPath(const Path& p) noexcept {
 }
 
 const File::TypeInfo* File::Lookup(const std::string& name) noexcept {
-  auto itr = registry_.find(name);
-  if (itr == registry_.end()) return nullptr;
+  auto& reg = registry_();
+  auto itr = reg.find(name);
+  if (itr == reg.end()) return nullptr;
   return itr->second;
 }
 std::unique_ptr<File> File::Deserialize(const msgpack::object& v) {
@@ -77,13 +78,34 @@ void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
   Serialize(pk);
 }
 
+std::map<std::string, File::TypeInfo*>& File::registry_() noexcept {
+  static std::map<std::string, TypeInfo*> registry_;
+  return registry_;
+}
 
-File::TypeInfo::TypeInfo(const char* name, const char* desc,
-                         Deserializer&& des, Factory&& fac) noexcept :
-    name_(name), desc_(desc),
-    deserializer_(std::move(des)), factory_(std::move(fac)) {
-  assert(registry_.find(name) == registry_.end());
-  registry_[name] = this;
+
+File::TypeInfo::TypeInfo(std::string_view name,
+                         std::string_view desc,
+                         std::vector<std::string>&& tags,
+                         std::vector<std::type_index>&& iface,
+                         Factory&& f,
+                         AssocFactory&& af,
+                         AssocChecker&& ac,
+                         Deserializer&& d,
+                         GUI&& g) noexcept :
+    name_(name), desc_(desc), tags_(std::move(tags)), iface_(std::move(iface)),
+    factory_(std::move(f)),
+    assoc_factory_(std::move(af)),
+    assoc_checker_(std::move(ac)),
+    deserializer_(std::move(d)),
+    gui_(std::move(g)) {
+  auto& reg = registry_();
+  assert(reg.find(name_) == reg.end());
+  reg[name_] = this;
+}
+
+File::TypeInfo::~TypeInfo() noexcept {
+  registry_().erase(name_);
 }
 
 

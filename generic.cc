@@ -12,20 +12,21 @@
 
 #include "iface/dir.hh"
 #include "iface/gui.hh"
-#include "iface/queue.hh"
 
 
 namespace kingtaker {
 
 class GenericDir : public File {
  public:
-  static inline TypeInfo* type_ = TypeInfo::New<GenericDir>(
-      "GenericDir", "generic implementation of directory on KINGTAKER");
+  static inline TypeInfo type_ = TypeInfo::New<GenericDir>(
+      "GenericDir", "generic impl of directory",
+      {"GenericDir"},
+      {typeid(iface::Dir), typeid(iface::GUI)});
 
   using ItemList = std::map<std::string, std::unique_ptr<File>>;
 
   GenericDir(ItemList&& items = {}) :
-      File(type_),
+      File(&type_),
       last_modified_(Clock::now()), items_(std::move(items)),
       dir_(this), gui_(this) {
   }
@@ -178,7 +179,7 @@ class GenericDir : public File {
       if (ImGui::BeginMenu("New")) {
         for (const auto& reg : File::registry()) {
           const auto& type = *reg.second;
-          if (!type.hasFactory()) continue;
+          if (!type.factory() || !type.CheckTagged("GenericDir")) continue;
 
           const auto w = 16.f*ImGui::GetFontSize();
 
@@ -215,7 +216,7 @@ class GenericDir : public File {
             ImGui::EndMenu();
           }
           if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(type.desc());
+            ImGui::SetTooltip(type.desc().c_str());
           }
         }
 
@@ -256,7 +257,7 @@ class GenericDir : public File {
       const bool open = ImGui::TreeNodeEx(f, flags, ref.top().name().c_str());
       if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
-        ImGui::Text("%s", f->type().name());
+        ImGui::Text("%s", f->type().name().c_str());
         ImGui::Text("%s", ref.Stringify().c_str());
         if (gui && (gui->feats() & kTooltip)) {
           gui->UpdateTooltip(ref);

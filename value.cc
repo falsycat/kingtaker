@@ -36,10 +36,12 @@ static void UpdatePin() noexcept {
 
 class PulseValue : public File, public iface::Node {
  public:
-  static inline TypeInfo* type_ = TypeInfo::New<PulseValue>(
-      "PulseValue", "pulse emitter");
+  static inline TypeInfo type_ = TypeInfo::New<PulseValue>(
+      "PulseValue", "pulse emitter",
+      {"NodeNet"},
+      {typeid(iface::Node)});
 
-  PulseValue() : File(type_), gui_(this) {
+  PulseValue() : File(&type_), gui_(this) {
     out_.emplace_back(new PulseEmitter(this));
   }
 
@@ -106,11 +108,13 @@ class PulseValue : public File, public iface::Node {
 
 class ImmValue : public File, public iface::Node {
  public:
-  static inline TypeInfo* type_ = TypeInfo::New<ImmValue>(
-      "ImmValue", "immediate value");
+  static inline TypeInfo type_ = TypeInfo::New<ImmValue>(
+      "ImmValue", "immediate value",
+      {"NodeNet"},
+      {typeid(iface::Node)});
 
   ImmValue(Value&& v = Integer{0}) :
-      File(type_), value_(std::move(v)), gui_(this) {
+      File(&type_), value_(std::move(v)), gui_(this) {
     out_.emplace_back(new Emitter(this));
   }
 
@@ -213,10 +217,12 @@ class ImmValue : public File, public iface::Node {
 
 class Oscilloscope : public File, public iface::Node {
  public:
-  static inline TypeInfo* type_ = TypeInfo::New<Oscilloscope>(
-      "Oscilloscope", "value inspector");
+  static inline TypeInfo type_ = TypeInfo::New<Oscilloscope>(
+      "Oscilloscope", "value inspector",
+      {"NodeNet"},
+      {typeid(iface::Node)});
 
-  Oscilloscope() : File(type_), gui_(this) {
+  Oscilloscope() : File(&type_), gui_(this) {
     in_.emplace_back(std::make_shared<Receiver>(this));
   }
 

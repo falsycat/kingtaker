@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -71,7 +73,7 @@ class File {
   static File& root() noexcept { return *root_; }
   static void root(File* f) noexcept { assert(!root_); root_ = f; }
 
-  static const auto& registry() noexcept { return registry_; }
+  static const auto& registry() noexcept { return registry_(); }
 
   template <typename T>
   static T* iface(File* f, T* def = nullptr) noexcept { return f->iface<T>(def); }
@@ -109,7 +111,7 @@ class File {
   const TypeInfo& type() const noexcept { return *type_; }
 
  private:
-  static inline std::map<std::string, TypeInfo*> registry_;
+  static std::map<std::string, TypeInfo*>& registry_() noexcept;
 
   static inline File* root_ = nullptr;
 
@@ -119,47 +121,120 @@ class File {
 class File::TypeInfo final {
  public:
   using Factory      = std::function<std::unique_ptr<File>()>;
+  using AssocFactory = std::function<std::unique_ptr<File>(const std::filesystem::path&)>;
+  using AssocChecker = std::function<bool(const std::filesystem::path&)>;
   using Deserializer = std::function<std::unique_ptr<File>(const msgpack::object&)>;
+  using GUI          = std::function<void()>;
 
   template <typename T>
-  static TypeInfo* New(const char* name, const char* desc) noexcept {
-    return new TypeInfo(name, desc,
-                        [](auto& s) { return T::Deserialize(s); },
-                        []() { return std::make_unique<T>(); });
-  }
-  template <typename T>
-  static TypeInfo* NewWithoutFactory(const char* name, const char* desc) noexcept {
-    return new TypeInfo(name, desc, [](auto& s) { return T::Deserialize(s); }, {});
+  static TypeInfo New(std::string_view name,
+                       std::string_view desc,
+                       std::vector<std::string>&& tags,
+                       std::vector<std::type_index>&& iface) noexcept {
+    Factory f;
+    if constexpr (std::is_default_constructible<T>::value) {
+      f = []() { return std::make_unique<T>(); };
+    }
+    AssocFactory af;
+    if constexpr (std::is_constructible<T, const std::filesystem::path&>::value) {
+      af = [](auto& p) { return std::make_unique<T>(p); };
+    }
+    return TypeInfo(name, desc, std::move(tags), std::move(iface),
+                    std::move(f),
+                    std::move(af),
+                    GetAssocChecker<T>(0),
+                    GetDeserializer<T>(0),
+                    GetGUI<T>(0));
   }
 
-  TypeInfo(const char*, const char*, Deserializer&&, Factory&&) noexcept;
-  ~TypeInfo() = delete;
+  TypeInfo(std::string_view,
+           std::string_view,
+           std::vector<std::string>&&,
+           std::vector<std::type_index>&&,
+           Factory&&,
+           AssocFactory&&,
+           AssocChecker&&,
+           Deserializer&&,
+           GUI&&) noexcept;
+  ~TypeInfo() noexcept;
   TypeInfo() = delete;
   TypeInfo(const TypeInfo&) = delete;
   TypeInfo(TypeInfo&&) = default;
   TypeInfo& operator=(const TypeInfo&) = delete;
   TypeInfo& operator=(TypeInfo&&) = delete;
 
-  std::unique_ptr<File> Deserialize(const msgpack::object& v) const {
-    return deserializer_(v);
-  }
   std::unique_ptr<File> Create() const noexcept {
     return factory_();
   }
+  std::unique_ptr<File> CreateFromFile(const std::filesystem::path& p) const noexcept {
+    return assoc_factory_(p);
+  }
+  bool CheckAssoc(const std::filesystem::path& p) const noexcept {
+    return assoc_checker_? assoc_checker_(p): false;
+  }
+  std::unique_ptr<File> Deserialize(const msgpack::object& v) const {
+    return deserializer_(v);
+  }
 
-  const char* name() const noexcept { return name_; }
-  const char* desc() const noexcept { return desc_; }
+  void UpdateGUI() const noexcept {
+    if (gui_) gui_();
+  }
 
-  bool hasFactory() const noexcept { return !!factory_; }
+  bool CheckTagged(std::string_view v) const noexcept {
+    return tags_.end() != std::find(tags_.begin(), tags_.end(), v);
+  }
+  template <typename T>
+  bool CheckImplemented() const noexcept {
+    return iface_.end() != std::find(iface_.begin(), iface_.end(), typeid(T));
+  }
+
+  const std::string& name() const noexcept { return name_; }
+  const std::string& desc() const noexcept { return desc_; }
+  const std::span<const std::string> tags() const noexcept { return tags_; }
+
+  bool factory() const noexcept { return !!factory_; }
+  bool assocFactory() const noexcept { return !!assoc_factory_; }
+  bool deserializer() const noexcept { return !!deserializer_; }
 
  private:
-  const char* name_;
+  template <typename T>
+  static auto GetAssocChecker(int) noexcept -> decltype(T::CheckAssoc, AssocChecker()) {
+    return [](auto& p) { return T::CheckAssoc(p); };
+  }
+  template <typename T>
+  static auto GetAssocChecker(...) noexcept -> AssocChecker { return {}; }
 
-  const char* desc_;
+  template <typename T>
+  static auto GetDeserializer(int) noexcept -> decltype(T::Deserialize, Deserializer()) {
+    return [](auto& v) { return T::Deserialize(v); };
+  }
+  template <typename T>
+  static auto GetDeserializer(...) noexcept -> Deserializer { return {}; }
+
+  template <typename T>
+  static auto GetGUI(int) noexcept -> decltype(T::UpdateTypeInfo, GUI()) {
+    return [](auto& v) { return T::UpdateTypeInfo(v); };
+  }
+  template <typename T>
+  static auto GetGUI(...) noexcept -> GUI { return {}; }
+
+  std::string name_;
+
+  std::string desc_;
+
+  std::vector<std::string> tags_;
+
+  std::vector<std::type_index> iface_;
+
+  Factory factory_;
+
+  AssocFactory assoc_factory_;
+
+  AssocChecker assoc_checker_;
 
   Deserializer deserializer_;
 
-  Factory factory_;
+  GUI gui_;
 };
 
 class File::RefStack final {

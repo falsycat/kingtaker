@@ -12,10 +12,11 @@ namespace kingtaker {
 
 class SystemMainQueue : public File, public iface::Queue {
  public:
-  static inline TypeInfo* type_ = TypeInfo::NewWithoutFactory<SystemMainQueue>(
-      "SystemMainQueue", "a queue for primary tasks executed by main thread");
+  static inline TypeInfo type_ = TypeInfo::New<SystemMainQueue>(
+      "SystemMainQueue", "a queue for primary tasks executed by main thread",
+      {}, {typeid(iface::Queue)});
 
-  SystemMainQueue() : File(type_) { }
+  SystemMainQueue() : File(&type_) { }
 
   void Push(Task&& task, std::string_view msg) noexcept override {
     File::QueueMainTask(std::move(task), msg);
@@ -41,10 +42,11 @@ class SystemMainQueue : public File, public iface::Queue {
 
 class SystemSubQueue : public File, public iface::Queue {
  public:
-  static inline TypeInfo* type_ = TypeInfo::NewWithoutFactory<SystemSubQueue>(
-      "SystemSubQueue", "a queue for secondary tasks executed by main thread");
+  static inline TypeInfo type_ = TypeInfo::New<SystemSubQueue>(
+      "SystemSubQueue", "a queue for secondary tasks executed by main thread",
+      {}, {typeid(iface::Queue)});
 
-  SystemSubQueue() : File(type_) { }
+  SystemSubQueue() : File(&type_) { }
 
   void Push(Task&& task, std::string_view msg) noexcept override {
     File::QueueSubTask(std::move(task), msg);
@@ -70,11 +72,12 @@ class SystemSubQueue : public File, public iface::Queue {
 
 class SystemCpuQueue : public File, private iface::SimpleQueue {
  public:
-  static inline TypeInfo* type_ = TypeInfo::NewWithoutFactory<SystemCpuQueue>(
-      "SystemCpuQueue", "a queue for tasks executed by sub thread");
+  static inline TypeInfo type_ = TypeInfo::New<SystemCpuQueue>(
+      "SystemCpuQueue", "a queue for tasks executed by sub thread",
+      {}, {typeid(iface::Queue)});
 
   SystemCpuQueue() : SystemCpuQueue(3) { }
-  SystemCpuQueue(size_t n) : File(type_), alive_(true) {
+  SystemCpuQueue(size_t n) : File(&type_), alive_(true) {
     assert(n > 0);
     th_.resize(n);
     for (auto& t : th_) t = std::thread(std::bind(&SystemCpuQueue::Main, this));
@@ -124,10 +127,10 @@ class SystemCpuQueue : public File, private iface::SimpleQueue {
 
 class SystemImGuiConfig : public File {
  public:
-  static inline TypeInfo* type_ = TypeInfo::NewWithoutFactory<SystemImGuiConfig>(
-      "SystemImGuiConfig", "save/restore ImGui config");
+  static inline TypeInfo type_ = TypeInfo::New<SystemImGuiConfig>(
+      "SystemImGuiConfig", "save/restore ImGui config", {}, {});
 
-  SystemImGuiConfig() : File(type_) { }
+  SystemImGuiConfig() : File(&type_) { }
 
   std::unique_ptr<File> Clone() const noexcept override {
     return std::make_unique<SystemImGuiConfig>();
