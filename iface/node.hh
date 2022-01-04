@@ -243,12 +243,11 @@ class Node::OutSock : public Sock {
   }
 
   virtual void Send(Value&& v) noexcept {
-    Value v_ = std::move(v);
     File::QueueSubTask(
-        [this, v_]() {
+        [this, v = std::move(v)]() {
           for (auto& dst : dst_) {
             auto ptr = dst.lock();
-            if (ptr) ptr->Receive(Value(v_));
+            if (ptr) ptr->Receive(Value(v));
           }
         });
   }
@@ -276,7 +275,7 @@ class Node::CachedOutSock : public OutSock {
 
   void Send(Value&& v) noexcept override {
     value_ = std::move(v);
-    OutSock::Send(Value(v));
+    OutSock::Send(Value(value_));
   }
   void NotifyLink(const std::weak_ptr<InSock>& dst) noexcept override {
     dst.lock()->Receive(Value(value_));

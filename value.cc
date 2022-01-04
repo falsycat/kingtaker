@@ -2,6 +2,11 @@
 
 #include "kingtaker.hh"
 
+#include <algorithm>
+#include <chrono>
+#include <mutex>
+#include <optional>
+
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -169,7 +174,7 @@ class ImmValue : public File, public iface::Node {
         if (ImGui::MenuItem("string", nullptr, v.has<String>())) {
           v = ""s;
         }
-        ImGui::EndCombo();
+        ImGui::EndPopup();
       }
 
       ImGui::SameLine();
@@ -203,6 +208,171 @@ class ImmValue : public File, public iface::Node {
 
    private:
     ImmValue* owner_;
+  } gui_;
+};
+
+class Oscilloscope : public File, public iface::Node {
+ public:
+  static inline TypeInfo* type_ = TypeInfo::New<Oscilloscope>(
+      "Oscilloscope", "value inspector");
+
+  Oscilloscope() : File(type_), gui_(this) {
+    in_.emplace_back(std::make_shared<Receiver>(this));
+  }
+
+  static std::unique_ptr<File> Deserialize(const msgpack::object&) {
+    return std::make_unique<Oscilloscope>();
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_nil();
+  }
+  std::unique_ptr<File> Clone() const noexcept override {
+    return std::make_unique<Oscilloscope>();
+  }
+
+  Time lastModified() const noexcept override { return {}; }
+
+  void* iface(const std::type_index& t) noexcept {
+    if (t == typeid(iface::Node)) return static_cast<iface::Node*>(this);
+    if (t == typeid(iface::GUI))  return &gui_;
+    return nullptr;
+  }
+
+ private:
+  std::mutex mtx_;
+
+  std::vector<std::pair<Time, Value>> values_;
+
+  std::string msg_ = "waiting...";
+
+  class Receiver : public InSock {
+   public:
+    Receiver(Oscilloscope* o) : InSock(o, "in"), owner_(o) {
+    }
+
+    void Receive(Value&& v) noexcept override {
+      {
+        std::unique_lock<std::mutex> k(owner_->mtx_);
+        owner_->msg_ = "ok :)";
+        owner_->values_.emplace_back(Clock::now(), Value(v));
+      }
+      InSock::Receive(std::move(v));
+    }
+
+   private:
+    Oscilloscope* owner_;
+  };
+
+  class GUI : public iface::GUI {
+   public:
+    GUI(Oscilloscope* o) : iface::GUI(kNode), owner_(o) { }
+
+    void UpdateNode(RefStack&) noexcept {
+      std::unique_lock<std::mutex> k(owner_->mtx_);
+
+      ImGui::TextUnformatted("OSCILLO");
+
+      auto& style = ImGui::GetStyle();
+
+      const auto em = ImGui::GetFontSize();
+      ImGui::PushItemWidth(8*em);
+
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY()+style.ItemInnerSpacing.y);
+      if (ImNodes::BeginInputSlot("in", 1)) {
+        UpdatePin();
+        ImNodes::EndSlot();
+      }
+
+      ImGui::SameLine();
+      ImGui::Text(owner_->msg_.c_str());
+
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
+
+      const auto& v    = owner_->values_;
+      const auto  size = ImVec2 {12*em, 4*em};
+      if (ImGui::BeginChild("graph", size, true)) {
+        auto dlist = ImGui::GetWindowDrawList();
+
+        const auto offset = ImGui::GetCursorScreenPos();
+        const auto now    = Clock::now();
+
+        Scalar min = 0, max = 0;
+        for (auto itr = v.rbegin(); itr < v.rend(); ++itr) {
+          const auto t = std::chrono::
+              duration_cast<std::chrono::milliseconds>(now - itr->first);
+          if (t > std::chrono::seconds(1)) break;
+
+          const auto& y = itr->second;
+
+          std::optional<Scalar> v;
+          if (y.has<Integer>()) v = y.get<Integer>();
+          if (y.has<Scalar>())  v = y.get<Scalar>();
+
+          if (v) {
+            min = std::min(min, *v);
+            max = std::max(max, *v);
+          }
+        }
+
+        auto vsize = max-min;
+        min -= vsize*.2;
+        max += vsize*.2;
+        vsize = max-min;
+
+        float prev = offset.x;
+        for (auto itr = v.rbegin(); itr < v.rend(); ++itr) {
+          const auto t = std::chrono::
+              duration_cast<std::chrono::milliseconds>(now - itr->first);
+          if (t > std::chrono::seconds(1)) break;
+
+          const float x = static_cast<float>(t.count())/1000.f;
+          const auto& y = itr->second;
+
+          std::optional<Scalar> v;
+          if (y.has<Integer>()) v = y.get<Integer>();
+          if (y.has<Scalar>())  v = y.get<Scalar>();
+
+          const float px = (1-x)*size.x;
+          dlist->AddLine(ImVec2 {px, 0} + offset,
+                         ImVec2 {px, size.y} + offset,
+                         IM_COL32(100, 100, 100, 255));
+
+          if (vsize > 0 && v) {
+            const float py = static_cast<float>((1 - (*v-min) / vsize) * size.y);
+            dlist->AddLine(ImVec2 {prev, py} + offset,
+                           ImVec2 {px, py} + offset,
+                           IM_COL32(255, 255, 255, 255));
+          }
+          prev = px;
+        }
+      }
+      ImGui::EndChild();
+      ImGui::PopStyleVar(1);
+
+      if (v.size()) {
+        ImGui::BeginDisabled();
+        auto last = v.back().second;
+        if (last.has<Integer>()) {
+          ImGui::DragScalar("integer", ImGuiDataType_S64, &last.getUniq<Integer>());
+        }
+        if (last.has<Scalar>()) {
+          ImGui::DragScalar("scalar", ImGuiDataType_Double, &last.getUniq<Scalar>());
+        }
+        if (last.has<Boolean>()) {
+          ImGui::Checkbox("bool", &last.getUniq<Boolean>());
+        }
+        if (last.has<String>()) {
+          auto str = last.get<String>();
+          ImGui::InputTextMultiline("string", &str, ImVec2 {0.f, 4*em});
+        }
+        ImGui::EndDisabled();
+      }
+
+      ImGui::PopItemWidth();
+    }
+
+   private:
+    Oscilloscope* owner_;
   } gui_;
 };
 

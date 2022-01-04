@@ -372,9 +372,10 @@ class NodeNet : public File {
         h->UpdateNode(owner_, ref);
         ref.Pop();
       }
+
+      ConnList rm_conns;
       for (auto& h : owner_->nodes_) {
         auto node = &h->entity();
-
         for (auto src : node->out()) {
           for (auto w_dst : src->dst()) {
             auto dst = w_dst.lock();
@@ -385,11 +386,12 @@ class NodeNet : public File {
             auto& dsth = owner_->FindHolder(dst->owner());
             auto  dsts = dst->name().c_str();
             if (!ImNodes::Connection(&dsth, dsts, &srch, srcs)) {
-              iface::Node::Unlink(src, dst);
+              rm_conns.emplace_back(dst, src);
             }
           }
         }
       }
+      if (rm_conns.size()) owner_->history_.Unlink(std::move(rm_conns));
 
       void* inptr;
       void* outptr;
@@ -445,6 +447,52 @@ class NodeNet : public File {
    private:
     NodeNet* owner_;
 
+    class LinkSwapCommand : public Command {
+     public:
+      enum Type {
+        kLink,
+        kUnlink,
+      };
+
+      LinkSwapCommand(NodeNet* o, Type t, ConnList&& conns) :
+          owner_(o), type_(t), conns_(std::move(conns)) {
+      }
+
+      void Link() const {
+        for (auto& conn : conns_) {
+          if (!iface::Node::Link(conn.out, conn.in)) {
+            throw Exception("cannot link deleted socket");
+          }
+        }
+      }
+      void Unlink() const {
+        for (auto& conn : conns_) {
+          if (!iface::Node::Unlink(conn.out, conn.in)) {
+            throw Exception("cannot unlink deleted socket");
+          }
+        }
+      }
+
+      void Apply() override {
+        switch (type_) {
+        case kLink  : Link();   break;
+        case kUnlink: Unlink(); break;
+        }
+      }
+      void Revert() override {
+        switch (type_) {
+        case kLink  : Unlink(); break;
+        case kUnlink: Link();   break;
+        }
+      }
+
+     private:
+      NodeNet* owner_;
+
+      Type type_;
+
+      ConnList conns_;
+    };
     class SwapCommand : public Command {
      public:
       SwapCommand(NodeNet* o, NodeHolderList&& h = {}) :
@@ -464,7 +512,11 @@ class NodeNet : public File {
           }
           holders_.clear();
 
+          if (links_) links_->Link();
         } else {
+          SaveLinks();
+          links_->Unlink();
+
           holders_.reserve(refs_.size());
           for (auto& r : refs_) {
             auto itr = std::find_if(nodes.begin(), nodes.end(),
@@ -481,57 +533,40 @@ class NodeNet : public File {
       void Revert() override { Exec(); }
 
      private:
+      void SaveLinks() {
+        ConnList conns;
+        for (auto h : refs_) {
+          auto& n = h->entity();
+          for (auto& out : n.out()) {
+            for (auto& w_in : out->dst()) {
+              auto in = w_in.lock();
+              if (!in) continue;
+              conns.push_back({in, out});
+            }
+          }
+          for (auto& in : n.in()) {
+            for (auto& w_out : in->src()) {
+              auto out = w_out.lock();
+              if (!out) continue;
+
+              auto found = std::find_if(
+                  refs_.begin(), refs_.end(),
+                  [&out](auto& e) { return &e->entity() == &out->owner(); });
+              if (found != refs_.end()) continue;
+              conns.push_back({in, out});
+            }
+          }
+        }
+        links_.emplace(owner_, LinkSwapCommand::kUnlink, std::move(conns));
+      }
+
       NodeNet* owner_;
 
       NodeHolderList holders_;
 
       NodeHolderRefList refs_;
-    };
-    class LinkSwapCommand : public Command {
-     public:
-      enum Type {
-        kLink,
-        kUnlink,
-      };
 
-      LinkSwapCommand(NodeNet* o, Type t, ConnList&& conns) :
-          owner_(o), type_(t), conns_(std::move(conns)) {
-      }
-
-      void Apply() override {
-        switch (type_) {
-        case kLink  : Link();   break;
-        case kUnlink: Unlink(); break;
-        }
-      }
-      void Revert() override {
-        switch (type_) {
-        case kLink  : Unlink(); break;
-        case kUnlink: Link();   break;
-        }
-      }
-
-     private:
-      void Link() const {
-        for (auto& conn : conns_) {
-          if (!iface::Node::Link(conn.out, conn.in)) {
-            throw Exception("cannot link deleted socket");
-          }
-        }
-      }
-      void Unlink() const {
-        for (auto& conn : conns_) {
-          if (!iface::Node::Unlink(conn.out, conn.in)) {
-            throw Exception("cannot unlink deleted socket");
-          }
-        }
-      }
-
-      NodeNet* owner_;
-
-      Type type_;
-
-      ConnList conns_;
+      std::optional<LinkSwapCommand> links_;
     };
     std::variant<std::monostate> prev_;
   } history_;
