@@ -53,13 +53,13 @@ class PulseValue : public File, public iface::Node {
     return std::make_unique<PulseValue>();
   }
 
-  void Update(RefStack&) noexcept override {
+  void Update(RefStack&, Context& ctx) noexcept override {
     ImGui::TextUnformatted("PULSE");
 
     const auto& style = ImGui::GetStyle();
 
     if (ImGui::Button("Z")) {
-      out_[0]->Send(Pulse());
+      out_[0]->Send(ctx, Pulse());
     }
 
     ImGui::SameLine();
@@ -82,10 +82,6 @@ class PulseValue : public File, public iface::Node {
   class PulseEmitter : public OutSock {
    public:
     PulseEmitter(PulseValue* o) : OutSock(o, "out"), owner_(o) {
-    }
-
-    void Send(Value&& v) noexcept override {
-      OutSock::Send(std::move(v));
     }
 
    private:
@@ -114,7 +110,7 @@ class ImmValue : public File, public iface::Node {
     return std::make_unique<ImmValue>(Value(value_));
   }
 
-  void Update(RefStack&) noexcept override {
+  void Update(RefStack&, Context& ctx) noexcept override {
     const auto  em    = ImGui::GetFontSize();
     const auto& style = ImGui::GetStyle();
 
@@ -160,7 +156,7 @@ class ImmValue : public File, public iface::Node {
       assert(false);
     }
     if (mod) {
-      out_[0]->Send(Value(v));
+      out_[0]->Send(ctx, Value(v));
       lastmod_ = Clock::now();
     }
 
@@ -211,7 +207,7 @@ class Oscilloscope : public File, public iface::Node {
     return std::make_unique<Oscilloscope>();
   }
 
-  void Update(RefStack&) noexcept override {
+  void Update(RefStack&, Context&) noexcept override {
     std::unique_lock<std::mutex> k(mtx_);
 
     ImGui::TextUnformatted("OSCILLO");
@@ -334,13 +330,13 @@ class Oscilloscope : public File, public iface::Node {
     Receiver(Oscilloscope* o) : InSock(o, "in"), owner_(o) {
     }
 
-    void Receive(Value&& v) noexcept override {
+    void Receive(Context& ctx, Value&& v) noexcept override {
       {
         std::unique_lock<std::mutex> k(owner_->mtx_);
         owner_->msg_ = "ok :)";
         owner_->values_.emplace_back(Clock::now(), Value(v));
       }
-      InSock::Receive(std::move(v));
+      InSock::Receive(ctx, std::move(v));
     }
 
    private:

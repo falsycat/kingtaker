@@ -6,6 +6,7 @@
 #include <cassert>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -28,6 +29,8 @@ class Node {
 
   class Value;
 
+  class Context;
+
   class Sock;
   class InSock;
   class CachedInSock;
@@ -44,6 +47,7 @@ class Node {
   using Flags = uint8_t;
 
   static inline bool Link(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
+  static inline bool Link(Context&, const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
   static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
 
   Node(Flags f, InSockList&& in = {}, OutSockList&& out = {}) :
@@ -55,8 +59,8 @@ class Node {
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
-  virtual void Update(File::RefStack&) noexcept { }
-  virtual void UpdateMenu(File::RefStack&) noexcept { }
+  virtual void Update(File::RefStack&, Context&) noexcept { }
+  virtual void UpdateMenu(File::RefStack&, Context&) noexcept { }
 
   inline std::shared_ptr<InSock> FindIn(std::string_view) const noexcept;
   inline std::shared_ptr<OutSock> FindOut(std::string_view) const noexcept;
@@ -186,6 +190,63 @@ class Node::Value final {
 };
 
 
+class Node::Context {
+ public:
+  using Receiver = std::function<void(std::string_view, Value&&)>;
+  class Data {
+   public:
+    Data() = default;
+    virtual ~Data() = default;
+    Data(const Data&) = default;
+    Data(Data&&) = default;
+    Data& operator=(const Data&) = default;
+    Data& operator=(Data&&) = default;
+  };
+
+  Context(Receiver&& recv = {}) : recv_(std::move(recv)) { }
+  Context(const Context&) = delete;
+  Context(Context&&) = delete;
+  Context& operator=(const Context&) = delete;
+  Context& operator=(Context&&) = delete;
+
+  template <typename T, typename... Args>
+  T& GetOrNew(Node* n, Args... args) {
+    std::unique_lock<std::mutex> k(mtx_);
+
+    auto itr = map_.find(n);
+    if (itr != map_.end()) {
+      auto ptr = dynamic_cast<T*>(itr->second.get());
+      if (!ptr) throw Exception("data is already set, but down cast failed");
+      return *ptr;
+    }
+    auto uptr = std::make_unique<T>(args...);
+    auto ret  = uptr.get();
+    map_[n]   = std::move(uptr);
+    return *ret;
+  }
+
+  void Receive(std::string_view name, Value&& v) noexcept {
+    if (recv_) recv_(name, std::move(v));
+  }
+
+  void Clear(Node* n) noexcept {
+    std::unique_lock<std::mutex> k(mtx_);
+    map_.erase(n);
+  }
+  void Clear() noexcept {
+    std::unique_lock<std::mutex> k(mtx_);
+    map_.clear();
+  }
+
+ private:
+  std::mutex mtx_;
+
+  std::unordered_map<Node*, std::unique_ptr<Data>> map_;
+
+  Receiver recv_;
+};
+
+
 class Node::Sock {
  public:
   Sock() = delete;
@@ -213,9 +274,9 @@ class Node::InSock : public Sock {
   InSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
   }
 
-  virtual void Receive(Value&&) noexcept { }
+  virtual void Receive(Context&, Value&&) noexcept { }
 
-  virtual void NotifyLink(const std::weak_ptr<OutSock>&) noexcept { }
+  virtual void NotifyLink(Context&, const std::weak_ptr<OutSock>&) noexcept { }
 
   void CleanConns() const noexcept {
     auto& v = const_cast<decltype(src_)&>(src_);
@@ -236,7 +297,7 @@ class Node::CachedInSock : public InSock {
       InSock(o, n), value_(std::move(v)) {
   }
 
-  void Receive(Value&& v) noexcept override {
+  void Receive(Context&, Value&& v) noexcept override {
     value_ = std::move(v);
   }
 
@@ -256,17 +317,14 @@ class Node::OutSock : public Sock {
   OutSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
   }
 
-  virtual void Send(Value&& v) noexcept {
-    File::QueueSubTask(
-        [this, v = std::move(v)]() {
-          for (auto& dst : dst_) {
-            auto ptr = dst.lock();
-            if (ptr) ptr->Receive(Value(v));
-          }
-        });
+  virtual void Send(Context& c, Value&& v) noexcept {
+    for (auto& dst : dst_) {
+      auto ptr = dst.lock();
+      if (ptr) ptr->Receive(c, Value(v));
+    }
   }
 
-  virtual void NotifyLink(const std::weak_ptr<InSock>&) noexcept { }
+  virtual void NotifyLink(Context&, const std::weak_ptr<InSock>&) noexcept { }
 
   void CleanConns() noexcept {
     auto& v = const_cast<decltype(dst_)&>(dst_);
@@ -287,12 +345,12 @@ class Node::CachedOutSock : public OutSock {
       OutSock(o, n), value_(std::move(v)) {
   }
 
-  void Send(Value&& v) noexcept override {
+  void Send(Context& c, Value&& v) noexcept override {
     value_ = std::move(v);
-    OutSock::Send(Value(value_));
+    OutSock::Send(c, Value(value_));
   }
-  void NotifyLink(const std::weak_ptr<InSock>& dst) noexcept override {
-    dst.lock()->Receive(Value(value_));
+  void NotifyLink(Context& c, const std::weak_ptr<InSock>& dst) noexcept override {
+    dst.lock()->Receive(c, Value(value_));
   }
 
  private:
@@ -308,9 +366,17 @@ bool Node::Link(const std::weak_ptr<OutSock>& out,
 
   s_in->src_.emplace_back(out);
   s_out->dst_.emplace_back(in);
+  return true;
+}
+bool Node::Link(Context& ctx,
+                const std::weak_ptr<OutSock>& out,
+                const std::weak_ptr<InSock>&  in) noexcept {
+  Link(out, in);
 
-  s_in->NotifyLink(out);
-  s_out->NotifyLink(in);
+  auto s_in  = in.lock();
+  auto s_out = out.lock();
+  s_in->NotifyLink(ctx, out);
+  s_out->NotifyLink(ctx, in);
   return true;
 }
 bool Node::Unlink(const std::weak_ptr<OutSock>& out,

@@ -41,6 +41,8 @@ class NodeNet : public File {
   using NodeHolderList    = std::vector<std::unique_ptr<NodeHolder>>;
   using NodeHolderRefList = std::vector<NodeHolder*>;
 
+  using Context = iface::Node::Context;
+
   struct NodeHolder final {
    public:
     static std::unique_ptr<NodeHolder> Create(size_t id, std::unique_ptr<File>&& f) {
@@ -159,7 +161,7 @@ class NodeNet : public File {
       ImGui::PopID();
       ref.Pop();
     }
-    void UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
+    void UpdateNode(NodeNet* owner, Context* ctx, RefStack& ref) noexcept {
       ref.Push({std::to_string(id_), file_.get()});
       ImGui::PushID(file_.get());
 
@@ -169,20 +171,23 @@ class NodeNet : public File {
       }
 
       if (ImNodes::BeginNode(this, &pos_, &select_)) {
-        entity_->Update(ref);
+        entity_->Update(ref, *ctx);
       }
       ImNodes::EndNode();
 
       if (ImGui::BeginPopupContextItem()) {
         if (ImGui::MenuItem("Clone")) {
-          owner->history_.AddNodeIf(Clone(owner->next_id_++));
+          owner->history_.AddNodeIf(ctx, Clone(owner->next_id_++));
         }
         if (ImGui::MenuItem("Remove")) {
-          owner->history_.RemoveNodes({this});
+          owner->history_.RemoveNodes(ctx, {this});
+        }
+        if (ImGui::MenuItem("Clear node context")) {
+          ctx->Clear(entity_);
         }
         if (entity_->flags() & iface::Node::kMenu) {
           ImGui::Separator();
-          entity_->UpdateMenu(ref);
+          entity_->UpdateMenu(ref, *ctx);
         }
         ImGui::EndPopup();
       }
@@ -211,8 +216,8 @@ class NodeNet : public File {
   NodeNet() noexcept : NodeNet(Clock::now()) { }
   NodeNet(Time lastmod, NodeHolderList&& nodes = {}, size_t next = 0) noexcept :
       File(&type_),
-      lastmod_(lastmod), nodes_(std::move(nodes)),
-      next_id_(next), gui_(this), history_(this) {
+      lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
+      gui_(this), history_(this) {
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
@@ -402,13 +407,16 @@ class NodeNet : public File {
             if (!t.factory() || !t.CheckImplemented<iface::Node>()) continue;
             if (ImGui::MenuItem(t.name().c_str())) {
               owner_->history_.AddNodeIf(
-                  NodeHolder::Create(owner_->next_id_++, t.Create()));
+                  &ctx_, NodeHolder::Create(owner_->next_id_++, t.Create()));
             }
             if (ImGui::IsItemHovered()) {
               ImGui::SetTooltip(t.desc().c_str());
             }
           }
           ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem("Clear entire context")) {
+          ctx_.Clear();
         }
 
         ImGui::Separator();
@@ -423,7 +431,7 @@ class NodeNet : public File {
       }
 
       for (auto& h : owner_->nodes_) {
-        h->UpdateNode(owner_, ref);
+        h->UpdateNode(owner_, &ctx_, ref);
       }
 
       ConnList rm_conns;
@@ -444,7 +452,9 @@ class NodeNet : public File {
           }
         }
       }
-      if (rm_conns.size()) owner_->history_.Unlink(std::move(rm_conns));
+      if (rm_conns.size()) {
+        owner_->history_.Unlink(&ctx_, std::move(rm_conns));
+      }
 
       void* inptr;
       void* outptr;
@@ -456,13 +466,15 @@ class NodeNet : public File {
 
         auto src = srcn->entity().FindOut(srcs);
         auto dst = dstn->entity().FindIn(dsts);
-        if (src && dst) owner_->history_.Link({{dst, src}});
+        if (src && dst) owner_->history_.Link(&ctx_, {{dst, src}});
       }
       ImNodes::EndCanvas();
     }
 
    private:
     NodeNet* owner_;
+
+    Context ctx_;
 
     bool shown_ = false;
 
@@ -473,33 +485,49 @@ class NodeNet : public File {
    public:
     History(NodeNet* o) : owner_(o) { }
 
-    void AddNodeIf(std::unique_ptr<NodeHolder>&& h) noexcept {
+    void AddNodeIf(Context* ctx, std::unique_ptr<NodeHolder>&& h) noexcept {
       if (!h) return;
 
       NodeHolderList list;
       list.push_back(std::move(h));
-      AddNodes(std::move(list));
+      AddNodes(ctx, std::move(list));
     }
-    void AddNodes(NodeHolderList&& h) noexcept {
+    void AddNodes(Context* ctx, NodeHolderList&& h) noexcept {
+      CheckContext(ctx);
+
       prev_ = {};
-      Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
+      Queue(std::make_unique<SwapCommand>(owner_, ctx, std::move(h)));
     }
-    void RemoveNodes(NodeHolderRefList&& h) noexcept {
+    void RemoveNodes(Context* ctx, NodeHolderRefList&& h) noexcept {
+      CheckContext(ctx);
+
       prev_ = {};
-      Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
+      Queue(std::make_unique<SwapCommand>(owner_, ctx, std::move(h)));
     }
-    void Link(ConnList&& conns) noexcept {
+    void Link(Context* ctx, ConnList&& conns) noexcept {
+      CheckContext(ctx);
+
       prev_ = {};
       Queue(std::make_unique<LinkSwapCommand>(
-              owner_, LinkSwapCommand::kLink, std::move(conns)));
+              owner_, ctx, LinkSwapCommand::kLink, std::move(conns)));
     }
-    void Unlink(ConnList&& conns) noexcept {
+    void Unlink(Context* ctx, ConnList&& conns) noexcept {
+      CheckContext(ctx);
+
       prev_ = {};
       Queue(std::make_unique<LinkSwapCommand>(
-              owner_, LinkSwapCommand::kUnlink, std::move(conns)));
+              owner_, ctx, LinkSwapCommand::kUnlink, std::move(conns)));
     }
 
    private:
+    void CheckContext(Context* ctx) noexcept {
+      if (prev_ctx_ != ctx) {
+        Clear();
+        prev_ = {};
+      }
+      prev_ctx_ = ctx;
+    }
+
     NodeNet* owner_;
 
     class LinkSwapCommand : public Command {
@@ -509,13 +537,13 @@ class NodeNet : public File {
         kUnlink,
       };
 
-      LinkSwapCommand(NodeNet* o, Type t, ConnList&& conns) :
-          owner_(o), type_(t), conns_(std::move(conns)) {
+      LinkSwapCommand(NodeNet* o, Context* ctx, Type t, ConnList&& conns) :
+          owner_(o), ctx_(ctx), type_(t), conns_(std::move(conns)) {
       }
 
       void Link() const {
         for (auto& conn : conns_) {
-          if (!iface::Node::Link(conn.out, conn.in)) {
+          if (!iface::Node::Link(*ctx_, conn.out, conn.in)) {
             throw Exception("cannot link deleted socket");
           }
         }
@@ -544,19 +572,21 @@ class NodeNet : public File {
      private:
       NodeNet* owner_;
 
+      Context* ctx_;
+
       Type type_;
 
       ConnList conns_;
     };
     class SwapCommand : public Command {
      public:
-      SwapCommand(NodeNet* o, NodeHolderList&& h = {}) :
-          owner_(o), holders_(std::move(h)) {
+      SwapCommand(NodeNet* o, Context* ctx, NodeHolderList&& h = {}) :
+          owner_(o), ctx_(ctx), holders_(std::move(h)) {
         refs_.reserve(holders_.size());
         for (auto& holder : holders_) refs_.push_back(holder.get());
       }
-      SwapCommand(NodeNet* o, NodeHolderRefList&& refs = {}) :
-          owner_(o), refs_(std::move(refs)) {
+      SwapCommand(NodeNet* o, Context* ctx, NodeHolderRefList&& refs = {}) :
+          owner_(o), ctx_(ctx), refs_(std::move(refs)) {
       }
 
       void Exec() {
@@ -612,10 +642,12 @@ class NodeNet : public File {
             }
           }
         }
-        links_.emplace(owner_, LinkSwapCommand::kUnlink, std::move(conns));
+        links_.emplace(owner_, ctx_, LinkSwapCommand::kUnlink, std::move(conns));
       }
 
       NodeNet* owner_;
+
+      Context* ctx_;
 
       NodeHolderList holders_;
 
@@ -623,6 +655,9 @@ class NodeNet : public File {
 
       std::optional<LinkSwapCommand> links_;
     };
+
+    Context* prev_ctx_ = nullptr;
+
     std::variant<std::monostate> prev_;
   } history_;
 };
