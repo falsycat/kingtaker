@@ -14,7 +14,7 @@ class SystemMainQueue : public File, public iface::Queue {
  public:
   static inline TypeInfo type_ = TypeInfo::New<SystemMainQueue>(
       "SystemMainQueue", "a queue for primary tasks executed by main thread",
-      {}, {typeid(iface::Queue)});
+      {typeid(iface::Queue)});
 
   SystemMainQueue() : File(&type_) { }
 
@@ -44,7 +44,7 @@ class SystemSubQueue : public File, public iface::Queue {
  public:
   static inline TypeInfo type_ = TypeInfo::New<SystemSubQueue>(
       "SystemSubQueue", "a queue for secondary tasks executed by main thread",
-      {}, {typeid(iface::Queue)});
+      {typeid(iface::Queue)});
 
   SystemSubQueue() : File(&type_) { }
 
@@ -74,7 +74,7 @@ class SystemCpuQueue : public File, private iface::SimpleQueue {
  public:
   static inline TypeInfo type_ = TypeInfo::New<SystemCpuQueue>(
       "SystemCpuQueue", "a queue for tasks executed by sub thread",
-      {}, {typeid(iface::Queue)});
+      {typeid(iface::Queue)});
 
   SystemCpuQueue() : SystemCpuQueue(3) { }
   SystemCpuQueue(size_t n) : File(&type_), alive_(true) {
@@ -128,7 +128,7 @@ class SystemCpuQueue : public File, private iface::SimpleQueue {
 class SystemImGuiConfig : public File {
  public:
   static inline TypeInfo type_ = TypeInfo::New<SystemImGuiConfig>(
-      "SystemImGuiConfig", "save/restore ImGui config", {}, {});
+      "SystemImGuiConfig", "save/restore ImGui config", {});
 
   SystemImGuiConfig() : File(&type_) { }
 

@@ -20,7 +20,6 @@ class GenericDir : public File {
  public:
   static inline TypeInfo type_ = TypeInfo::New<GenericDir>(
       "GenericDir", "generic impl of directory",
-      {"GenericDir"},
       {typeid(iface::Dir), typeid(iface::DirItem), typeid(iface::GUI)});
 
   using ItemList = std::map<std::string, std::unique_ptr<File>>;

@@ -128,9 +128,8 @@ class File::TypeInfo final {
 
   template <typename T>
   static TypeInfo New(std::string_view name,
-                       std::string_view desc,
-                       std::vector<std::string>&& tags,
-                       std::vector<std::type_index>&& iface) noexcept {
+                      std::string_view desc,
+                      std::vector<std::type_index>&& iface) noexcept {
     Factory f;
     if constexpr (std::is_default_constructible<T>::value) {
       f = []() { return std::make_unique<T>(); };
@@ -139,7 +138,7 @@ class File::TypeInfo final {
     if constexpr (std::is_constructible<T, const std::filesystem::path&>::value) {
       af = [](auto& p) { return std::make_unique<T>(p); };
     }
-    return TypeInfo(name, desc, std::move(tags), std::move(iface),
+    return TypeInfo(name, desc, std::move(iface),
                     std::move(f),
                     std::move(af),
                     GetAssocChecker<T>(0),
@@ -149,7 +148,6 @@ class File::TypeInfo final {
 
   TypeInfo(std::string_view,
            std::string_view,
-           std::vector<std::string>&&,
            std::vector<std::type_index>&&,
            Factory&&,
            AssocFactory&&,
@@ -180,9 +178,6 @@ class File::TypeInfo final {
     if (gui_) gui_();
   }
 
-  bool CheckTagged(std::string_view v) const noexcept {
-    return tags_.end() != std::find(tags_.begin(), tags_.end(), v);
-  }
   template <typename T>
   bool CheckImplemented() const noexcept {
     return iface_.end() != std::find(iface_.begin(), iface_.end(), typeid(T));
@@ -190,7 +185,6 @@ class File::TypeInfo final {
 
   const std::string& name() const noexcept { return name_; }
   const std::string& desc() const noexcept { return desc_; }
-  const std::span<const std::string> tags() const noexcept { return tags_; }
 
   bool factory() const noexcept { return !!factory_; }
   bool assocFactory() const noexcept { return !!assoc_factory_; }
@@ -221,8 +215,6 @@ class File::TypeInfo final {
   std::string name_;
 
   std::string desc_;
-
-  std::vector<std::string> tags_;
 
   std::vector<std::type_index> iface_;
 

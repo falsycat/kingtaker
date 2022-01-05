@@ -86,14 +86,13 @@ std::map<std::string, File::TypeInfo*>& File::registry_() noexcept {
 
 File::TypeInfo::TypeInfo(std::string_view name,
                          std::string_view desc,
-                         std::vector<std::string>&& tags,
                          std::vector<std::type_index>&& iface,
                          Factory&& f,
                          AssocFactory&& af,
                          AssocChecker&& ac,
                          Deserializer&& d,
                          GUI&& g) noexcept :
-    name_(name), desc_(desc), tags_(std::move(tags)), iface_(std::move(iface)),
+    name_(name), desc_(desc), iface_(std::move(iface)),
     factory_(std::move(f)),
     assoc_factory_(std::move(af)),
     assoc_checker_(std::move(ac)),

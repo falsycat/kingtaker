@@ -37,7 +37,6 @@ class PulseValue : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<PulseValue>(
       "PulseValue", "pulse emitter",
-      {"NodeNet"},
       {typeid(iface::Node)});
 
   PulseValue() : File(&type_), Node(kNone) {
@@ -98,7 +97,6 @@ class ImmValue : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ImmValue>(
       "ImmValue", "immediate value",
-      {"NodeNet"},
       {typeid(iface::Node)});
 
   ImmValue(Value&& v = Integer{0}) :
@@ -197,7 +195,6 @@ class Oscilloscope : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Oscilloscope>(
       "Oscilloscope", "value inspector",
-      {"NodeNet"},
       {typeid(iface::Node)});
 
   Oscilloscope() : File(&type_), Node(kNone) {

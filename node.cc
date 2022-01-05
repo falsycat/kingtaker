@@ -26,7 +26,6 @@ class NodeNet : public File {
  public:
   static inline TypeInfo type_ = TypeInfo::New<NodeNet>(
       "NodeNet", "node network",
-      {"GenericDir"},
       {typeid(iface::DirItem), typeid(iface::GUI), typeid(iface::History)});
 
   using IndexMap = std::unordered_map<iface::Node*, size_t>;
@@ -400,7 +399,7 @@ class NodeNet : public File {
         if (ImGui::BeginMenu("New")) {
           for (auto& p : File::registry()) {
             auto& t = *p.second;
-            if (!t.factory() || !t.CheckTagged("NodeNet")) continue;
+            if (!t.factory() || !t.CheckImplemented<iface::Node>()) continue;
             if (ImGui::MenuItem(t.name().c_str())) {
               owner_->history_.AddNodeIf(
                   NodeHolder::Create(owner_->next_id_++, t.Create()));
