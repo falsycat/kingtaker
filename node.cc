@@ -43,23 +43,23 @@ class NodeNet : public File {
 
   struct NodeHolder final {
    public:
-    static std::unique_ptr<NodeHolder> Create(std::unique_ptr<File>&& f) {
+    static std::unique_ptr<NodeHolder> Create(size_t id, std::unique_ptr<File>&& f) {
       auto n = f->iface<iface::Node>();
       if (!n) return nullptr;
-      return std::make_unique<NodeHolder>(std::move(f), n);
+      return std::make_unique<NodeHolder>(id, std::move(f), n);
     }
 
     NodeHolder() = delete;
-    NodeHolder(std::unique_ptr<File>&& f, iface::Node* n) noexcept :
-        file_(std::move(f)), entity_(n), first_(true) {
+    NodeHolder(size_t id, std::unique_ptr<File>&& f, iface::Node* n) noexcept :
+        id_(id), file_(std::move(f)), entity_(n), first_(true) {
       assert(file_);
       assert(entity_);
     }
-    NodeHolder(std::unique_ptr<File>&& f,
+    NodeHolder(size_t                  id,
+               std::unique_ptr<File>&& f,
                iface::Node*            n,
-               ImVec2&&                p,
-               bool                    sel) noexcept :
-        file_(std::move(f)), entity_(n), pos_(std::move(p)), select_(sel) {
+               ImVec2&&                p) noexcept :
+        id_(id), file_(std::move(f)), entity_(n), pos_(std::move(p)) {
       assert(file_);
       assert(entity_);
     }
@@ -70,6 +70,8 @@ class NodeNet : public File {
 
     static std::unique_ptr<NodeHolder> Deserialize(const msgpack::object& obj) {
       try {
+        const size_t id = msgpack::find(obj, "id"s).as<size_t>();
+
         auto f = File::Deserialize(msgpack::find(obj, "file"s));
         auto n = f->iface<iface::Node>();
         if (!n) throw DeserializeException("it's not node");
@@ -77,10 +79,14 @@ class NodeNet : public File {
         std::pair<float, float> p;
         msgpack::find(obj, "pos"s).convert(p);
 
-        const bool sel = msgpack::find(obj, "select"s).as<bool>();
+        auto h = std::make_unique<NodeHolder>(
+            id, std::move(f), n, ImVec2 {p.first, p.second});
+        try {
+          h->select_ = msgpack::find(obj, "select"s).as<bool>();
+        } catch (msgpack::type_error& e) {
+        }
+        return h;
 
-        return std::make_unique<NodeHolder>(
-            std::move(f), n, ImVec2 {p.first, p.second}, sel);
       } catch (msgpack::type_error& e) {
         throw DeserializeException("broken NodeHolder structure");
       }
@@ -111,7 +117,10 @@ class NodeNet : public File {
       }
     }
     void Serialize(Packer& pk) const noexcept {
-      pk.pack_map(3);
+      pk.pack_map(4);
+
+      pk.pack("id"s);
+      pk.pack(id_);
 
       pk.pack("file"s);
       file_->SerializeWithTypeInfo(pk);
@@ -137,21 +146,28 @@ class NodeNet : public File {
         }
       }
     }
-    std::unique_ptr<NodeHolder> Clone() const noexcept {
-      return NodeHolder::Create(file_->Clone());
+    std::unique_ptr<NodeHolder> Clone(size_t id) const noexcept {
+      return NodeHolder::Create(id, file_->Clone());
     }
 
-    void Isolate() noexcept {
-      for (auto in : entity_->in()) {
-        for (auto& out : in->src()) iface::Node::Unlink(out, in);
-      }
-      for (auto out : entity_->out()) {
-        for (auto& in : out->dst()) iface::Node::Unlink(out, in);
-      }
-    }
-
-    void UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
+    void UpdateWindow(RefStack& ref) noexcept {
       auto gui = file_->iface<iface::GUI>();
+      if (gui && (gui->feats() & iface::GUI::kWindow)) {
+        ref.Push({std::to_string(id_), file_.get()});
+        ImGui::PushID(file_.get());
+        gui->UpdateWindow(ref);
+        ImGui::PopID();
+        ref.Pop();
+      }
+    }
+    void UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
+      ref.Push({std::to_string(id_), file_.get()});
+      ImGui::PushID(file_.get());
+
+      auto gui = file_->iface<iface::GUI>();
+
+      const bool menu = gui && (gui->feats() & iface::GUI::kMenu);
+      const bool node = gui && (gui->feats() & iface::GUI::kNode);
 
       if (first_) {
         ImNodes::AutoPositionNode(this);
@@ -159,7 +175,7 @@ class NodeNet : public File {
       }
 
       if (ImNodes::BeginNode(this, &pos_, &select_)) {
-        if (gui && (gui->feats() & iface::GUI::kNode)) {
+        if (node) {
           gui->UpdateNode(ref);
         } else {
           // TODO(falsycat)
@@ -169,21 +185,28 @@ class NodeNet : public File {
 
       if (ImGui::BeginPopupContextItem()) {
         if (ImGui::MenuItem("Clone")) {
-          owner->history_.AddNodeIf(Clone());
+          owner->history_.AddNodeIf(Clone(owner->next_id_++));
         }
         if (ImGui::MenuItem("Remove")) {
           owner->history_.RemoveNodes({this});
         }
+        if (menu) {
+          ImGui::Separator();
+          gui->UpdateMenu(ref);
+        }
         ImGui::EndPopup();
       }
+      ImGui::PopID();
+      ref.Pop();
     }
 
+    size_t id() const noexcept { return id_; }
     File& file() const noexcept { return *file_; }
     iface::Node& entity() const noexcept { return *entity_; }
 
-    ImVec2& pos() noexcept { return pos_; }
-
    private:
+    size_t id_;
+
     std::unique_ptr<File> file_;
 
     iface::Node* entity_;
@@ -196,14 +219,17 @@ class NodeNet : public File {
   };
 
   NodeNet() noexcept : NodeNet(Clock::now()) { }
-  NodeNet(Time lastmod, NodeHolderList&& nodes = {}) noexcept :
+  NodeNet(Time lastmod, NodeHolderList&& nodes = {}, size_t next = 0) noexcept :
       File(&type_),
-      lastmod_(lastmod), nodes_(std::move(nodes)), gui_(this), history_(this) {
+      lastmod_(lastmod), nodes_(std::move(nodes)),
+      next_id_(next), gui_(this), history_(this) {
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
     try {
       const auto lastmod = Clock::from_time_t(msgpack::find(obj, "lastMod"s).as<time_t>());
+
+      const auto next = msgpack::find(obj, "nextId"s).as<size_t>();
 
       auto& obj_nodes = msgpack::find(obj, "nodes"s);
       if (obj_nodes.type != msgpack::type::ARRAY) throw msgpack::type_error();
@@ -214,6 +240,10 @@ class NodeNet : public File {
       for (size_t i = 0; i < obj_nodes.via.array.size; ++i) {
         nodes[i] = NodeHolder::Deserialize(obj_nodes.via.array.ptr[i]);
         nmap[i]  = &nodes[i]->entity();
+
+        if (nodes[i]->id() == next) {
+          throw DeserializeException("nodeId conflict");
+        }
       }
 
       auto& obj_links = msgpack::find(obj, "links"s);
@@ -225,7 +255,7 @@ class NodeNet : public File {
         nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
       }
 
-      auto ret = std::make_unique<NodeNet>(lastmod, std::move(nodes));
+      auto ret = std::make_unique<NodeNet>(lastmod, std::move(nodes), next);
       ret->gui_.Deserialize(msgpack::find(obj, "gui"s));
       return ret;
 
@@ -236,7 +266,7 @@ class NodeNet : public File {
   void Serialize(Packer& pk) const noexcept override {
     std::unordered_map<iface::Node*, size_t> idxmap;
 
-    pk.pack_map(4);
+    pk.pack_map(5);
 
     pk.pack("lastMod"s);
     pk.pack(Clock::to_time_t(lastmod_));
@@ -255,16 +285,21 @@ class NodeNet : public File {
       h->SerializeLink(pk, idxmap);
     }
 
+    pk.pack("nextId"s);
+    pk.pack(next_id_);
+
     pk.pack("gui"s);
     gui_.Serialize(pk);
   }
   std::unique_ptr<File> Clone() const noexcept override {
     std::unordered_map<iface::Node*, iface::Node*> nmap;
 
+    size_t id = 0;
+
     NodeHolderList nodes;
     nodes.reserve(nodes_.size());
     for (auto& h : nodes_) {
-      nodes.push_back(h->Clone());
+      nodes.push_back(h->Clone(id++));
       nmap[&h->entity()] = &nodes.back()->entity();
     }
     for (auto& h : nodes) {
@@ -306,6 +341,8 @@ class NodeNet : public File {
 
   NodeHolderList nodes_;
 
+  size_t next_id_ = 0;
+
   class GUI final : public iface::GUI {
    public:
     GUI(NodeNet* owner) : owner_(owner) {
@@ -313,7 +350,10 @@ class NodeNet : public File {
     }
 
     void Serialize(Packer& pk) const noexcept {
-      pk.pack_map(2);
+      pk.pack_map(3);
+
+      pk.pack("shown"s);
+      pk.pack(shown_);
 
       pk.pack("zoom"s);
       pk.pack(canvas_.Zoom);
@@ -323,6 +363,8 @@ class NodeNet : public File {
     }
     void Deserialize(const msgpack::object& obj) noexcept {
       try {
+        shown_ = msgpack::find(obj, "shown"s).as<bool>();
+
         canvas_.Zoom = msgpack::find(obj, "zoom"s).as<float>();
 
         std::pair<float, float> offset;
@@ -330,18 +372,32 @@ class NodeNet : public File {
         canvas_.Offset = {offset.first, offset.second};
 
       } catch (msgpack::type_error& e) {
+        shown_         = false;
         canvas_.Zoom   = 1.f;
         canvas_.Offset = {0, 0};
       }
     }
 
     void UpdateWindow(RefStack& ref) noexcept override {
-      constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-      const auto id = ref.Stringify() + ": NodeNet Editor";
-      if (ImGui::Begin(id.c_str(), nullptr, kFlags)) {
-        UpdateEditor(ref);
+      for (auto& h : owner_->nodes_) {
+        h->UpdateWindow(ref);
       }
-      ImGui::End();
+
+      if (shown_) {
+        constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+
+        ImGui::SetNextWindowSize(ImVec2 {24.f, 24.f}*ImGui::GetFontSize(),
+                                 ImGuiCond_FirstUseEver);
+
+        const auto id = ref.Stringify() + ": NodeNet Editor";
+        if (ImGui::Begin(id.c_str(), nullptr, kFlags)) {
+          UpdateEditor(ref);
+        }
+        ImGui::End();
+      }
+    }
+    void UpdateMenu(RefStack&) noexcept override {
+      ImGui::MenuItem("NodeNet Editor", nullptr, &shown_);
     }
     void UpdateEditor(RefStack& ref) noexcept override {
       ImNodes::BeginCanvas(&canvas_);
@@ -351,7 +407,11 @@ class NodeNet : public File {
             auto& t = *p.second;
             if (!t.factory() || !t.CheckTagged("NodeNet")) continue;
             if (ImGui::MenuItem(t.name().c_str())) {
-              owner_->history_.AddNodeIf(NodeHolder::Create(t.Create()));
+              owner_->history_.AddNodeIf(
+                  NodeHolder::Create(owner_->next_id_++, t.Create()));
+            }
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip(t.desc().c_str());
             }
           }
           ImGui::EndMenu();
@@ -368,11 +428,8 @@ class NodeNet : public File {
         ImGui::EndPopup();
       }
 
-      for (size_t i = 0; i < owner_->nodes_.size(); ++i) {
-        auto& h = owner_->nodes_[i];
-        ref.Push(RefStack::Term {std::to_string(i), &h->file()});
+      for (auto& h : owner_->nodes_) {
         h->UpdateNode(owner_, ref);
-        ref.Pop();
       }
 
       ConnList rm_conns;
@@ -412,6 +469,8 @@ class NodeNet : public File {
 
    private:
     NodeNet* owner_;
+
+    bool shown_ = false;
 
     ImNodes::CanvasState canvas_;
   } gui_;
