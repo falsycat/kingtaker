@@ -147,7 +147,7 @@ void Update() noexcept {
     return;
   }
   File::RefStack path;
-  gui->UpdateWindow(path);
+  gui->Update(path);
 
   // main thread task
   try {

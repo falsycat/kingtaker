@@ -30,4 +30,32 @@ class Dir {
   virtual size_t size() const noexcept { return 0; }
 };
 
+class DirItem {
+ public:
+  static DirItem& null() noexcept { static DirItem inst_(0); return inst_; }
+
+  enum Flag : uint8_t {
+    kTree    = 0b001,
+    kMenu    = 0b010,
+    kTooltip = 0b100,
+  };
+  using Flags = uint8_t;
+
+  DirItem() = delete;
+  DirItem(Flags f) : flags_(f) { }
+  virtual ~DirItem() = default;
+  DirItem(const DirItem&) = delete;
+  DirItem(DirItem&&) = delete;
+  DirItem& operator=(const DirItem&) = delete;
+  DirItem& operator=(DirItem&&) = delete;
+
+  virtual void UpdateTree(File::RefStack&) noexcept { }
+  virtual void UpdateMenu(File::RefStack&) noexcept { }
+  virtual void UpdateTooltip(File::RefStack&) noexcept { }
+
+  Flags flags() const noexcept { return flags_; }
+ private:
+  Flags flags_;
+};
+
 }  // namespace kingtaker::iface

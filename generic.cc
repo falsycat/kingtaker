@@ -21,7 +21,7 @@ class GenericDir : public File {
   static inline TypeInfo type_ = TypeInfo::New<GenericDir>(
       "GenericDir", "generic impl of directory",
       {"GenericDir"},
-      {typeid(iface::Dir), typeid(iface::GUI)});
+      {typeid(iface::Dir), typeid(iface::DirItem), typeid(iface::GUI)});
 
   using ItemList = std::map<std::string, std::unique_ptr<File>>;
 
@@ -96,8 +96,9 @@ class GenericDir : public File {
   }
   void* iface(const std::type_index& t) noexcept override {
     return
-        t == typeid(iface::Dir)? static_cast<void*>(&dir_):
-        t == typeid(iface::GUI)? static_cast<void*>(&gui_):
+        t == typeid(iface::Dir)?     static_cast<void*>(&dir_):
+        t == typeid(iface::DirItem)? static_cast<void*>(&gui_):
+        t == typeid(iface::GUI)?     static_cast<void*>(&gui_):
         nullptr;
   }
 
@@ -137,10 +138,9 @@ class GenericDir : public File {
     GenericDir* owner_;
   } dir_;
 
-  class GUI final : public iface::GUI {
+  class GUI final : public iface::GUI, public iface::DirItem {
    public:
-    GUI(GenericDir* owner) :
-        iface::GUI(kWindow|kMenu|kEditor|kTree), owner_(owner) { }
+    GUI(GenericDir* owner) : DirItem(kTree | kMenu), owner_(owner) { }
 
     void Deserialize(const msgpack::object& obj) noexcept {
       try {
@@ -154,11 +154,10 @@ class GenericDir : public File {
       pk.pack("shown"); pk.pack(shown_);
     }
 
-
-    void UpdateWindow(File::RefStack& ref) noexcept override {
+    void Update(File::RefStack& ref) noexcept override {
       for (auto& child : owner_->items_) {
         ref.Push({child.first, child.second.get()});
-        File::iface(*child.second, null()).UpdateWindow(ref);
+        File::iface(*child.second, iface::GUI::null()).Update(ref);
         ref.Pop();
       }
 
@@ -169,7 +168,11 @@ class GenericDir : public File {
 
       const auto id = ref.Stringify()+": GenericDir TreeView";
       if (ImGui::Begin(id.c_str())) {
-        UpdateEditor(ref);
+        if (ImGui::BeginPopupContextWindow()) {
+          UpdateMenu(ref);
+          ImGui::EndPopup();
+        }
+        UpdateTree(ref);
       }
       ImGui::End();
     }
@@ -179,7 +182,7 @@ class GenericDir : public File {
       if (ImGui::BeginMenu("New")) {
         for (const auto& reg : File::registry()) {
           const auto& type = *reg.second;
-          if (!type.factory() || !type.CheckTagged("GenericDir")) continue;
+          if (!type.factory() || !type.CheckImplemented<DirItem>()) continue;
 
           const auto w = 16.f*ImGui::GetFontSize();
 
@@ -228,13 +231,6 @@ class GenericDir : public File {
 
       ImGui::PopID();
     }
-    void UpdateEditor(File::RefStack& ref) noexcept override {
-      if (ImGui::BeginPopupContextWindow()) {
-        UpdateMenu(ref);
-        ImGui::EndPopup();
-      }
-      UpdateTree(ref);
-    }
     void UpdateTree(File::RefStack& ref) noexcept override {
       for (auto& child : owner_->items_) {
         ref.Push({child.first, child.second.get()});
@@ -249,8 +245,8 @@ class GenericDir : public File {
           ImGuiTreeNodeFlags_NoTreePushOnOpen |
           ImGuiTreeNodeFlags_SpanFullWidth;
 
-      auto* gui = File::iface<iface::GUI>(f);
-      if (gui && !(gui->feats() & kTree)) {
+      auto* ditem = File::iface<iface::DirItem>(f);
+      if (ditem && !(ditem->flags() & kTree)) {
         flags |= ImGuiTreeNodeFlags_Leaf;
       }
 
@@ -259,8 +255,8 @@ class GenericDir : public File {
         ImGui::BeginTooltip();
         ImGui::Text("%s", f->type().name().c_str());
         ImGui::Text("%s", ref.Stringify().c_str());
-        if (gui && (gui->feats() & kTooltip)) {
-          gui->UpdateTooltip(ref);
+        if (ditem && (ditem->flags() & kTooltip)) {
+          ditem->UpdateTooltip(ref);
         }
         ImGui::EndTooltip();
       }
@@ -272,15 +268,17 @@ class GenericDir : public File {
         if (ImGui::MenuItem("Rename")) {
           File::QueueMainTask([this]() { throw Exception("not implemented"); });
         }
-        if (gui) {
+        if (ditem && (ditem->flags() & kMenu)) {
           ImGui::Separator();
-          gui->UpdateMenu(ref);
+          ditem->UpdateMenu(ref);
         }
         ImGui::EndPopup();
       }
       if (open) {
         ImGui::TreePush(f);
-        if (gui) gui->UpdateTree(ref);
+        if (ditem && (ditem->flags() & kTree)) {
+          ditem->UpdateTree(ref);
+        }
         ImGui::TreePop();
       }
     }

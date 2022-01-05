@@ -37,11 +37,17 @@ class Node {
   using InSockList  = std::vector<std::shared_ptr<InSock>>;
   using OutSockList = std::vector<std::shared_ptr<OutSock>>;
 
+  enum Flag : uint8_t {
+    kNone = 0,
+    kMenu = 0b1,
+  };
+  using Flags = uint8_t;
+
   static inline bool Link(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
   static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
 
-  Node(InSockList&& in = {}, OutSockList&& out = {}) :
-      in_(std::move(in)), out_(std::move(out)) {
+  Node(Flags f, InSockList&& in = {}, OutSockList&& out = {}) :
+      in_(std::move(in)), out_(std::move(out)), flags_(f) {
   }
   virtual ~Node() = default;
   Node(const Node&) = delete;
@@ -49,16 +55,24 @@ class Node {
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
+  virtual void Update(File::RefStack&) noexcept { }
+  virtual void UpdateMenu(File::RefStack&) noexcept { }
+
   inline std::shared_ptr<InSock> FindIn(std::string_view) const noexcept;
   inline std::shared_ptr<OutSock> FindOut(std::string_view) const noexcept;
 
   std::span<const std::shared_ptr<InSock>> in() noexcept { return in_; }
   std::span<const std::shared_ptr<OutSock>> out() noexcept { return out_; }
 
+  Flags flags() const noexcept { return flags_; }
+
  protected:
   // don't modify from subclass except in the constructor
   InSockList  in_;
   OutSockList out_;
+
+ private:
+  Flags flags_;
 };
 
 

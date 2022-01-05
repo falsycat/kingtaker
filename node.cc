@@ -14,6 +14,7 @@
 #include <ImNodes.h>
 #include <linalg.hh>
 
+#include "iface/dir.hh"
 #include "iface/gui.hh"
 #include "iface/history.hh"
 #include "iface/node.hh"
@@ -26,7 +27,7 @@ class NodeNet : public File {
   static inline TypeInfo type_ = TypeInfo::New<NodeNet>(
       "NodeNet", "node network",
       {"GenericDir"},
-      {typeid(iface::GUI)});
+      {typeid(iface::DirItem), typeid(iface::GUI), typeid(iface::History)});
 
   using IndexMap = std::unordered_map<iface::Node*, size_t>;
   using NodeMap  = std::vector<iface::Node*>;
@@ -151,23 +152,17 @@ class NodeNet : public File {
     }
 
     void UpdateWindow(RefStack& ref) noexcept {
-      auto gui = file_->iface<iface::GUI>();
-      if (gui && (gui->feats() & iface::GUI::kWindow)) {
-        ref.Push({std::to_string(id_), file_.get()});
-        ImGui::PushID(file_.get());
-        gui->UpdateWindow(ref);
-        ImGui::PopID();
-        ref.Pop();
-      }
+      ref.Push({std::to_string(id_), file_.get()});
+      ImGui::PushID(file_.get());
+
+      File::iface<iface::GUI>(*file_, iface::GUI::null()).Update(ref);
+
+      ImGui::PopID();
+      ref.Pop();
     }
     void UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
       ref.Push({std::to_string(id_), file_.get()});
       ImGui::PushID(file_.get());
-
-      auto gui = file_->iface<iface::GUI>();
-
-      const bool menu = gui && (gui->feats() & iface::GUI::kMenu);
-      const bool node = gui && (gui->feats() & iface::GUI::kNode);
 
       if (first_) {
         ImNodes::AutoPositionNode(this);
@@ -175,11 +170,7 @@ class NodeNet : public File {
       }
 
       if (ImNodes::BeginNode(this, &pos_, &select_)) {
-        if (node) {
-          gui->UpdateNode(ref);
-        } else {
-          // TODO(falsycat)
-        }
+        entity_->Update(ref);
       }
       ImNodes::EndNode();
 
@@ -190,9 +181,9 @@ class NodeNet : public File {
         if (ImGui::MenuItem("Remove")) {
           owner->history_.RemoveNodes({this});
         }
-        if (menu) {
+        if (entity_->flags() & iface::Node::kMenu) {
           ImGui::Separator();
-          gui->UpdateMenu(ref);
+          entity_->UpdateMenu(ref);
         }
         ImGui::EndPopup();
       }
@@ -326,7 +317,10 @@ class NodeNet : public File {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return typeid(iface::GUI) == t? &gui_: nullptr;
+    if (typeid(iface::DirItem) == t) return static_cast<iface::DirItem*>(&gui_);
+    if (typeid(iface::GUI)     == t) return static_cast<iface::GUI*>(&gui_);
+    if (typeid(iface::History) == t) return &history_;
+    return nullptr;
   }
 
  private:
@@ -343,9 +337,9 @@ class NodeNet : public File {
 
   size_t next_id_ = 0;
 
-  class GUI final : public iface::GUI {
+  class GUI final : public iface::GUI, public iface::DirItem {
    public:
-    GUI(NodeNet* owner) : owner_(owner) {
+    GUI(NodeNet* owner) : DirItem(kMenu), owner_(owner) {
       canvas_.Style.NodeRounding = 0.f;
     }
 
@@ -378,7 +372,7 @@ class NodeNet : public File {
       }
     }
 
-    void UpdateWindow(RefStack& ref) noexcept override {
+    void Update(RefStack& ref) noexcept override {
       for (auto& h : owner_->nodes_) {
         h->UpdateWindow(ref);
       }
@@ -391,7 +385,7 @@ class NodeNet : public File {
 
         const auto id = ref.Stringify() + ": NodeNet Editor";
         if (ImGui::Begin(id.c_str(), nullptr, kFlags)) {
-          UpdateEditor(ref);
+          UpdateCanvas(ref);
         }
         ImGui::End();
       }
@@ -399,7 +393,8 @@ class NodeNet : public File {
     void UpdateMenu(RefStack&) noexcept override {
       ImGui::MenuItem("NodeNet Editor", nullptr, &shown_);
     }
-    void UpdateEditor(RefStack& ref) noexcept override {
+
+    void UpdateCanvas(RefStack& ref) noexcept {
       ImNodes::BeginCanvas(&canvas_);
       if (ImGui::BeginPopupContextItem()) {
         if (ImGui::BeginMenu("New")) {
