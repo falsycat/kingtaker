@@ -16,6 +16,7 @@
 
 
 namespace kingtaker {
+namespace {
 
 static void UpdatePin() noexcept {
   auto dlist = ImGui::GetWindowDrawList();
@@ -344,4 +345,4 @@ class Oscilloscope : public File, public iface::Node {
   };
 };
 
-}  // namespace kingtaker
+} }  // namespace kingtaker

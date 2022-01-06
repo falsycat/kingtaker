@@ -3,7 +3,6 @@ project(kingtaker CXX)
 
 # ---- configuration ----
 option(KINGTAKER_STATIC "link all libs statically" ON)
-option(KINGTAKER_TEST   "compiles tests"           OFF)
 
 set(KINGTAKER_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/include/generated")
 
@@ -34,7 +33,6 @@ target_include_directories(kingtaker PRIVATE . "${PROJECT_BINARY_DIR}/include")
 
 target_compile_definitions(kingtaker
   PRIVATE
-    $<$<BOOL:${KINGTAKER_TEST}>:KINGTAKER_TEST>
     $<$<PLATFORM_ID:Linux>:BOOST_STACKTRACE_USE_ADDR2LINE>
 )
 target_sources(kingtaker
@@ -45,7 +43,6 @@ target_sources(kingtaker
     main.cc
     node.cc
     system.cc
-    test.hh
     value.cc
 
     iface/dir.hh

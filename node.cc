@@ -21,6 +21,7 @@
 #include "iface/queue.hh"
 
 namespace kingtaker {
+namespace {
 
 class NodeNet : public File {
  public:
@@ -662,4 +663,4 @@ class NodeNet : public File {
   } history_;
 };
 
-}  // namespace kingtaker
+} }  // namespace kingtaker

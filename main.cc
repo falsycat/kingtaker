@@ -16,7 +16,6 @@
 #include <GLFW/glfw3.h>
 
 #include "kingtaker.hh"
-#include "test.hh"
 
 #include "iface/gui.hh"
 #include "iface/queue.hh"
@@ -163,13 +162,6 @@ void Update() noexcept {
 
 
 int main(int, char**) {
-# if defined(KINGTAKER_TEST)
-    if (std::getenv("KINGTAKER_TEST") != nullptr) {
-      test::RunAll();
-      std::cout << "all tests have passed!! X)" << std::endl;
-    }
-# endif
-
   glfwSetErrorCallback(
       [](int, const char* msg) {
         std::cout << "GLFW error: " << msg << std::endl;

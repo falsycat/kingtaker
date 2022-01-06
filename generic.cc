@@ -15,6 +15,7 @@
 
 
 namespace kingtaker {
+namespace {
 
 class GenericDir : public File {
  public:
@@ -291,4 +292,4 @@ class GenericDir : public File {
   } gui_;
 };
 
-}  // namespace kingtaker
+} }  // namespace kingtaker

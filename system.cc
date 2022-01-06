@@ -9,6 +9,7 @@
 
 
 namespace kingtaker {
+namespace {
 
 class SystemMainQueue : public File, public iface::Queue {
  public:
@@ -153,4 +154,4 @@ class SystemImGuiConfig : public File {
   Time lastModified() const noexcept override { return {}; }
 };
 
-}  // namespace kingtaker
+} }  // namespace kingtaker
