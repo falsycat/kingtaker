@@ -18,22 +18,6 @@
 namespace kingtaker {
 namespace {
 
-static void UpdatePin() noexcept {
-  auto dlist = ImGui::GetWindowDrawList();
-
-  const auto radius = ImGui::GetFontSize()/2 / ImNodes::CanvasState().Zoom;
-  const auto radvec = ImVec2(radius, radius);
-  const auto pos    = ImGui::GetCursorScreenPos();
-
-  dlist->AddCircleFilled(
-      pos+radvec, radius, IM_COL32(100, 100, 100, 100));
-  dlist->AddCircleFilled(
-      pos+radvec, radius*.8f, IM_COL32(200, 200, 200, 200));
-
-  ImGui::SetCursorPos(ImGui::GetCursorPos() + radvec*2);
-}
-
-
 class PulseValue : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<PulseValue>(
@@ -57,14 +41,11 @@ class PulseValue : public File, public iface::Node {
   void Update(RefStack&, Context& ctx) noexcept override {
     ImGui::TextUnformatted("PULSE");
 
-    const auto& style = ImGui::GetStyle();
-
     if (ImGui::Button("Z")) {
       out_[0]->Send(ctx, Pulse());
     }
 
     ImGui::SameLine();
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY()+style.ItemInnerSpacing.y);
     if (ImNodes::BeginOutputSlot("out", 1)) {
       UpdatePin();
       ImNodes::EndSlot();
@@ -112,8 +93,7 @@ class ImmValue : public File, public iface::Node {
   }
 
   void Update(RefStack&, Context& ctx) noexcept override {
-    const auto  em    = ImGui::GetFontSize();
-    const auto& style = ImGui::GetStyle();
+    const auto em = ImGui::GetFontSize();
 
     ImGui::TextUnformatted("IMM");
     auto& v = value_;
@@ -162,7 +142,6 @@ class ImmValue : public File, public iface::Node {
     }
 
     ImGui::SameLine();
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY()+style.ItemInnerSpacing.y);
     if (ImNodes::BeginOutputSlot("out", 1)) {
       UpdatePin();
       ImNodes::EndSlot();
@@ -213,12 +192,9 @@ class Oscilloscope : public File, public iface::Node {
 
     ImGui::TextUnformatted("OSCILLO");
 
-    auto& style = ImGui::GetStyle();
-
     const auto em = ImGui::GetFontSize();
     ImGui::PushItemWidth(8*em);
 
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY()+style.ItemInnerSpacing.y);
     if (ImNodes::BeginInputSlot("in", 1)) {
       UpdatePin();
       ImNodes::EndSlot();

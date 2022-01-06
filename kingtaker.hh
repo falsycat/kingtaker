@@ -268,6 +268,16 @@ class File::RefStack final {
 
   std::string Stringify() const noexcept;
 
+  template <typename T>
+  T* FindParent() const noexcept {
+    for (auto itr = terms_.crbegin(); itr < terms_.crend(); ++itr) {
+      auto& f = itr->file();
+      auto ret = dynamic_cast<T*>(&f);
+      if (ret) return ret;
+    }
+    return nullptr;
+  }
+
   const Term& top() const noexcept { return terms_.back(); }
   const Term& terms(std::size_t i) noexcept { return terms_[i]; }
   std::size_t size() const noexcept { return terms_.size(); }

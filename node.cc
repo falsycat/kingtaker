@@ -215,9 +215,14 @@ class NodeNet : public File {
   };
 
   NodeNet() noexcept : NodeNet(Clock::now()) { }
-  NodeNet(Time lastmod, NodeHolderList&& nodes = {}, size_t next = 0) noexcept :
+  NodeNet(Time lastmod,
+          NodeHolderList&& nodes = {},
+          size_t next = 0,
+          std::vector<std::string>&& in = {},
+          std::vector<std::string>&& out = {}) noexcept :
       File(&type_),
       lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
+      input_(std::move(in)), output_(std::move(out)),
       gui_(this), history_(this) {
   }
 
@@ -251,7 +256,12 @@ class NodeNet : public File {
         nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
       }
 
-      auto ret = std::make_unique<NodeNet>(lastmod, std::move(nodes), next);
+      std::vector<std::string> in, out;
+      msgpack::find(obj, "input"s).convert(in);
+      msgpack::find(obj, "output"s).convert(out);
+
+      auto ret = std::make_unique<NodeNet>(
+          lastmod, std::move(nodes), next, std::move(in), std::move(out));
       ret->gui_.Deserialize(msgpack::find(obj, "gui"s));
       return ret;
 
@@ -262,7 +272,7 @@ class NodeNet : public File {
   void Serialize(Packer& pk) const noexcept override {
     std::unordered_map<iface::Node*, size_t> idxmap;
 
-    pk.pack_map(5);
+    pk.pack_map(7);
 
     pk.pack("lastMod"s);
     pk.pack(Clock::to_time_t(lastmod_));
@@ -283,6 +293,12 @@ class NodeNet : public File {
 
     pk.pack("nextId"s);
     pk.pack(next_id_);
+
+    pk.pack("input"s);
+    pk.pack(input_);
+
+    pk.pack("output"s);
+    pk.pack(output_);
 
     pk.pack("gui"s);
     gui_.Serialize(pk);
@@ -341,6 +357,9 @@ class NodeNet : public File {
   NodeHolderList nodes_;
 
   size_t next_id_ = 0;
+
+  std::vector<std::string> input_;
+  std::vector<std::string> output_;
 
   class GUI final : public iface::GUI, public iface::DirItem {
    public:
@@ -416,8 +435,11 @@ class NodeNet : public File {
           }
           ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Clear entire context")) {
-          ctx_.Clear();
+        if (ImGui::BeginMenu("Input")) {
+          ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Output")) {
+          ImGui::EndMenu();
         }
 
         ImGui::Separator();
@@ -426,6 +448,14 @@ class NodeNet : public File {
         }
         if (ImGui::MenuItem("Redo")) {
           owner_->history_.Move(1);
+        }
+
+        ImGui::Separator();
+        if (ImGui::MenuItem("Clear history")) {
+          owner_->history_.Clear();
+        }
+        if (ImGui::MenuItem("Clear entire context")) {
+          ctx_.Clear();
         }
         ImGui::SetWindowFontScale(canvas_.Zoom);
         ImGui::EndPopup();
@@ -527,6 +557,8 @@ class NodeNet : public File {
         prev_ = {};
       }
       prev_ctx_ = ctx;
+
+      owner_->lastmod_ = Clock::now();
     }
 
     NodeNet* owner_;
@@ -661,6 +693,126 @@ class NodeNet : public File {
 
     std::variant<std::monostate> prev_;
   } history_;
+
+  class IONode : public File, public iface::Node {
+   public:
+    static inline TypeInfo type_ = TypeInfo::New<IONode>(
+        "NodeNet_IONode", "I/O node in NodeNet", {});
+
+    enum Type { kInput, kOutput, };
+
+    struct Data final {
+     public:
+      Data() = default;
+      Data(const Data& src) noexcept : type(src.type), name(src.name) {
+      }
+
+      void Deserialize(const msgpack::object& obj) {
+        std::unique_lock<std::mutex> k(mtx);
+        try {
+          type =
+              (msgpack::find(obj, "type"s).as<std::string>() == "in")? kInput: kOutput;
+          name = msgpack::find(obj, "name"s).as<std::string>();
+        } catch (msgpack::type_error& e) {
+          throw DeserializeException("IONode corruption");
+        }
+      }
+      void Serialize(Packer& pk) const noexcept {
+        std::unique_lock<std::mutex> k(const_cast<std::mutex&>(mtx));
+        pk.pack_map(2);
+
+        pk.pack("type"s);
+        pk.pack(type == kInput? "in"s: "out"s);
+
+        pk.pack("name"s);
+        pk.pack(name);
+      }
+
+      std::mutex mtx;
+
+      Type        type = kInput;
+      std::string name;
+    };
+
+    IONode(const std::shared_ptr<Data>& data = std::make_shared<Data>()) :
+        File(&type_), Node(kNone), data_(data) {
+      in_.emplace_back(new Receiver(this));
+      out_.emplace_back(new OutSock(this, "out"));
+    }
+
+    static std::unique_ptr<IONode> Deserialize(const msgpack::object& obj) {
+      auto data = std::make_shared<Data>();
+      data->Deserialize(obj);
+      return std::make_unique<IONode>(data);
+    }
+    void Serialize(Packer& pk) const noexcept override {
+      data_->Serialize(pk);
+    }
+    std::unique_ptr<File> Clone() const noexcept override {
+      std::unique_lock<std::mutex> k(data_->mtx);
+      return std::make_unique<IONode>(std::make_shared<Data>(*data_));
+    }
+
+    void Update(RefStack& ref, Context&) noexcept override {
+      auto owner = ref.FindParent<NodeNet>();
+      if (!owner) {
+        ImGui::TextUnformatted("NodeNet I/O");
+        ImGui::TextUnformatted("ERROR X(");
+        ImGui::TextUnformatted("This node must be used at inside of NodeNet");
+        return;
+      }
+
+      const auto& style = ImGui::GetStyle();
+      const auto  line  = ImGui::GetCursorPosY();
+
+      std::unique_lock<std::mutex> k(data_->mtx);
+      switch (data_->type) {
+      case kInput:
+        ImGui::SetCursorPosY(line + style.ItemSpacing.y);
+        ImGui::Text("IN: %s", data_->name.c_str());
+
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(line);
+        if (ImNodes::BeginOutputSlot("out", 1)) {
+          UpdatePin();
+          ImNodes::EndSlot();
+        }
+        break;
+      case kOutput:
+        if (ImNodes::BeginInputSlot("in", 1)) {
+          UpdatePin();
+          ImNodes::EndSlot();
+        }
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(line + style.ItemSpacing.y);
+        ImGui::Text("OUT: %s", data_->name.c_str());
+        break;
+      }
+    }
+
+    Time lastModified() const noexcept override { return {}; }
+    void* iface(const std::type_index& t) noexcept override {
+      if (typeid(iface::Node) == t) return static_cast<iface::Node*>(this);
+      return nullptr;
+    }
+
+   private:
+    std::shared_ptr<Data> data_;
+
+    class Receiver : public InSock {
+     public:
+      Receiver(IONode* o) noexcept :
+          InSock(o, "in"), data_(o->data_) {
+      }
+      void Receive(Context& ctx, Value&& v) noexcept override {
+        std::unique_lock<std::mutex> k(data_->mtx);
+        ctx.Receive(data_->name, std::move(v));
+      }
+
+     private:
+      std::shared_ptr<Data> data_;
+    };
+  };
 };
 
 } }  // namespace kingtaker

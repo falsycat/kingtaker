@@ -50,6 +50,8 @@ class Node {
   static inline bool Link(Context&, const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
   static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
 
+  static inline void UpdatePin() noexcept;
+
   Node(Flags f, InSockList&& in = {}, OutSockList&& out = {}) :
       in_(std::move(in)), out_(std::move(out)), flags_(f) {
   }
@@ -409,6 +411,25 @@ std::shared_ptr<Node::OutSock> Node::FindOut(std::string_view name) const noexce
   auto itr = std::find_if(out_.begin(), out_.end(),
                           [name](auto e) { return e->name() == name; });
   return itr != out_.end()? *itr: nullptr;
+}
+
+
+void Node::UpdatePin() noexcept {
+  auto& style = ImGui::GetStyle();
+  auto  dlist = ImGui::GetWindowDrawList();
+
+  const auto radius = ImGui::GetFontSize()/2 / ImNodes::CanvasState().Zoom;
+  const auto radvec = ImVec2(radius, radius);
+
+  auto pos = ImGui::GetCursorScreenPos();
+  pos.y += style.ItemInnerSpacing.y;
+
+  dlist->AddCircleFilled(
+      pos+radvec, radius, IM_COL32(100, 100, 100, 100));
+  dlist->AddCircleFilled(
+      pos+radvec, radius*.8f, IM_COL32(200, 200, 200, 200));
+
+  ImGui::Dummy({radvec.x*2, radvec.y*2 + style.ItemInnerSpacing.y*2});
 }
 
 }  // namespace kingtaker::iface
