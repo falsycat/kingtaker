@@ -1,5 +1,3 @@
-#define IMGUI_DEFINE_MATH_OPERATORS
-
 #include "kingtaker.hh"
 
 #include <cmath>
@@ -63,6 +61,11 @@ class NodeNet : public File {
       std::unique_lock<std::mutex> k(const_cast<std::mutex&>(mtx_));
       nodes_.erase(node);
       return nodes_.empty();
+    }
+
+    void Rename(std::string_view name) noexcept {
+      std::unique_lock<std::mutex> k(const_cast<std::mutex&>(mtx_));
+      name_ = name;
     }
 
     std::string name() const noexcept {
@@ -379,6 +382,14 @@ class NodeNet : public File {
       if (&h->entity() == &n) return *h;
     }
     assert(false);
+  }
+  void ReorderIO() noexcept {
+    std::sort(input_.begin(), input_.end(), [](auto& a, auto& b) {
+                return a->name() < b->name();
+              });
+    std::sort(output_.begin(), output_.end(), [](auto& a, auto& b) {
+                return a->name() < b->name();
+              });
   }
 
   Time lastmod_;
@@ -774,7 +785,7 @@ class NodeNet : public File {
     };
 
     AbstractIONode(TypeInfo* t, std::string_view name, IO* io = nullptr) :
-        File(t), Node(kNone), name_(name), data_(std::make_shared<Data>(io)) {
+        File(t), Node(kMenu), name_(name), data_(std::make_shared<Data>(io)) {
     }
 
     void Serialize(Packer& pk) const noexcept override {
@@ -798,6 +809,7 @@ class NodeNet : public File {
         io->Attach(this);
         data_->io = io.get();
         list.push_back(std::move(io));
+        owner->ReorderIO();
       }
     }
     void Teardown(NodeNet* owner) noexcept override {
@@ -811,6 +823,43 @@ class NodeNet : public File {
         if (itr != list.end()) list.erase(itr);
       }
       data_->io = nullptr;
+    }
+
+    void UpdateMenu(RefStack& ref, Context&) noexcept override {
+      auto owner = ref.FindParent<NodeNet>();
+      if (!owner) return;
+
+      std::unique_lock<std::mutex> k(data_->mtx);
+
+      if (ImGui::BeginMenu("Rename")) {
+        constexpr auto kFlags =
+          ImGuiInputTextFlags_EnterReturnsTrue |
+          ImGuiInputTextFlags_AutoSelectAll;
+
+        auto& list = GetList(owner);
+
+        ImGui::SetKeyboardFocusHere();
+        const bool submit = ImGui::InputText("##Renamer", &name_, kFlags);
+
+        const bool empty = name_.empty();
+        const bool same  = name_ == data_->io->name();
+        const bool dup   = list.end() != std::find_if(
+            list.begin(), list.end(), [this](auto& e) { return e->name() == name_; });
+
+        if (empty) {
+          ImGui::Bullet();
+          ImGui::TextUnformatted("empty name");
+        }
+        if (!same && dup) {
+          ImGui::Bullet();
+          ImGui::TextUnformatted("name duplication");
+        }
+        if (submit && !empty && !dup && !same) {
+          data_->io->Rename(name_);
+          owner->ReorderIO();
+        }
+        ImGui::EndMenu();
+      }
     }
 
     Time lastModified() const noexcept override { return {}; }
@@ -865,15 +914,10 @@ class NodeNet : public File {
         return;
       }
 
-      const auto& style = ImGui::GetStyle();
-      const auto  line  = ImGui::GetCursorPosY();
-
       std::unique_lock<std::mutex> k(data_->mtx);
-      ImGui::SetCursorPosY(line + style.ItemSpacing.y);
-      ImGui::Text("IN: %s", data_->io->name().c_str());
+      ImGui::Text("IN> %s", data_->io->name().c_str());
 
       ImGui::SameLine();
-      ImGui::SetCursorPosY(line);
       if (ImNodes::BeginOutputSlot("out", 1)) {
         UpdatePin();
         ImNodes::EndSlot();
@@ -913,9 +957,6 @@ class NodeNet : public File {
         return;
       }
 
-      const auto& style = ImGui::GetStyle();
-      const auto  line  = ImGui::GetCursorPosY();
-
       if (ImNodes::BeginInputSlot("in", 1)) {
         UpdatePin();
         ImNodes::EndSlot();
@@ -923,8 +964,7 @@ class NodeNet : public File {
 
       std::unique_lock<std::mutex> k(data_->mtx);
       ImGui::SameLine();
-      ImGui::SetCursorPosY(line + style.ItemSpacing.y);
-      ImGui::Text("OUT: %s", data_->io->name().c_str());
+      ImGui::Text("%s >OUT", data_->io->name().c_str());
     }
 
    protected:

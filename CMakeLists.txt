@@ -33,6 +33,7 @@ target_include_directories(kingtaker PRIVATE . "${PROJECT_BINARY_DIR}/include")
 
 target_compile_definitions(kingtaker
   PRIVATE
+    IMGUI_DEFINE_MATH_OPERATORS
     $<$<PLATFORM_ID:Linux>:BOOST_STACKTRACE_USE_ADDR2LINE>
 )
 target_sources(kingtaker

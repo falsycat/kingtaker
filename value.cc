@@ -1,5 +1,3 @@
-#define IMGUI_DEFINE_MATH_OPERATORS
-
 #include "kingtaker.hh"
 
 #include <algorithm>

@@ -415,21 +415,18 @@ std::shared_ptr<Node::OutSock> Node::FindOut(std::string_view name) const noexce
 
 
 void Node::UpdatePin() noexcept {
-  auto& style = ImGui::GetStyle();
-  auto  dlist = ImGui::GetWindowDrawList();
-
-  const auto radius = ImGui::GetFontSize()/2 / ImNodes::CanvasState().Zoom;
+  const auto em     = ImGui::GetFontSize();
+  const auto radius = em/2 / ImNodes::CanvasState().Zoom;
   const auto radvec = ImVec2(radius, radius);
+  const auto pos    = ImGui::GetCursorScreenPos();
 
-  auto pos = ImGui::GetCursorScreenPos();
-  pos.y += style.ItemInnerSpacing.y;
-
+  auto dlist = ImGui::GetWindowDrawList();
   dlist->AddCircleFilled(
       pos+radvec, radius, IM_COL32(100, 100, 100, 100));
   dlist->AddCircleFilled(
       pos+radvec, radius*.8f, IM_COL32(200, 200, 200, 200));
 
-  ImGui::Dummy({radvec.x*2, radvec.y*2 + style.ItemInnerSpacing.y*2});
+  ImGui::Dummy(radvec*2);
 }
 
 }  // namespace kingtaker::iface
