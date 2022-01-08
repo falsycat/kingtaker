@@ -73,7 +73,6 @@ class Node {
   Flags flags() const noexcept { return flags_; }
 
  protected:
-  // don't modify from subclass except in the constructor
   InSockList  in_;
   OutSockList out_;
 
@@ -194,7 +193,7 @@ class Node::Value final {
 
 class Node::Context {
  public:
-  using Receiver = std::function<void(std::string_view, Value&&)>;
+  using Receiver = std::function<void(const OutSock&, Value&&)>;
   class Data {
    public:
     Data() = default;
@@ -227,8 +226,8 @@ class Node::Context {
     return *ret;
   }
 
-  void Receive(std::string_view name, Value&& v) noexcept {
-    if (recv_) recv_(name, std::move(v));
+  void Receive(const OutSock& sock, Value&& v) noexcept {
+    if (recv_) recv_(sock, std::move(v));
   }
 
   void Clear(Node* n) noexcept {

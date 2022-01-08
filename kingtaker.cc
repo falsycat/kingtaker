@@ -20,7 +20,11 @@ File::Path File::ParsePath(std::string_view path) noexcept {
   Path ret;
   while (path.size()) {
     const auto a = path.find_first_not_of('/');
-    if (a != std::string::npos) path.remove_prefix(a);
+    if (a != std::string::npos) {
+      path.remove_prefix(a);
+    } else {
+      return ret;
+    }
 
     const auto name = path.substr(0, path.find('/'));
     path.remove_prefix(name.size());
