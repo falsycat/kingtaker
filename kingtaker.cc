@@ -17,7 +17,7 @@ std::string Exception::Stringify() noexcept {
 
 
 File::Path File::ParsePath(std::string_view path) noexcept {
-  Path ret;
+  Path ret = {":"};
   while (path.size()) {
     const auto a = path.find_first_not_of('/');
     if (a != std::string::npos) {
@@ -34,9 +34,9 @@ File::Path File::ParsePath(std::string_view path) noexcept {
   return ret;
 }
 std::string File::StringifyPath(const Path& p) noexcept {
-  std::string ret = "/";
+  std::string ret = ":";
   for (const auto& name : p) {
-    if (ret.back() != '/') ret.push_back('/');
+    ret.push_back('/');
     ret += name;
   }
   return ret;
@@ -119,6 +119,14 @@ void File::RefStack::Pop() noexcept {
   terms_.pop_back();
 }
 
+File::Path File::RefStack::GetFullPath() const noexcept {
+  Path ret;
+  ret.reserve(terms_.size());
+  for (const auto& term : terms_) {
+    ret.push_back(term.name());
+  }
+  return ret;
+}
 std::string File::RefStack::Stringify() const noexcept {
   std::string ret = "/";
   for (const auto& term : terms_) {

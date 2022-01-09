@@ -333,20 +333,61 @@ class NodeNet : public File, public iface::Node {
     return std::make_unique<NodeNet>(Clock::now(), std::move(nodes));
   }
 
-  void Update(RefStack& ref, Context& ctx) noexcept override {
-    constexpr auto kFlags =
-        ImGuiWindowFlags_NoScrollbar;
-    ImGui::TextUnformatted("NodeNet");
+  void Update(RefStack&, Context&) noexcept override {
+    const auto em   = ImGui::GetFontSize();
+    const auto line = ImGui::GetCursorPosY();
+    ImGui::NewLine();
 
-    const auto em = ImGui::GetFontSize();
+    ImGui::BeginGroup();
+    if (in_.size() || out_.size()) {
+      ImGui::BeginGroup();
+      for (auto& in : in_) {
+        const auto c = in->name().c_str();
+        if (ImNodes::BeginInputSlot(c, 1)) {
+          UpdatePin();
+          ImNodes::EndSlot();
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(c);
+      }
+      ImGui::EndGroup();
 
-    const float h = std::max(
-        static_cast<float>(std::max(in_.size(), out_.size()))*em, 16*em);
+      ImGui::SameLine();
+      ImGui::Dummy({2*em, 1});
+      ImGui::SameLine();
 
-    if (ImGui::BeginChild("Editor", {16*em, h}, true, kFlags)) {
-      gui_.UpdateCanvas(ctx, ref);
+      float wmax = 0;
+      for (auto& out : out_) {
+        wmax = std::max(wmax, ImGui::CalcTextSize(out->name().c_str()).x);
+      }
+      ImGui::BeginGroup();
+      for (auto& out : out_) {
+        const auto c = out->name().c_str();
+        const auto w = ImGui::CalcTextSize(c).x;
+
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (wmax-w));
+        ImGui::TextUnformatted(c);
+
+        ImGui::SameLine();
+        if (ImNodes::BeginOutputSlot(c, 1)) {
+          UpdatePin();
+          ImNodes::EndSlot();
+        }
+      }
+      ImGui::EndGroup();
+    } else {
+      ImGui::TextDisabled("No I/O");
     }
-    ImGui::EndChild();
+    ImGui::EndGroup();
+
+    static const char* title = "NodeNet";
+    const auto w  = ImGui::GetItemRectSize().x;
+    const auto tw = ImGui::CalcTextSize(title).x;
+    if (w > tw) {
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w-tw)/2);
+    }
+    ImGui::SetCursorPosY(line);
+    ImGui::TextUnformatted("NodeNet");
   }
 
   Time lastModified() const noexcept override {
@@ -971,18 +1012,40 @@ class RefNode : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<RefNode>(
       "RefNode", "uses node as lambda",
-      {typeid(iface::DirItem), typeid(iface::Node)});
+      {typeid(iface::Node)});
 
   using OutMap = std::unordered_map<OutSock*, std::shared_ptr<OutSock>>;
 
-  RefNode(std::string_view path = "") noexcept :
-      File(&type_), Node(kNone), path_(path) {
+  RefNode(std::string_view path = "",
+          const std::vector<std::string>& in  = {},
+          const std::vector<std::string>& out = {}) noexcept :
+      File(&type_), Node(kMenu), life_(std::make_shared<std::monostate>()), path_(path) {
+    in_.reserve(in.size());
+    out_.reserve(out.size());
+
+    const auto p = ParsePath(path);
+    for (auto& v : in) in_.push_back(std::make_shared<Input>(this, v));
+    for (auto& v : out) out_.push_back(std::make_shared<OutSock>(this, v));
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) noexcept {
-    return std::make_unique<RefNode>(obj.as<std::string>());
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+    auto str = msgpack::find(obj, "path"s).as<std::string>();
+    auto in  = msgpack::find(obj, "in"s).as<std::vector<std::string>>();
+    auto out = msgpack::find(obj, "out"s).as<std::vector<std::string>>();
+    return std::make_unique<RefNode>(str, std::move(in), std::move(out));
   }
   void Serialize(Packer& pk) const noexcept override {
+    pk.pack_map(3);
+
+    pk.pack("in"s);
+    pk.pack_array(static_cast<uint32_t>(in_.size()));
+    for (auto& e : in_) pk.pack(e->name());
+
+    pk.pack("out"s);
+    pk.pack_array(static_cast<uint32_t>(out_.size()));
+    for (auto& e : out_) pk.pack(e->name());
+
+    pk.pack("path"s);
     pk.pack(path_);
   }
   std::unique_ptr<File> Clone() const noexcept override {
@@ -992,80 +1055,94 @@ class RefNode : public File, public iface::Node {
   void Update(RefStack& ref, Context&) noexcept override {
     ImGui::TextUnformatted("REF");
 
-    const auto em   = ImGui::GetFontSize();
     const auto line = ImGui::GetCursorPosY();
+    ImGui::SetCursorPosY(line + ImGui::GetFrameHeightWithSpacing());
 
-    ImGui::SetCursorPosY(line+ImGui::GetFrameHeightWithSpacing());
     ImGui::BeginGroup();
     try {
-      auto f = &*ref.Resolve(path_);
-      if (f == this || ref.size() > 256) {
-        throw Exception("recursive reference");
-      }
+      auto r = ref.Resolve(path_);
+      auto n = FetchNode(this, r);
 
-      auto n = File::iface<iface::Node>(f);
-      if (!n) throw Exception("target is not a node");
-      FetchSocks(n);
-
-      // input pins
-      ImGui::BeginGroup();
-      ImGui::NewLine();
-      for (auto& in : n->in()) {
-        const auto c = in->name().c_str();
-        if (ImNodes::BeginInputSlot(c, 1)) {
-          UpdatePin();
-          ImNodes::EndSlot();
-        }
-        ImGui::SameLine();
-        ImGui::TextUnformatted(c);
-      }
-      ImGui::EndGroup();
-
-      // content
-      ref.Push({"@", f});
+      ref.Push({"@", &*r});
       ImGui::PushID(n);
 
-      ImGui::SameLine();
-      ImGui::BeginGroup();
       n->Update(ref, ctx_);
-      ImGui::EndGroup();
 
       ImGui::PopID();
       ref.Pop();
-
-      // output pins
-      float wmax = 0;
-      for (auto& out : n->out()) {
-        wmax = std::max(wmax, ImGui::CalcTextSize(out->name().c_str()).x);
-      }
-      ImGui::SameLine();
-      ImGui::BeginGroup();
-      ImGui::NewLine();
-      for (auto& out : n->out()) {
-        const auto c = out->name().c_str();
-        const auto w = ImGui::CalcTextSize(c).x;
-
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (wmax-w));
-        ImGui::TextUnformatted(c);
-
-        ImGui::SameLine();
-        if (ImNodes::BeginOutputSlot(c, 1)) {
-          UpdatePin();
-          ImNodes::EndSlot();
-        }
-      }
-      ImGui::EndGroup();
-
-    } catch (NotFoundException& e) {
-      ImGui::TextDisabled("target is missing");
     } catch (Exception& e) {
       ImGui::TextDisabled(e.msg().c_str());
     }
     ImGui::EndGroup();
 
     ImGui::SetCursorPosY(line);
-    ImGui::SetNextItemWidth(std::max(16*em, ImGui::GetItemRectSize().x));
-    ImGui::InputTextWithHint("##path", ":/path/to/node", &path_);
+    ImGui::Button(("-> "s+(path_.size()? path_: "(empty)"s)).c_str(),
+                  {ImGui::GetItemRectSize().x, 0});
+
+    if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+      UpdateMenu(ref, ctx_);
+      ImGui::EndPopup();
+    }
+  }
+  void UpdateMenu(RefStack& ref, Context& ctx) noexcept {
+    if (ImGui::BeginMenu("Change")) {
+      constexpr auto kFlags = 
+          ImGuiInputTextFlags_EnterReturnsTrue |
+          ImGuiInputTextFlags_AutoSelectAll;
+      static const char* const kHint = "enter new path...";
+
+      ImGui::SetKeyboardFocusHere();
+      const bool submit = ImGui::InputTextWithHint(
+          "##renamer", kHint, &path_editing_, kFlags);
+      try {
+        auto newref = ref.Resolve(path_editing_);
+        if (submit) {
+          ImGui::CloseCurrentPopup();
+
+          path_editing_ = newref.Stringify();
+          File::QueueMainTask(
+              [this, fullpath = newref.Stringify()]() {
+                try {
+                  SyncSocks(FetchNode(nullptr, RefStack().Resolve(fullpath)));
+                  path_ = fullpath;
+                } catch (Exception& e) {
+                  // TODO(): todo
+                }
+              });
+        }
+      } catch (NotFoundException& e) {
+        ImGui::Bullet();
+        ImGui::TextUnformatted("file not found");
+      } catch (Exception& e) {
+        ImGui::Bullet();
+        ImGui::TextUnformatted(e.msg().c_str());
+      }
+
+      ImGui::EndMenu();
+    }
+
+    try {
+      auto nref = ref.Resolve(path_);
+      auto n    = FetchNode(this, nref);
+
+      if (ImGui::MenuItem("Re-sync")) {
+        File::QueueMainTask(
+            [this, fullpath = nref.Stringify()]() {
+              try {
+                SyncSocks(FetchNode(nullptr, RefStack().Resolve(fullpath)));
+              } catch (Exception& e) {
+                // TODO(): todo
+              }
+            });
+      }
+      if (n->flags() & kMenu) {
+        if (ImGui::BeginMenu("Target")) {
+          n->UpdateMenu(ref, ctx);
+          ImGui::EndMenu();
+        }
+      }
+    } catch (Exception& e) {
+    }
   }
 
   Time lastModified() const noexcept override { return {}; }
@@ -1078,73 +1155,114 @@ class RefNode : public File, public iface::Node {
   class Data final : public Context::Data {
    public:
     Data() = delete;
-    Data(const OutMap& omap, Context* ctx) :
-        ctx_([this](auto& sock, auto&& v) { Pipe(sock, std::move(v)); }),
-        omap_(omap), outctx_(ctx) {
+    Data(RefNode* o, Context* ctx) :
+        owner_(o), life_(o->life_),
+        ctx_([this](auto& s, auto&& v) {
+               File::QueueSubTask([this, &s, v = std::move(v)]() {
+                                    Pipe(s.name(), Value(v));
+                                  });
+             }),
+        outctx_(ctx) {
     }
 
     Context& ctx() noexcept { return ctx_; }
 
    private:
-    void Pipe(const OutSock& sock, Value&& v) {
-      std::unique_lock<std::mutex> k(mtx_);
-      auto itr = omap_.find(const_cast<OutSock*>(&sock));
-      if (itr == omap_.end()) return;
-      itr->second->Send(*outctx_, std::move(v));
+    void Pipe(std::string_view sock, Value&& v) {
+      if (life_.expired()) return;
+
+      auto dst = owner_->FindOut(sock);
+      if (dst) dst->Send(*outctx_, std::move(v));
     }
 
-    std::mutex mtx_;
+    RefNode* owner_;
+
+    std::weak_ptr<std::monostate> life_;
 
     Context ctx_;
-
-    OutMap omap_;
 
     Context* outctx_;
   };
 
-  void FetchSocks(Node* n) {
-    std::unique_lock<std::mutex> k(mtx_);
-    in_.clear();
-    for (auto& in : n->in()) {
-      if (!imap_.contains(in.get())) {
-        imap_[in.get()] = std::make_shared<Input>(this, in->name(), in);
-      }
-      in_.push_back(imap_[in.get()]);
+  static Node* FetchNode(RefNode* owner, const RefStack& ref) {
+    auto f = &*ref;
+    if (f == owner || ref.size() > 256) {
+      throw Exception("recursive reference");
     }
 
-    out_.clear();
-    for (auto& out : n->out()) {
-      if (!omap_.contains(out.get())) {
-        omap_[out.get()] = std::make_shared<OutSock>(this, out->name());
+    auto n = File::iface<iface::Node>(f);
+    if (!n) throw Exception("target is not a node");
+    return n;
+  }
+
+  template <typename T>
+  static void Sync(std::vector<std::shared_ptr<T>>& dst,
+                   const std::span<const std::shared_ptr<T>>& src,
+                   std::function<std::shared_ptr<T>(std::string_view)>&& f) noexcept {
+    std::unordered_map<std::string, std::shared_ptr<T>> m;
+    for (auto& e : dst) m[e->name()] = e;
+
+    dst.clear();
+    for (auto& e : src) {
+      auto itr = m.find(e->name());
+      if (itr != m.end()) {
+        dst.push_back(itr->second);
+      } else {
+        dst.push_back(f(e->name()));
       }
-      out_.push_back(omap_[out.get()]);
     }
   }
+  void SyncSocks(Node* n) {
+    try {
+      Sync<InSock>(in_, n->in(), [this](auto str) {
+             return std::make_shared<Input>(this, str);
+           });
+      Sync<OutSock>(out_, n->out(), [this](auto str) {
+             return std::make_shared<OutSock>(this, str);
+           });
+
+    } catch (Exception& e) {
+    }
+  }
+
+  std::shared_ptr<std::monostate> life_;
 
   std::string path_;
 
   Context ctx_;
 
-  std::mutex mtx_;
-  std::unordered_map<InSock*, std::shared_ptr<InSock>> imap_;
-  std::unordered_map<OutSock*, std::shared_ptr<OutSock>> omap_;
+  std::string path_editing_;
 
   class Input : public InSock {
    public:
-    Input(RefNode* o, std::string_view n, const std::shared_ptr<InSock>& dst) :
-        InSock(o, n), owner_(o), dst_(dst) {
+    Input(RefNode* o, std::string_view n) :
+        InSock(o, n), owner_(o), life_(o->life_) {
     }
-
     void Receive(Context& ctx, Value&& v) noexcept override {
-      std::unique_lock<std::mutex> k(owner_->mtx_);
-      auto& data = ctx.GetOrNew<Data>(&owner(), owner_->omap_, &ctx);
-      dst_->Receive(data.ctx(), std::move(v));
+      File::QueueSubTask([this, &ctx, v = std::move(v)]() { Pipe(ctx, Value(v)); });
     }
 
    private:
+    void Pipe(Context& ctx, Value&& v) noexcept {
+      if (life_.expired()) return;
+
+      try {
+        const auto ref = RefStack().Resolve(owner_->path_);
+
+        auto dst = FetchNode(nullptr, ref)->FindIn(name());
+        if (!dst) throw Exception("socket mismatch");
+
+        auto& data = ctx.GetOrNew<Data>(owner_, owner_, &ctx);
+        dst->Receive(data.ctx(), std::move(v));
+
+      } catch (Exception& e) {
+        // TODO(falsycat): tell exception
+      }
+    }
+
     RefNode* owner_;
 
-    std::shared_ptr<InSock> dst_;
+    std::weak_ptr<std::monostate> life_;
   };
 };
 

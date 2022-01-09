@@ -266,6 +266,7 @@ class File::RefStack final {
   RefStack ResolveUpward(const Path& p) const;
   RefStack ResolveUpward(std::string_view p) const { return ResolveUpward(ParsePath(p)); }
 
+  Path GetFullPath() const noexcept;
   std::string Stringify() const noexcept;
 
   template <typename T>
