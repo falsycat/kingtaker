@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <mutex>
 #include <optional>
 
 #include <imgui.h>
@@ -36,7 +35,7 @@ class PulseValue : public File, public iface::Node {
     return std::make_unique<PulseValue>();
   }
 
-  void Update(RefStack&, Context& ctx) noexcept override {
+  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override {
     ImGui::TextUnformatted("PULSE");
 
     if (ImGui::Button("Z")) {
@@ -61,11 +60,8 @@ class PulseValue : public File, public iface::Node {
  private:
   class PulseEmitter : public OutSock {
    public:
-    PulseEmitter(PulseValue* o) : OutSock(o, "out"), owner_(o) {
+    PulseEmitter(PulseValue* o) : OutSock(o, "out") {
     }
-
-   private:
-    PulseValue* owner_;
   };
 };
 
@@ -90,7 +86,7 @@ class ImmValue : public File, public iface::Node {
     return std::make_unique<ImmValue>(Value(value_));
   }
 
-  void Update(RefStack&, Context& ctx) noexcept override {
+  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override {
     const auto em = ImGui::GetFontSize();
 
     ImGui::TextUnformatted("IMM");
@@ -171,7 +167,7 @@ class Oscilloscope : public File, public iface::Node {
       "Oscilloscope", "value inspector",
       {typeid(iface::Node)});
 
-  Oscilloscope() : File(&type_), Node(kNone) {
+  Oscilloscope() : File(&type_), Node(kNone), life_(std::make_shared<std::monostate>()) {
     in_.emplace_back(std::make_shared<Receiver>(this));
   }
 
@@ -185,9 +181,7 @@ class Oscilloscope : public File, public iface::Node {
     return std::make_unique<Oscilloscope>();
   }
 
-  void Update(RefStack&, Context&) noexcept override {
-    std::unique_lock<std::mutex> k(mtx_);
-
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override {
     ImGui::TextUnformatted("OSCILLO");
 
     const auto em = ImGui::GetFontSize();
@@ -294,28 +288,29 @@ class Oscilloscope : public File, public iface::Node {
   }
 
  private:
-  std::mutex mtx_;
-
   std::vector<std::pair<Time, Value>> values_;
 
   std::string msg_ = "waiting...";
 
+  std::shared_ptr<std::monostate> life_;
+
   class Receiver : public InSock {
    public:
-    Receiver(Oscilloscope* o) : InSock(o, "in"), owner_(o) {
+    Receiver(Oscilloscope* o) : InSock(o, "in"), owner_(o), life_(o->life_) {
     }
 
-    void Receive(Context& ctx, Value&& v) noexcept override {
-      {
-        std::unique_lock<std::mutex> k(owner_->mtx_);
-        owner_->msg_ = "ok :)";
-        owner_->values_.emplace_back(Clock::now(), Value(v));
-      }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+      if (life_.expired()) return;
+
+      owner_->msg_ = "ok :)";
+      owner_->values_.emplace_back(Clock::now(), Value(v));
       InSock::Receive(ctx, std::move(v));
     }
 
    private:
     Oscilloscope* owner_;
+
+    std::weak_ptr<std::monostate> life_;
   };
 };
 

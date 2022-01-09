@@ -6,7 +6,6 @@
 #include <cassert>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -29,6 +28,7 @@ class Node {
 
   class Value;
 
+  class ContextWatcher;
   class Context;
 
   class Sock;
@@ -47,7 +47,7 @@ class Node {
   using Flags = uint8_t;
 
   static inline bool Link(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
-  static inline bool Link(Context&, const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
+  static inline bool Link(const std::shared_ptr<Context>&, const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
   static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
 
   static inline void UpdatePin() noexcept;
@@ -61,8 +61,8 @@ class Node {
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
-  virtual void Update(File::RefStack&, Context&) noexcept { }
-  virtual void UpdateMenu(File::RefStack&, Context&) noexcept { }
+  virtual void Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept { }
+  virtual void UpdateMenu(File::RefStack&, const std::shared_ptr<Context>&) noexcept { }
 
   inline std::shared_ptr<InSock> FindIn(std::string_view) const noexcept;
   inline std::shared_ptr<OutSock> FindOut(std::string_view) const noexcept;
@@ -191,9 +191,20 @@ class Node::Value final {
 };
 
 
-class Node::Context {
+class Node::ContextWatcher {
  public:
-  using Receiver = std::function<void(const OutSock&, Value&&)>;
+  ContextWatcher() = default;
+  virtual ~ContextWatcher() = default;
+  ContextWatcher(const ContextWatcher&) = delete;
+  ContextWatcher(ContextWatcher&&) = delete;
+  ContextWatcher& operator=(const ContextWatcher&) = delete;
+  ContextWatcher& operator=(ContextWatcher&&) = delete;
+
+  virtual void Receive(std::string_view, Value&&) noexcept { }
+  virtual void Inform(std::string_view) noexcept { }
+};
+class Node::Context final {
+ public:
   class Data {
    public:
     Data() = default;
@@ -204,7 +215,10 @@ class Node::Context {
     Data& operator=(Data&&) = default;
   };
 
-  Context(Receiver&& recv = {}) : recv_(std::move(recv)) { }
+  Context(std::unique_ptr<ContextWatcher>&& w) noexcept : w_(std::move(w)) {
+  }
+  Context() noexcept : Context(std::make_unique<ContextWatcher>()) {
+  }
   Context(const Context&) = delete;
   Context(Context&&) = delete;
   Context& operator=(const Context&) = delete;
@@ -212,8 +226,6 @@ class Node::Context {
 
   template <typename T, typename... Args>
   T& GetOrNew(Node* n, Args... args) {
-    std::unique_lock<std::mutex> k(mtx_);
-
     auto itr = map_.find(n);
     if (itr != map_.end()) {
       auto ptr = dynamic_cast<T*>(itr->second.get());
@@ -226,25 +238,25 @@ class Node::Context {
     return *ret;
   }
 
-  void Receive(const OutSock& sock, Value&& v) noexcept {
-    if (recv_) recv_(sock, std::move(v));
+  void Receive(std::string_view n, Value&& v) noexcept {
+    File::QueueSubTask(
+        [name = std::string(n), w = w_, v = std::move(v)]() mutable {
+          w->Receive(name, std::move(v));
+          w = nullptr;
+        });
   }
-
-  void Clear(Node* n) noexcept {
-    std::unique_lock<std::mutex> k(mtx_);
-    map_.erase(n);
-  }
-  void Clear() noexcept {
-    std::unique_lock<std::mutex> k(mtx_);
-    map_.clear();
+  void Inform(std::string_view msg) noexcept {
+    File::QueueSubTask(
+        [msg = std::string(msg), w = w_]() mutable {
+          w->Inform(msg);
+          w = nullptr;
+        });
   }
 
  private:
-  std::mutex mtx_;
+  std::shared_ptr<ContextWatcher> w_;
 
   std::unordered_map<Node*, std::unique_ptr<Data>> map_;
-
-  Receiver recv_;
 };
 
 
@@ -275,9 +287,9 @@ class Node::InSock : public Sock {
   InSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
   }
 
-  virtual void Receive(Context&, Value&&) noexcept { }
+  virtual void Receive(const std::shared_ptr<Context>&, Value&&) noexcept { }
 
-  virtual void NotifyLink(Context&, const std::weak_ptr<OutSock>&) noexcept { }
+  virtual void NotifyLink(const std::shared_ptr<Context>&, const std::weak_ptr<OutSock>&) noexcept { }
 
   void CleanConns() const noexcept {
     auto& v = const_cast<decltype(src_)&>(src_);
@@ -298,7 +310,7 @@ class Node::CachedInSock : public InSock {
       InSock(o, n), value_(std::move(v)) {
   }
 
-  void Receive(Context&, Value&& v) noexcept override {
+  void Receive(const std::shared_ptr<Context>&, Value&& v) noexcept override {
     value_ = std::move(v);
   }
 
@@ -318,14 +330,18 @@ class Node::OutSock : public Sock {
   OutSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
   }
 
-  virtual void Send(Context& c, Value&& v) noexcept {
-    for (auto& dst : dst_) {
-      auto ptr = dst.lock();
-      if (ptr) ptr->Receive(c, Value(v));
-    }
+  virtual void Send(const std::shared_ptr<Context>& c, Value&& v) noexcept {
+    File::QueueSubTask(
+        [this, c = c, v = std::move(v)]() mutable {
+          for (auto& dst : dst_) {
+            auto ptr = dst.lock();
+            if (ptr) ptr->Receive(c, Value(v));
+          }
+          c = nullptr;
+        });
   }
 
-  virtual void NotifyLink(Context&, const std::weak_ptr<InSock>&) noexcept { }
+  virtual void NotifyLink(const std::shared_ptr<Context>&, const std::weak_ptr<InSock>&) noexcept { }
 
   void CleanConns() noexcept {
     auto& v = const_cast<decltype(dst_)&>(dst_);
@@ -346,11 +362,11 @@ class Node::CachedOutSock : public OutSock {
       OutSock(o, n), value_(std::move(v)) {
   }
 
-  void Send(Context& c, Value&& v) noexcept override {
+  void Send(const std::shared_ptr<Context>& c, Value&& v) noexcept override {
     value_ = std::move(v);
     OutSock::Send(c, Value(value_));
   }
-  void NotifyLink(Context& c, const std::weak_ptr<InSock>& dst) noexcept override {
+  void NotifyLink(const std::shared_ptr<Context>& c, const std::weak_ptr<InSock>& dst) noexcept override {
     dst.lock()->Receive(c, Value(value_));
   }
 
@@ -369,7 +385,7 @@ bool Node::Link(const std::weak_ptr<OutSock>& out,
   s_out->dst_.emplace_back(in);
   return true;
 }
-bool Node::Link(Context& ctx,
+bool Node::Link(const std::shared_ptr<Context>& ctx,
                 const std::weak_ptr<OutSock>& out,
                 const std::weak_ptr<InSock>&  in) noexcept {
   Link(out, in);
