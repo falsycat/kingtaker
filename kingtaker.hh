@@ -12,6 +12,7 @@
 #include <type_traits>
 #include <typeindex>
 #include <map>
+#include <variant>
 #include <vector>
 
 #include <boost/stacktrace.hpp>
@@ -24,8 +25,10 @@ namespace kingtaker {
 using namespace std::literals;
 
 
+// All exceptions thrown by kingtaker must inherit this class.
 class Exception {
  public:
+  // To avoid copying, all fields are static.
   static const std::string& msg() { return msg_; }
   static const boost::stacktrace::stacktrace& stacktrace() { return strace_; }
 
@@ -40,9 +43,9 @@ class Exception {
   Exception& operator=(Exception&&) = default;
 
  private:
-  static inline std::string msg_;
+  static std::string msg_;
 
-  static inline boost::stacktrace::stacktrace strace_;
+  static boost::stacktrace::stacktrace strace_;
 };
 
 
@@ -67,22 +70,28 @@ class File {
   static std::unique_ptr<File> Deserialize(const msgpack::object&);
   static std::unique_ptr<File> Deserialize(std::istream&);
 
+  // Queues the function as a task executed by main thread.
+  // The main task is absolutely processed on each frame. In other hands,
+  // the sub task might be skipped when many tasks are queued.
   static void QueueMainTask(std::function<void()>&&, std::string_view = "") noexcept;
   static void QueueSubTask(std::function<void()>&&, std::string_view = "") noexcept;
 
+  // An entrypoint must set root file by calling root(File*) before entering main loop.
   static File& root() noexcept { return *root_; }
   static void root(File* f) noexcept { assert(!root_); root_ = f; }
 
   static const auto& registry() noexcept { return registry_(); }
 
+  // Use these static version of iface() when compiler cannot
+  // find non-static template member.
   template <typename T>
   static T* iface(File* f, T* def = nullptr) noexcept { return f->iface<T>(def); }
   template <typename T>
-  static T& iface(File* f, T& def) noexcept { return *f->iface<T>(&def); }
+  static T& iface(File* f, T& def) noexcept { return f->iface<T>(def); }
   template <typename T>
   static T* iface(File& f, T* def = nullptr) noexcept { return f.iface<T>(def); }
   template <typename T>
-  static T& iface(File& f, T& def) noexcept { return *f.iface<T>(&def); }
+  static T& iface(File& f, T& def) noexcept { return f.iface<T>(def); }
 
   File(const TypeInfo* type) noexcept : type_(type) { }
   File() = delete;
@@ -92,28 +101,43 @@ class File {
   File& operator=(const File&) = delete;
   File& operator=(File&&) = delete;
 
+  // To make children referrable by path specification,
+  // return them by these methods.
   virtual File* Find(std::string_view) const noexcept { return nullptr; }
   virtual void Scan(std::function<void(std::string_view, File*)>) const noexcept { }
 
   virtual void Serialize(Packer&) const noexcept = 0;
   virtual std::unique_ptr<File> Clone() const noexcept = 0;
 
-  virtual Time lastModified() const noexcept = 0;
+  // Some features may use this field to detect changes.
+  virtual Time lastModified() const noexcept { return {}; }
+
+  // Takes typeinfo of the requested interface and
+  // returns a pointer of the implementation or nullptr if not implemented.
   virtual void* iface(const std::type_index&) noexcept { return nullptr; }
 
+  // Calls Serialize() after packing TypeInfo.
+  // To make it available to deserialize by File::Deserialize(),
+  // use this instead of Serialize().
   void SerializeWithTypeInfo(Packer&) const noexcept;
 
+  // Your compiler may error you that
+  // this template functions are not available throught inheritance.
+  // In such case, use static version of iface().
   template <typename T>
   T* iface(T* def = nullptr) noexcept {
     T* ret = reinterpret_cast<T*>(iface(std::type_index(typeid(T))));
     return ret? ret: def;
   }
+  template <typename T>
+  T& iface(T& def) noexcept { return *iface<T>(&def); }
+
   const TypeInfo& type() const noexcept { return *type_; }
 
  private:
   static std::map<std::string, TypeInfo*>& registry_() noexcept;
 
-  static inline File* root_ = nullptr;
+  static File* root_;
 
   const TypeInfo* type_;
 };
@@ -302,6 +326,110 @@ class File::UnsupportedException : public Exception {
   UnsupportedException(std::string_view what) noexcept : Exception(what) { }
   UnsupportedException(const RefStack& p, std::string_view name) noexcept :
       Exception("'"+p.Stringify()+"' doesn't have '"+std::string(name)+"' interface") { }
+};
+
+
+class Value final {
+ public:
+  using Pulse   = std::monostate;
+  using Integer = int64_t;
+  using Scalar  = double;
+  using Boolean = bool;
+  using String  = std::string;
+
+  Value() : Value(Pulse()) { }
+  Value(Pulse v) : v_(std::move(v)) { }
+  Value(Integer v) : v_(std::move(v)) { }
+  Value(Scalar v) : v_(std::move(v)) { }
+  Value(Boolean v) : v_(std::move(v)) { }
+  Value(const char* v) : Value(std::string(v)) { }
+  Value(String&& v) : v_(std::make_shared<String>(std::move(v))) { }
+
+  Value(const Value&) = default;
+  Value(Value&&) = default;
+  Value& operator=(const Value&) = default;
+  Value& operator=(Value&&) = default;
+
+  void Serialize(File::Packer& pk) const {
+    if (has<Integer>()) {
+      pk.pack(get<Integer>());
+      return;
+    }
+    if (has<Scalar>()) {
+      pk.pack(get<Scalar>());
+      return;
+    }
+    if (has<Boolean>()) {
+      pk.pack(get<Boolean>());
+      return;
+    }
+    if (has<String>()) {
+      pk.pack(get<String>());
+      return;
+    }
+    throw Exception("incompatible value");
+  }
+  static Value Deserialize(const msgpack::object& obj) {
+    switch (obj.type) {
+    case msgpack::type::BOOLEAN:
+      return Value(obj.via.boolean);
+    case msgpack::type::POSITIVE_INTEGER:
+    case msgpack::type::NEGATIVE_INTEGER:
+      return Value(static_cast<Integer>(obj.via.i64));
+    case msgpack::type::FLOAT:
+      return Value(obj.via.f64);
+    case msgpack::type::STR:
+      return Value(
+          std::string(obj.via.str.ptr, obj.via.str.size));
+    default:
+      throw File::DeserializeException("incompatible value");
+    }
+  }
+
+  template <typename T>
+  T& getUniq() {
+    if (!has<T>()) throw Exception("incompatible Value type");
+
+    if constexpr (std::is_same<T, String>::value) {
+      return *getUniq<std::shared_ptr<String>>();
+
+    } else {
+      if constexpr (std::is_same<T, std::shared_ptr<String>>::value) {
+        auto ptr = std::get<T>(v_);
+        if (!ptr.unique()) {
+          v_ = std::make_shared<String>(*ptr);
+        }
+      }
+      return std::get<T>(v_);
+    }
+  }
+
+  template <typename T>
+  const T& get() const {
+    if (!has<T>()) throw Exception("incompatible Value type");
+
+    if constexpr (std::is_same<T, String>::value) {
+      return *get<std::shared_ptr<String>>();
+    } else {
+      return std::get<T>(v_);
+    }
+  }
+  template <typename T>
+  bool has() const noexcept {
+    if constexpr (std::is_same<T, String>::value) {
+      return has<std::shared_ptr<String>>();
+    } else {
+      return std::holds_alternative<T>(v_);
+    }
+  }
+
+ private:
+  std::variant<
+      Pulse,
+      Integer,
+      Scalar,
+      Boolean,
+      std::shared_ptr<String>> v_;
 };
 
 }  // namespace kingtaker

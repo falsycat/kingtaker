@@ -39,7 +39,7 @@ class PulseValue : public File, public iface::Node {
     ImGui::TextUnformatted("PULSE");
 
     if (ImGui::Button("Z")) {
-      out_[0]->Send(ctx, Pulse());
+      out_[0]->Send(ctx, Value::Pulse());
     }
 
     ImGui::SameLine();
@@ -71,7 +71,7 @@ class ImmValue : public File, public iface::Node {
       "ImmValue", "immediate value",
       {typeid(iface::Node)});
 
-  ImmValue(Value&& v = Integer{0}) :
+  ImmValue(Value&& v = Value::Integer{0}) :
       File(&type_), Node(kNone), value_(std::move(v)) {
     out_.emplace_back(new Emitter(this));
   }
@@ -93,22 +93,22 @@ class ImmValue : public File, public iface::Node {
     auto& v = value_;
 
     const char* type =
-        v.has<Integer>()? "Int":
-        v.has<Scalar>()?  "Sca":
-        v.has<Boolean>()? "Boo":
-        v.has<String>()?  "Str": "XXX";
+        v.has<Value::Integer>()? "Int":
+        v.has<Value::Scalar>()?  "Sca":
+        v.has<Value::Boolean>()? "Boo":
+        v.has<Value::String>()?  "Str": "XXX";
     ImGui::Button(type);
     if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-      if (ImGui::MenuItem("integer", nullptr, v.has<Integer>())) {
-        v = Integer {0};
+      if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
+        v = Value::Integer {0};
       }
-      if (ImGui::MenuItem("scalar", nullptr, v.has<Scalar>())) {
-        v = Scalar {0};
+      if (ImGui::MenuItem("scalar", nullptr, v.has<Value::Scalar>())) {
+        v = Value::Scalar {0};
       }
-      if (ImGui::MenuItem("boolean", nullptr, v.has<Boolean>())) {
-        v = Boolean {false};
+      if (ImGui::MenuItem("boolean", nullptr, v.has<Value::Boolean>())) {
+        v = Value::Boolean {false};
       }
-      if (ImGui::MenuItem("string", nullptr, v.has<String>())) {
+      if (ImGui::MenuItem("string", nullptr, v.has<Value::String>())) {
         v = ""s;
       }
       ImGui::EndPopup();
@@ -116,17 +116,20 @@ class ImmValue : public File, public iface::Node {
 
     ImGui::SameLine();
     bool mod = false;
-    if (v.has<Integer>()) {
+    if (v.has<Value::Integer>()) {
       ImGui::SetNextItemWidth(6*em);
-      mod = ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Integer>());
-    } else if (v.has<Scalar>()) {
-      ImGui::SetNextItemWidth(8*em);
-      mod = ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &v.getUniq<Scalar>());
-    } else if (v.has<Boolean>()) {
-      mod = ImGui::Checkbox("##InputValue", &v.getUniq<Boolean>());
+      mod = ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
 
-    } else if (v.has<String>()) {
-      mod = ImGui::InputTextMultiline("##InputValue", &v.getUniq<String>(), {8*em, 4*em});
+    } else if (v.has<Value::Scalar>()) {
+      ImGui::SetNextItemWidth(8*em);
+      mod = ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &v.getUniq<Value::Scalar>());
+
+    } else if (v.has<Value::Boolean>()) {
+      mod = ImGui::Checkbox("##InputValue", &v.getUniq<Value::Boolean>());
+
+    } else if (v.has<Value::String>()) {
+      mod = ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), {8*em, 4*em});
+
     } else {
       assert(false);
     }
@@ -157,7 +160,7 @@ class ImmValue : public File, public iface::Node {
 
   class Emitter final : public CachedOutSock {
    public:
-    Emitter(ImmValue* o) noexcept : CachedOutSock(o, "out", Integer{0}) { }
+    Emitter(ImmValue* o) noexcept : CachedOutSock(o, "out", Value::Integer{0}) { }
   };
 };
 
@@ -205,7 +208,7 @@ class Oscilloscope : public File, public iface::Node {
       const auto offset = ImGui::GetCursorScreenPos();
       const auto now    = Clock::now();
 
-      Scalar min = 0, max = 0;
+      Value::Scalar min = 0, max = 0;
       for (auto itr = v.rbegin(); itr < v.rend(); ++itr) {
         const auto t = std::chrono::
             duration_cast<std::chrono::milliseconds>(now - itr->first);
@@ -213,9 +216,9 @@ class Oscilloscope : public File, public iface::Node {
 
         const auto& y = itr->second;
 
-        std::optional<Scalar> v;
-        if (y.has<Integer>()) v = y.get<Integer>();
-        if (y.has<Scalar>())  v = y.get<Scalar>();
+        std::optional<Value::Scalar> v;
+        if (y.has<Value::Integer>()) v = y.get<Value::Integer>();
+        if (y.has<Value::Scalar>())  v = y.get<Value::Scalar>();
 
         if (v) {
           min = std::min(min, *v);
@@ -237,9 +240,9 @@ class Oscilloscope : public File, public iface::Node {
         const float x = static_cast<float>(t.count())/1000.f;
         const auto& y = itr->second;
 
-        std::optional<Scalar> v;
-        if (y.has<Integer>()) v = y.get<Integer>();
-        if (y.has<Scalar>())  v = y.get<Scalar>();
+        std::optional<Value::Scalar> v;
+        if (y.has<Value::Integer>()) v = y.get<Value::Integer>();
+        if (y.has<Value::Scalar>())  v = y.get<Value::Scalar>();
 
         const float px = (1-x)*size.x;
         dlist->AddLine(ImVec2 {px, 0} + offset,
@@ -261,17 +264,17 @@ class Oscilloscope : public File, public iface::Node {
     if (v.size()) {
       ImGui::BeginDisabled();
       auto last = v.back().second;
-      if (last.has<Integer>()) {
-        ImGui::DragScalar("integer", ImGuiDataType_S64, &last.getUniq<Integer>());
+      if (last.has<Value::Integer>()) {
+        ImGui::DragScalar("integer", ImGuiDataType_S64, &last.getUniq<Value::Integer>());
       }
-      if (last.has<Scalar>()) {
-        ImGui::DragScalar("scalar", ImGuiDataType_Double, &last.getUniq<Scalar>());
+      if (last.has<Value::Scalar>()) {
+        ImGui::DragScalar("scalar", ImGuiDataType_Double, &last.getUniq<Value::Scalar>());
       }
-      if (last.has<Boolean>()) {
-        ImGui::Checkbox("bool", &last.getUniq<Boolean>());
+      if (last.has<Value::Boolean>()) {
+        ImGui::Checkbox("bool", &last.getUniq<Value::Boolean>());
       }
-      if (last.has<String>()) {
-        auto str = last.get<String>();
+      if (last.has<Value::String>()) {
+        auto str = last.get<Value::String>();
         ImGui::InputTextMultiline("string", &str, ImVec2 {0.f, 4*em});
       }
       ImGui::EndDisabled();

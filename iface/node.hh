@@ -20,14 +20,6 @@ namespace kingtaker::iface {
 
 class Node {
  public:
-  using Pulse   = std::monostate;
-  using Integer = int64_t;
-  using Scalar  = double;
-  using Boolean = bool;
-  using String  = std::string;
-
-  class Value;
-
   class ContextWatcher;
   class Context;
 
@@ -78,116 +70,6 @@ class Node {
 
  private:
   Flags flags_;
-};
-
-
-class Node::Value final {
- public:
-  Value() : Value(Pulse()) {
-  }
-  Value(Pulse v) : v_(std::move(v)) {
-  }
-
-  Value(Integer v) : v_(std::move(v)) {
-  }
-
-  Value(Scalar v) : v_(std::move(v)) {
-  }
-
-  Value(Boolean v) : v_(std::move(v)) {
-  }
-
-  Value(const char* v) : Value(std::string(v)) {
-  }
-  Value(String&& v) : v_(std::make_shared<String>(std::move(v))) {
-  }
-
-  Value(const Value&) = default;
-  Value(Value&&) = default;
-  Value& operator=(const Value&) = default;
-  Value& operator=(Value&&) = default;
-
-  void Serialize(File::Packer& pk) const {
-    if (has<Integer>()) {
-      pk.pack(get<Integer>());
-      return;
-    }
-    if (has<Scalar>()) {
-      pk.pack(get<Scalar>());
-      return;
-    }
-    if (has<Boolean>()) {
-      pk.pack(get<Boolean>());
-      return;
-    }
-    if (has<String>()) {
-      pk.pack(get<String>());
-      return;
-    }
-    throw Exception("incompatible value");
-  }
-  static Value Deserialize(const msgpack::object& obj) {
-    switch (obj.type) {
-    case msgpack::type::BOOLEAN:
-      return Value(obj.via.boolean);
-    case msgpack::type::POSITIVE_INTEGER:
-    case msgpack::type::NEGATIVE_INTEGER:
-      return Value(static_cast<Integer>(obj.via.i64));
-    case msgpack::type::FLOAT:
-      return Value(obj.via.f64);
-    case msgpack::type::STR:
-      return Value(
-          std::string(obj.via.str.ptr, obj.via.str.size));
-    default:
-      throw File::DeserializeException("incompatible value");
-    }
-  }
-
-  template <typename T>
-  T& getUniq() {
-    if (!has<T>()) throw Exception("incompatible Value type");
-
-    if constexpr (std::is_same<T, String>::value) {
-      return *getUniq<std::shared_ptr<String>>();
-
-    } else {
-      if constexpr (std::is_same<T, std::shared_ptr<String>>::value) {
-        auto ptr = std::get<T>(v_);
-        if (!ptr.unique()) {
-          v_ = std::make_shared<String>(*ptr);
-        }
-      }
-      return std::get<T>(v_);
-    }
-  }
-
-  template <typename T>
-  const T& get() const {
-    if (!has<T>()) throw Exception("incompatible Value type");
-
-    if constexpr (std::is_same<T, String>::value) {
-      return *get<std::shared_ptr<String>>();
-    } else {
-      return std::get<T>(v_);
-    }
-  }
-
-  template <typename T>
-  bool has() const noexcept {
-    if constexpr (std::is_same<T, String>::value) {
-      return has<std::shared_ptr<String>>();
-    } else {
-      return std::holds_alternative<T>(v_);
-    }
-  }
-
- private:
-  std::variant<
-      Pulse,
-      Integer,
-      Scalar,
-      Boolean,
-      std::shared_ptr<String>> v_;
 };
 
 

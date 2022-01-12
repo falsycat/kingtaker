@@ -7,6 +7,12 @@
 
 namespace kingtaker {
 
+std::string                   Exception::msg_;
+boost::stacktrace::stacktrace Exception::strace_;
+
+File* File::root_ = nullptr;
+
+
 std::string Exception::Stringify() noexcept {
   std::stringstream st;
   st << msg_ << std::endl;
