@@ -92,30 +92,50 @@ class ImmValue : public File, public iface::Node {
     ImGui::TextUnformatted("IMM");
     auto& v = value_;
 
+    bool mod = false;
     const char* type =
         v.has<Value::Integer>()? "Int":
         v.has<Value::Scalar>()?  "Sca":
         v.has<Value::Boolean>()? "Boo":
+        v.has<Value::Vec2>()?    "Ve2":
+        v.has<Value::Vec3>()?    "Ve3":
+        v.has<Value::Vec4>()?    "Ve4":
         v.has<Value::String>()?  "Str": "XXX";
     ImGui::Button(type);
     if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
       if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
-        v = Value::Integer {0};
+        v   = Value::Integer {0};
+        mod = true;
       }
       if (ImGui::MenuItem("scalar", nullptr, v.has<Value::Scalar>())) {
-        v = Value::Scalar {0};
+        v   = Value::Scalar {0};
+        mod = true;
       }
       if (ImGui::MenuItem("boolean", nullptr, v.has<Value::Boolean>())) {
-        v = Value::Boolean {false};
+        v   = Value::Boolean {false};
+        mod = true;
+      }
+      if (ImGui::MenuItem("vec2", nullptr, v.has<Value::Vec2>())) {
+        v   = Value::Vec2 {0., 0.};
+        mod = true;
+      }
+      if (ImGui::MenuItem("vec3", nullptr, v.has<Value::Vec3>())) {
+        v   = Value::Vec3 {0., 0., 0.};
+        mod = true;
+      }
+      if (ImGui::MenuItem("vec4", nullptr, v.has<Value::Vec4>())) {
+        v   = Value::Vec4 {0., 0., 0., 0.};
+        mod = true;
       }
       if (ImGui::MenuItem("string", nullptr, v.has<Value::String>())) {
-        v = ""s;
+        v   = ""s;
+        mod = true;
       }
       ImGui::EndPopup();
     }
 
     ImGui::SameLine();
-    bool mod = false;
+    ImGui::BeginGroup();
     if (v.has<Value::Integer>()) {
       ImGui::SetNextItemWidth(6*em);
       mod = ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
@@ -127,6 +147,15 @@ class ImmValue : public File, public iface::Node {
     } else if (v.has<Value::Boolean>()) {
       mod = ImGui::Checkbox("##InputValue", &v.getUniq<Value::Boolean>());
 
+    } else if (v.has<Value::Vec2>()) {
+      mod = UpdateVec(v.getUniq<Value::Vec2>());
+
+    } else if (v.has<Value::Vec3>()) {
+      mod = UpdateVec(v.getUniq<Value::Vec3>());
+
+    } else if (v.has<Value::Vec4>()) {
+      mod = UpdateVec(v.getUniq<Value::Vec4>());
+
     } else if (v.has<Value::String>()) {
       mod = ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), {8*em, 4*em});
 
@@ -137,12 +166,26 @@ class ImmValue : public File, public iface::Node {
       out_[0]->Send(ctx, Value(v));
       lastmod_ = Clock::now();
     }
+    ImGui::EndGroup();
 
     ImGui::SameLine();
     if (ImNodes::BeginOutputSlot("out", 1)) {
       UpdatePin();
       ImNodes::EndSlot();
     }
+  }
+  template <int D>
+  bool UpdateVec(linalg::vec<double, D>& vec) {
+    bool mod = false;
+    for (int i = 0; i < D; ++i) {
+      ImGui::PushID(&vec[i]);
+      ImGui::SetNextItemWidth(8*ImGui::GetFontSize());
+      if (ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &vec[i])) {
+        mod = true;
+      }
+      ImGui::PopID();
+    }
+    return mod;
   }
 
   Time lastModified() const noexcept override {

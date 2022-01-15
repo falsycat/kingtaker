@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <boost/stacktrace.hpp>
+#include <linalg.hh>
 
 #include <msgpack.hh>
 
@@ -336,55 +337,31 @@ class Value final {
   using Scalar  = double;
   using Boolean = bool;
   using String  = std::string;
+  using Vec2    = linalg::double2;
+  using Vec3    = linalg::double3;
+  using Vec4    = linalg::double4;
 
   Value() : Value(Pulse()) { }
-  Value(Pulse v) : v_(std::move(v)) { }
-  Value(Integer v) : v_(std::move(v)) { }
-  Value(Scalar v) : v_(std::move(v)) { }
-  Value(Boolean v) : v_(std::move(v)) { }
+  Value(Pulse v) : v_(v) { }
+  Value(Integer v) : v_(v) { }
+  Value(Scalar v) : v_(v) { }
+  Value(Boolean v) : v_(v) { }
+
+  Value(const Vec2& v) : v_(v) { }
+  Value(const Vec3& v) : v_(v) { }
+  Value(const Vec4& v) : v_(v) { }
+
   Value(const char* v) : Value(std::string(v)) { }
   Value(String&& v) : v_(std::make_shared<String>(std::move(v))) { }
+  Value(const String& v) : v_(std::make_shared<String>(v)) { }
 
   Value(const Value&) = default;
   Value(Value&&) = default;
   Value& operator=(const Value&) = default;
   Value& operator=(Value&&) = default;
 
-  void Serialize(File::Packer& pk) const {
-    if (has<Integer>()) {
-      pk.pack(get<Integer>());
-      return;
-    }
-    if (has<Scalar>()) {
-      pk.pack(get<Scalar>());
-      return;
-    }
-    if (has<Boolean>()) {
-      pk.pack(get<Boolean>());
-      return;
-    }
-    if (has<String>()) {
-      pk.pack(get<String>());
-      return;
-    }
-    throw Exception("incompatible value");
-  }
-  static Value Deserialize(const msgpack::object& obj) {
-    switch (obj.type) {
-    case msgpack::type::BOOLEAN:
-      return Value(obj.via.boolean);
-    case msgpack::type::POSITIVE_INTEGER:
-    case msgpack::type::NEGATIVE_INTEGER:
-      return Value(static_cast<Integer>(obj.via.i64));
-    case msgpack::type::FLOAT:
-      return Value(obj.via.f64);
-    case msgpack::type::STR:
-      return Value(
-          std::string(obj.via.str.ptr, obj.via.str.size));
-    default:
-      throw File::DeserializeException("incompatible value");
-    }
-  }
+  void Serialize(File::Packer&) const;
+  static Value Deserialize(const msgpack::object&);
 
   template <typename T>
   T& getUniq() {
@@ -429,6 +406,9 @@ class Value final {
       Integer,
       Scalar,
       Boolean,
+      Vec2,
+      Vec3,
+      Vec4,
       std::shared_ptr<String>> v_;
 };
 

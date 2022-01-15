@@ -178,4 +178,79 @@ bool File::RefStack::ResolveInplace(const Path& p) {
   return true;
 }
 
+
+void Value::Serialize(File::Packer& pk) const {
+  if (has<Integer>()) {
+    pk.pack(get<Integer>());
+    return;
+  }
+  if (has<Scalar>()) {
+    pk.pack(get<Scalar>());
+    return;
+  }
+  if (has<Boolean>()) {
+    pk.pack(get<Boolean>());
+    return;
+  }
+  if (has<String>()) {
+    pk.pack(get<String>());
+    return;
+  }
+  if (has<Vec2>()) {
+    auto& v = get<Vec2>();
+    pk.pack_array(2);
+    pk.pack(v.x); pk.pack(v.y);
+    return;
+  }
+  if (has<Vec3>()) {
+    auto& v = get<Vec3>();
+    pk.pack_array(3);
+    pk.pack(v.x); pk.pack(v.y); pk.pack(v.z);
+    return;
+  }
+  if (has<Vec4>()) {
+    auto& v = get<Vec4>();
+    pk.pack_array(4);
+    pk.pack(v.x); pk.pack(v.y); pk.pack(v.z); pk.pack(v.w);
+    return;
+  }
+  throw Exception("incompatible value");
+}
+Value Value::Deserialize(const msgpack::object& obj) {
+  try {
+    switch (obj.type) {
+    case msgpack::type::BOOLEAN:
+      return Value(obj.via.boolean);
+    case msgpack::type::POSITIVE_INTEGER:
+    case msgpack::type::NEGATIVE_INTEGER:
+      return Value(static_cast<Integer>(obj.via.i64));
+    case msgpack::type::FLOAT:
+      return Value(obj.via.f64);
+    case msgpack::type::STR:
+      return Value(
+          std::string(obj.via.str.ptr, obj.via.str.size));
+    case msgpack::type::ARRAY:
+      switch (obj.via.array.size) {
+      case 2: {
+        const auto v = obj.as<std::array<double, 2>>();
+        return Vec2(v[0], v[1]);
+      }
+      case 3: {
+        const auto v = obj.as<std::array<double, 3>>();
+        return Vec3(v[0], v[1], v[2]);
+      }
+      case 4: {
+        const auto v = obj.as<std::array<double, 4>>();
+        return Vec4(v[0], v[1], v[2], v[3]);
+      } }
+      break;
+
+    default:
+      ;
+    }
+  } catch (msgpack::type_error& e) {
+  }
+  throw File::DeserializeException("incompatible value");
+}
+
 }  // namespace kingtaker
