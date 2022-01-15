@@ -341,6 +341,13 @@ class Value final {
   using Vec3    = linalg::double3;
   using Vec4    = linalg::double4;
 
+  template <size_t S>
+  class Tensor;
+  using Tensor8  = Tensor<1>;
+  using Tensor16 = Tensor<2>;
+  using Tensor32 = Tensor<4>;
+  using Tensor64 = Tensor<8>;
+
   Value() : Value(Pulse()) { }
   Value(Pulse v) : v_(v) { }
   Value(Integer v) : v_(v) { }
@@ -409,7 +416,46 @@ class Value final {
       Vec2,
       Vec3,
       Vec4,
-      std::shared_ptr<String>> v_;
+      std::shared_ptr<String>,
+      std::shared_ptr<Tensor8>,
+      std::shared_ptr<Tensor16>,
+      std::shared_ptr<Tensor32>,
+      std::shared_ptr<Tensor64>> v_;
+};
+
+template <size_t kBytes>
+class Value::Tensor final {
+ public:
+  Tensor() = delete;
+  Tensor(const std::vector<size_t>& d) noexcept : Tensor(std::vector<size_t>(d)) { }
+  Tensor(std::vector<size_t>&& v) noexcept : dim_(std::move(v)) {
+    size_t n = 1;
+    for (auto x : v) {
+      assert(x && n < UINT32_MAX/x); n *= x;
+    }
+    buf_.resize(n*kBytes);
+  }
+  Tensor(const Tensor&) = default;
+  Tensor(Tensor&&) = default;
+  Tensor& operator=(const Tensor&) = default;
+  Tensor& operator=(Tensor&&) = default;
+
+  template <typename T>
+  std::span<T> ptr() { return buf_; }
+  template <typename T>
+  std::span<const T> ptr() const { return buf_; }
+
+  std::span<const size_t> dim() const noexcept { return dim_; }
+  size_t dim(size_t i) const noexcept { return i < dim_.size()? dim_[i]: 0; }
+
+  size_t rank() const noexcept { return dim_.size(); }
+
+  size_t samples() const noexcept { return buf_.size()/kBytes; }
+  size_t bytes() const noexcept { return buf_.size(); }
+
+ private:
+  std::vector<size_t>  dim_;
+  std::vector<uint8_t> buf_;
 };
 
 }  // namespace kingtaker
