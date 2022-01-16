@@ -60,14 +60,14 @@ void Initialize() noexcept {
     // open the file
     std::ifstream st(kFileName, std::ios::binary);
     if (!st) {
-      throw File::DeserializeException("failed to open: "s+kFileName);
+      throw DeserializeException("failed to open: "s+kFileName);
     }
     root_ = File::Deserialize(st);
 
   } catch (msgpack::unpack_error& e) {
     panic_ = "MessagePack unpack error: "s+e.what();
 
-  } catch (File::DeserializeException& e) {
+  } catch (DeserializeException& e) {
     panic_ = e.Stringify();
   }
 }
