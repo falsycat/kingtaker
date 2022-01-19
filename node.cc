@@ -24,6 +24,7 @@
 #include "iface/queue.hh"
 
 #include "util/gui.hh"
+#include "util/value.hh"
 
 namespace kingtaker {
 namespace {

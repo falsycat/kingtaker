@@ -1,7 +1,5 @@
 #pragma once
 
-#include "kingtaker.hh"
-
 #include <algorithm>
 #include <cassert>
 #include <functional>
@@ -12,6 +10,10 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
+
+#include "util/value.hh"
+
+#include "kingtaker.hh"
 
 
 namespace kingtaker::iface {

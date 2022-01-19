@@ -54,6 +54,8 @@ target_sources(kingtaker
 
     util/gui.hh
     util/gui.cc
+    util/value.hh
+    util/value.cc
 )
 target_link_libraries(kingtaker
   PRIVATE
