@@ -23,6 +23,8 @@
 #include "iface/node.hh"
 #include "iface/queue.hh"
 
+#include "util/gui.hh"
+
 namespace kingtaker {
 namespace {
 
@@ -179,6 +181,7 @@ class NodeNet : public File, public iface::Node {
       }
       ImNodes::EndNode();
 
+      gui::NodeCanvasResetZoom();
       if (ImGui::BeginPopupContextItem()) {
         if (ImGui::MenuItem("Clone")) {
           owner->history_.AddNodeIf(Clone(owner->next_id_++));
@@ -192,6 +195,8 @@ class NodeNet : public File, public iface::Node {
         }
         ImGui::EndPopup();
       }
+      gui::NodeCanvasSetZoom();
+
       ImGui::PopID();
       ref.Pop();
     }
@@ -342,7 +347,7 @@ class NodeNet : public File, public iface::Node {
       for (auto& in : in_) {
         const auto c = in->name().c_str();
         if (ImNodes::BeginInputSlot(c, 1)) {
-          UpdatePin();
+          gui::NodeSocket();
           ImNodes::EndSlot();
         }
         ImGui::SameLine();
@@ -368,7 +373,7 @@ class NodeNet : public File, public iface::Node {
 
         ImGui::SameLine();
         if (ImNodes::BeginOutputSlot(c, 1)) {
-          UpdatePin();
+          gui::NodeSocket();
           ImNodes::EndSlot();
         }
       }
@@ -474,6 +479,9 @@ class NodeNet : public File, public iface::Node {
 
     void UpdateCanvas(RefStack& ref) noexcept {
       ImNodes::BeginCanvas(&canvas_);
+      gui::NodeCanvasSetZoom();
+
+      gui::NodeCanvasResetZoom();
       if (ImGui::BeginPopupContextItem()) {
         if (ImGui::BeginMenu("New")) {
           for (auto& p : File::registry()) {
@@ -514,9 +522,9 @@ class NodeNet : public File, public iface::Node {
         if (ImGui::MenuItem("Clear entire context")) {
           File::QueueMainTask([this]() { owner_->ctx_ = std::make_shared<Context>(); });
         }
-        ImGui::SetWindowFontScale(canvas_.Zoom);
         ImGui::EndPopup();
       }
+      gui::NodeCanvasSetZoom();
 
       for (auto& h : owner_->nodes_) {
         h->UpdateNode(owner_, ref);
@@ -556,6 +564,8 @@ class NodeNet : public File, public iface::Node {
         auto dst = dstn->entity().FindIn(dsts);
         if (src && dst) owner_->history_.Link({{dst, src}});
       }
+
+      gui::NodeCanvasResetZoom();
       ImNodes::EndCanvas();
     }
 
@@ -879,7 +889,7 @@ class NodeNet : public File, public iface::Node {
 
       ImGui::SameLine();
       if (ImNodes::BeginOutputSlot("out", 1)) {
-        UpdatePin();
+        gui::NodeSocket();
         ImNodes::EndSlot();
       }
     }
@@ -927,7 +937,7 @@ class NodeNet : public File, public iface::Node {
       }
 
       if (ImNodes::BeginInputSlot("in", 1)) {
-        UpdatePin();
+        gui::NodeSocket();
         ImNodes::EndSlot();
       }
 
@@ -1042,10 +1052,12 @@ class RefNode : public File, public iface::Node {
     ImGui::Button(("-> "s+(path_.size()? path_: "(empty)"s)).c_str(),
                   {ImGui::GetItemRectSize().x, 0});
 
+    gui::NodeCanvasResetZoom();
     if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
       UpdateMenu(ref, ctx_);
       ImGui::EndPopup();
     }
+    gui::NodeCanvasSetZoom();
   }
   void UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept override {
     if (ImGui::BeginMenu("Change")) {

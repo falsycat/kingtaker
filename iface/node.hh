@@ -13,8 +13,6 @@
 #include <variant>
 #include <vector>
 
-#include <msgpack.hh>
-
 
 namespace kingtaker::iface {
 
@@ -41,8 +39,6 @@ class Node {
   static inline bool Link(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
   static inline bool Link(const std::shared_ptr<Context>&, const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
   static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
-
-  static inline void UpdatePin() noexcept;
 
   Node(Flags f, InSockList&& in = {}, OutSockList&& out = {}) :
       in_(std::move(in)), out_(std::move(out)), flags_(f) {
@@ -308,22 +304,6 @@ std::shared_ptr<Node::OutSock> Node::FindOut(std::string_view name) const noexce
   auto itr = std::find_if(out_.begin(), out_.end(),
                           [name](auto e) { return e->name() == name; });
   return itr != out_.end()? *itr: nullptr;
-}
-
-
-void Node::UpdatePin() noexcept {
-  const auto em     = ImGui::GetFontSize();
-  const auto radius = em/2 / ImNodes::CanvasState().Zoom;
-  const auto radvec = ImVec2(radius, radius);
-  const auto pos    = ImGui::GetCursorScreenPos();
-
-  auto dlist = ImGui::GetWindowDrawList();
-  dlist->AddCircleFilled(
-      pos+radvec, radius, IM_COL32(100, 100, 100, 100));
-  dlist->AddCircleFilled(
-      pos+radvec, radius*.8f, IM_COL32(200, 200, 200, 200));
-
-  ImGui::Dummy(radvec*2);
 }
 
 }  // namespace kingtaker::iface

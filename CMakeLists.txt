@@ -51,6 +51,9 @@ target_sources(kingtaker
     iface/history.hh
     iface/node.hh
     iface/queue.hh
+
+    util/gui.hh
+    util/gui.cc
 )
 target_link_libraries(kingtaker
   PRIVATE

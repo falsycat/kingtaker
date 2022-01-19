@@ -11,6 +11,8 @@
 
 #include "iface/node.hh"
 
+#include "util/gui.hh"
+
 
 namespace kingtaker {
 namespace {
@@ -44,7 +46,7 @@ class PulseValue : public File, public iface::Node {
 
     ImGui::SameLine();
     if (ImNodes::BeginOutputSlot("out", 1)) {
-      UpdatePin();
+      gui::NodeSocket();
       ImNodes::EndSlot();
     }
   }
@@ -71,23 +73,33 @@ class ImmValue : public File, public iface::Node {
       "ImmValue", "immediate value",
       {typeid(iface::Node)});
 
-  ImmValue(Value&& v = Value::Integer{0}) :
-      File(&type_), Node(kNone), value_(std::move(v)) {
+  ImmValue(Value&& v = Value::Integer{0}, ImVec2 size = {0, 0}) noexcept :
+      File(&type_), Node(kNone), value_(std::move(v)), size_(size) {
     out_.emplace_back(new Emitter(this));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
-    return std::make_unique<ImmValue>(Value::Deserialize(obj));
+    const auto value = Value::Deserialize(msgpack::find(obj, "value"s));
+    const auto size  = msgpack::find(obj, "size"s).as<std::pair<float, float>>();
+    return std::make_unique<ImmValue>(Value(value), ImVec2 {size.first, size.second});
   }
   void Serialize(Packer& pk) const noexcept override {
+    pk.pack_map(2);
+
+    pk.pack("size");
+    pk.pack(std::make_pair(size_.x, size_.y));
+
+    pk.pack("value"s);
     value_.Serialize(pk);
   }
   std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<ImmValue>(Value(value_));
+    return std::make_unique<ImmValue>(Value(value_), size_);
   }
 
   void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override {
     const auto em = ImGui::GetFontSize();
+    const auto fh = ImGui::GetFrameHeight();
+    const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
 
     ImGui::TextUnformatted("IMM");
     auto& v = value_;
@@ -102,6 +114,8 @@ class ImmValue : public File, public iface::Node {
         v.has<Value::Vec4>()?    "Ve4":
         v.has<Value::String>()?  "Str": "XXX";
     ImGui::Button(type);
+
+    gui::NodeCanvasResetZoom();
     if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
       if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
         v   = Value::Integer {0};
@@ -133,31 +147,40 @@ class ImmValue : public File, public iface::Node {
       }
       ImGui::EndPopup();
     }
+    gui::NodeCanvasSetZoom();
 
     ImGui::SameLine();
-    ImGui::BeginGroup();
     if (v.has<Value::Integer>()) {
-      ImGui::SetNextItemWidth(6*em);
+      gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
+      ImGui::SetNextItemWidth(size_.x*em);
       mod = ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
 
     } else if (v.has<Value::Scalar>()) {
-      ImGui::SetNextItemWidth(8*em);
+      gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
+      ImGui::SetNextItemWidth(size_.x*em);
       mod = ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &v.getUniq<Value::Scalar>());
 
     } else if (v.has<Value::Boolean>()) {
       mod = ImGui::Checkbox("##InputValue", &v.getUniq<Value::Boolean>());
 
     } else if (v.has<Value::Vec2>()) {
+      const auto h = (2*fh + sp)/em;
+      gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
       mod = UpdateVec(v.getUniq<Value::Vec2>());
 
     } else if (v.has<Value::Vec3>()) {
+      const auto h = (3*fh + 2*sp)/em;
+      gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
       mod = UpdateVec(v.getUniq<Value::Vec3>());
 
     } else if (v.has<Value::Vec4>()) {
+      const auto h = (4*fh + 3*sp)/em;
+      gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
       mod = UpdateVec(v.getUniq<Value::Vec4>());
 
     } else if (v.has<Value::String>()) {
-      mod = ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), {8*em, 4*em});
+      gui::ResizeGroup _("##ResizeGroup", &size_, {4, 4}, {24, 24*em}, em);
+      mod = ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), size_*em);
 
     } else {
       assert(false);
@@ -166,11 +189,10 @@ class ImmValue : public File, public iface::Node {
       out_[0]->Send(ctx, Value(v));
       lastmod_ = Clock::now();
     }
-    ImGui::EndGroup();
 
     ImGui::SameLine();
     if (ImNodes::BeginOutputSlot("out", 1)) {
-      UpdatePin();
+      gui::NodeSocket();
       ImNodes::EndSlot();
     }
   }
@@ -179,7 +201,7 @@ class ImmValue : public File, public iface::Node {
     bool mod = false;
     for (int i = 0; i < D; ++i) {
       ImGui::PushID(&vec[i]);
-      ImGui::SetNextItemWidth(8*ImGui::GetFontSize());
+      ImGui::SetNextItemWidth(size_.x*ImGui::GetFontSize());
       if (ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &vec[i])) {
         mod = true;
       }
@@ -200,6 +222,8 @@ class ImmValue : public File, public iface::Node {
   Time lastmod_;
 
   Value value_;
+
+  ImVec2 size_;
 
   class Emitter final : public CachedOutSock {
    public:
@@ -234,7 +258,7 @@ class Oscilloscope : public File, public iface::Node {
     ImGui::PushItemWidth(8*em);
 
     if (ImNodes::BeginInputSlot("in", 1)) {
-      UpdatePin();
+      gui::NodeSocket();
       ImNodes::EndSlot();
     }
 
