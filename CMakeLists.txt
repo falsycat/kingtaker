@@ -67,6 +67,7 @@ target_link_libraries(kingtaker
     glfw
     imgui
     imnodes
+    implot
     linalg.h
     msgpackc-cxx
 )

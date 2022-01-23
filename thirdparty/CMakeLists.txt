@@ -111,6 +111,35 @@ target_sources(imnodes
 )
 
 
+# ---- ImPlot ----
+# repository: https://github.com/epezent/implot
+# license   : MIT
+
+FetchContent_Declare(
+  implot
+  URL "https://github.com/epezent/implot/archive/refs/heads/master.zip"
+)
+FetchContent_Populate(implot)
+
+add_library(implot)
+target_link_libraries(implot
+  PRIVATE
+    imgui
+)
+target_include_directories(implot SYSTEM
+  PUBLIC
+    "${implot_SOURCE_DIR}"
+)
+target_sources(implot
+  PUBLIC
+    "${implot_SOURCE_DIR}/implot.h"
+    "${implot_SOURCE_DIR}/implot_internal.h"
+  PRIVATE
+    "${implot_SOURCE_DIR}/implot.cpp"
+    "${implot_SOURCE_DIR}/implot_items.cpp"
+)
+
+
 # ---- linalg.h ----
 # repository: https://github.com/sgorsten/linalg
 # license   : Unlicense

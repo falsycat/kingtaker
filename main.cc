@@ -9,6 +9,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <implot.h>
 
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 # include <GLES2/gl2.h>
@@ -193,6 +194,7 @@ int main(int, char**) {
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
+  ImPlot::CreateContext();
 
   auto& io = ImGui::GetIO();
   io.IniFilename = nullptr;
@@ -230,6 +232,7 @@ int main(int, char**) {
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
+  ImPlot::DestroyContext();
   ImGui::DestroyContext();
 
   glfwDestroyWindow(window);

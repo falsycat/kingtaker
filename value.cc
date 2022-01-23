@@ -8,6 +8,7 @@
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <ImNodes.h>
+#include <implot.h>
 
 #include "iface/node.hh"
 
@@ -238,8 +239,9 @@ class Oscilloscope : public File, public iface::Node {
       "Oscilloscope", "value inspector",
       {typeid(iface::Node)});
 
-  Oscilloscope() : File(&type_), Node(kNone), life_(std::make_shared<std::monostate>()) {
-    in_.emplace_back(std::make_shared<Receiver>(this));
+  Oscilloscope() : File(&type_), Node(kMenu), data_(std::make_shared<Data>()) {
+    in_.emplace_back(std::make_shared<PulseReceiver>(this, "CLK"));
+    AddSock();
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object&) {
@@ -252,103 +254,74 @@ class Oscilloscope : public File, public iface::Node {
     return std::make_unique<Oscilloscope>();
   }
 
+  bool AddSock() noexcept {
+    const size_t n = data_->streams.size();
+    if (n >= 20) return false;
+
+    std::string name = "A";
+    name[0] += static_cast<char>(n);
+
+    auto st = std::make_shared<Stream>(name.c_str());
+    data_->streams.push_back(st);
+
+    auto vrecv = std::make_shared<CachedInSock>(this, st->inName(), Value::Pulse());
+    in_.emplace_back(std::make_shared<StreamPulseReceiver>(this, st->clkName(), vrecv, st));
+    in_.push_back(vrecv);
+    return true;
+  }
+  void RemoveSock() noexcept {
+    if (data_->streams.size() <= 1) return;
+
+    data_->streams.pop_back();
+    in_.pop_back();
+    in_.pop_back();
+  }
+
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override {
-    ImGui::TextUnformatted("OSCILLO");
+    ImGui::Text("OSCILLO");
 
     const auto em = ImGui::GetFontSize();
-    ImGui::PushItemWidth(8*em);
 
-    if (ImNodes::BeginInputSlot("in", 1)) {
+    if (ImNodes::BeginInputSlot("CLK", 1)) {
       gui::NodeSocket();
       ImNodes::EndSlot();
     }
+    ImGui::SameLine();
+    ImGui::Text("CLK: %zu", data_->clk);
+
+    ImGui::BeginGroup();
+    for (const auto& st : data_->streams) {
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY()+em*.25f);
+      for (auto v : {st->clkName().c_str(), st->inName().c_str()}) {
+        if (ImNodes::BeginInputSlot(v, 1)) {
+          gui::NodeSocket();
+          ImNodes::EndSlot();
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(v);
+      }
+    }
+    ImGui::EndGroup();
 
     ImGui::SameLine();
-    ImGui::Text(msg_.c_str());
+    ImGui::BeginGroup();
+    {
+      gui::ResizeGroup _("##Resizer", &size_, {16, 16}, {64, 64}, em);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
-
-    const auto& v    = values_;
-    const auto  size = ImVec2 {12*em, 4*em};
-    if (ImGui::BeginChild("graph", size, true)) {
-      auto dlist = ImGui::GetWindowDrawList();
-
-      const auto offset = ImGui::GetCursorScreenPos();
-      const auto now    = Clock::now();
-
-      Value::Scalar min = 0, max = 0;
-      for (auto itr = v.rbegin(); itr < v.rend(); ++itr) {
-        const auto t = std::chrono::
-            duration_cast<std::chrono::milliseconds>(now - itr->first);
-        if (t > std::chrono::seconds(1)) break;
-
-        const auto& y = itr->second;
-
-        std::optional<Value::Scalar> v;
-        if (y.has<Value::Integer>()) v = y.get<Value::Integer>();
-        if (y.has<Value::Scalar>())  v = y.get<Value::Scalar>();
-
-        if (v) {
-          min = std::min(min, *v);
-          max = std::max(max, *v);
-        }
-      }
-
-      auto vsize = max-min;
-      min -= vsize*.2;
-      max += vsize*.2;
-      vsize = max-min;
-
-      float prev = offset.x;
-      for (auto itr = v.rbegin(); itr < v.rend(); ++itr) {
-        const auto t = std::chrono::
-            duration_cast<std::chrono::milliseconds>(now - itr->first);
-        if (t > std::chrono::seconds(1)) break;
-
-        const float x = static_cast<float>(t.count())/1000.f;
-        const auto& y = itr->second;
-
-        std::optional<Value::Scalar> v;
-        if (y.has<Value::Integer>()) v = y.get<Value::Integer>();
-        if (y.has<Value::Scalar>())  v = y.get<Value::Scalar>();
-
-        const float px = (1-x)*size.x;
-        dlist->AddLine(ImVec2 {px, 0} + offset,
-                       ImVec2 {px, size.y} + offset,
-                       IM_COL32(100, 100, 100, 255));
-
-        if (vsize > 0 && v) {
-          const float py = static_cast<float>((1 - (*v-min) / vsize) * size.y);
-          dlist->AddLine(ImVec2 {prev, py} + offset,
-                         ImVec2 {px, py} + offset,
-                         IM_COL32(255, 255, 255, 255));
-        }
-        prev = px;
+      if (ImPlot::BeginPlot("##Graph", size_*em)) {
+        for (auto& st : data_->streams) st->PlotLine();
+        ImPlot::EndPlot();
       }
     }
-    ImGui::EndChild();
-    ImGui::PopStyleVar(1);
-
-    if (v.size()) {
-      ImGui::BeginDisabled();
-      auto last = v.back().second;
-      if (last.has<Value::Integer>()) {
-        ImGui::DragScalar("integer", ImGuiDataType_S64, &last.getUniq<Value::Integer>());
-      }
-      if (last.has<Value::Scalar>()) {
-        ImGui::DragScalar("scalar", ImGuiDataType_Double, &last.getUniq<Value::Scalar>());
-      }
-      if (last.has<Value::Boolean>()) {
-        ImGui::Checkbox("bool", &last.getUniq<Value::Boolean>());
-      }
-      if (last.has<Value::String>()) {
-        auto str = last.get<Value::String>();
-        ImGui::InputTextMultiline("string", &str, ImVec2 {0.f, 4*em});
-      }
-      ImGui::EndDisabled();
+    ImGui::EndGroup();
+  }
+  void UpdateMenu(RefStack&, const std::shared_ptr<Context>&) noexcept override {
+    if (ImGui::MenuItem("Add socket")) {
+      AddSock();
     }
-
-    ImGui::PopItemWidth();
+    if (ImGui::MenuItem("Remove socket")) {
+      RemoveSock();
+    }
   }
 
   Time lastModified() const noexcept override { return {}; }
@@ -359,30 +332,109 @@ class Oscilloscope : public File, public iface::Node {
   }
 
  private:
-  std::vector<std::pair<Time, Value>> values_;
-
-  std::string msg_ = "waiting...";
-
-  std::shared_ptr<std::monostate> life_;
-
-  class Receiver : public InSock {
+  class Stream final {
    public:
-    Receiver(Oscilloscope* o) : InSock(o, "in"), owner_(o), life_(o->life_) {
+    Stream(std::string_view n) noexcept :
+        name_(n), clk_name_(name_+"_CLK"), in_name_(name_+"_IN") {
     }
 
-    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-      if (life_.expired()) return;
+    void Add(double x, double y) noexcept {
+      if (x_.size() && x_.back() == x) {
+        y_.back() = y;
+      } else {
+        x_.push_back(x);
+        y_.push_back(y);
+      }
+    }
+    void Clear() noexcept {
+      x_.clear();
+      y_.clear();
+    }
 
-      owner_->msg_ = "ok :)";
-      owner_->values_.emplace_back(Clock::now(), Value(v));
-      InSock::Receive(ctx, std::move(v));
+    void PlotLine() const noexcept {
+      ImPlot::PlotLine(name_.c_str(), &x_[0], &y_[0], static_cast<int>(x_.size()));
+    }
+
+    const std::string& name() const noexcept { return name_; }
+
+    const std::string& clkName() const noexcept { return clk_name_; }
+    const std::string& inName() const noexcept { return in_name_; }
+
+   private:
+    std::string name_;
+    std::vector<double> x_;
+    std::vector<double> y_;
+
+    const std::string clk_name_;
+    const std::string in_name_;
+  };
+  class Data final {
+   public:
+    std::vector<std::shared_ptr<Stream>> streams;
+
+    size_t clk = 0;
+  };
+
+  class PulseReceiver : public InSock {
+   public:
+    PulseReceiver(Oscilloscope* o, std::string_view n) :
+        InSock(o, n), data_(o->data_) {
+    }
+
+    void Receive(const std::shared_ptr<Context>&, Value&&) noexcept override {
+      auto data = data_.lock();
+      if (!data) return;
+      ++data->clk;
     }
 
    private:
-    Oscilloscope* owner_;
-
-    std::weak_ptr<std::monostate> life_;
+    std::weak_ptr<Data> data_;
   };
+  class StreamPulseReceiver : public InSock {
+   public:
+    StreamPulseReceiver(Oscilloscope* o,
+                        std::string_view n,
+                        const std::shared_ptr<CachedInSock>& v,
+                        const std::shared_ptr<Stream>& st) :
+        InSock(o, n), data_(o->data_), vsock_(v), st_(st) {
+    }
+
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& p) noexcept override {
+      auto data  = data_.lock();
+      auto vsock = vsock_.lock();
+      auto st    = st_.lock();
+      if (!data || !vsock || !st) return;
+
+      double sca = 0.;
+
+      const auto& v = vsock->value();
+      if (v.has<Value::Scalar>()) {
+        sca = v.get<Value::Scalar>();
+      } else if (v.has<Value::Integer>()) {
+        sca = static_cast<double>(v.get<Value::Integer>());
+      } else {
+        return;
+      }
+      st->Add(static_cast<double>(data->clk), sca);
+
+      InSock::Receive(ctx, std::move(p));
+    }
+
+   private:
+    std::weak_ptr<Data> data_;
+
+    std::weak_ptr<CachedInSock> vsock_;
+
+    std::weak_ptr<Stream> st_;
+  };
+
+  std::shared_ptr<Data> data_;
+
+  ImVec2 size_;
+
+  size_t xscale_ = 10;
+  double yscale_ = 1.f;
+  double yoff_   = 0;
 };
 
 } }  // namespace kingtaker
