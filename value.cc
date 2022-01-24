@@ -239,19 +239,32 @@ class Oscilloscope : public File, public iface::Node {
       "Oscilloscope", "value inspector",
       {typeid(iface::Node)});
 
-  Oscilloscope() : File(&type_), Node(kMenu), data_(std::make_shared<Data>()) {
+  Oscilloscope(size_t n = 1, ImVec2 size = {0, 0}) noexcept :
+      File(&type_), Node(kMenu),
+      data_(std::make_shared<Data>()), size_(size) {
+    assert(n > 0);
+
     in_.emplace_back(std::make_shared<PulseReceiver>(this, "CLK"));
-    AddSock();
+    for (size_t i = 0; i < n; ++i) AddSock();
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object&) {
-    return std::make_unique<Oscilloscope>();
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+    auto size = msgpack::find(obj, "size"s).as<std::pair<float, float>>();
+    return std::make_unique<Oscilloscope>(
+        msgpack::find(obj, "count"s).as<size_t>(),
+        ImVec2 {size.first, size.second});
   }
   void Serialize(Packer& pk) const noexcept override {
-    pk.pack_nil();
+    pk.pack_map(2);
+
+    pk.pack("count"s);
+    pk.pack(data_->streams.size());
+
+    pk.pack("size");
+    pk.pack(std::make_tuple(size_.x, size_.y));
   }
   std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<Oscilloscope>();
+    return std::make_unique<Oscilloscope>(data_->streams.size(), size_);
   }
 
   bool AddSock() noexcept {
@@ -309,6 +322,8 @@ class Oscilloscope : public File, public iface::Node {
       gui::ResizeGroup _("##Resizer", &size_, {16, 16}, {64, 64}, em);
 
       if (ImPlot::BeginPlot("##Graph", size_*em)) {
+        ImPlot::SetupAxes(nullptr, nullptr,
+                          ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
         for (auto& st : data_->streams) st->PlotLine();
         ImPlot::EndPlot();
       }
@@ -431,10 +446,6 @@ class Oscilloscope : public File, public iface::Node {
   std::shared_ptr<Data> data_;
 
   ImVec2 size_;
-
-  size_t xscale_ = 10;
-  double yscale_ = 1.f;
-  double yoff_   = 0;
 };
 
 } }  // namespace kingtaker
