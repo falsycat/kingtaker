@@ -170,7 +170,7 @@ class Value::Tensor final {
     if (type_ != GetTypeOf<T>::value) {
       throw TypeUnmatchException(GetTypeOf<T>::value, type_);
     }
-    return {&buf_[0], buf_.size()/sizeof(T)};
+    return {reinterpret_cast<T*>(&buf_[0]), buf_.size()/sizeof(T)};
   }
   template <typename T>
   std::span<const T> ptr() const {

@@ -43,7 +43,10 @@ void Value::Serialize(File::Packer& pk) const {
   if (has<Tensor>()) {
     auto& v = get<Tensor>();
     pk.pack_map(2);
+    pk.pack("type"s);
     pk.pack("tensor"s);
+
+    pk.pack("param"s);
     v.Serialize(pk);
     return;
   }
@@ -140,7 +143,7 @@ size_t Value::Tensor::CountSamples(const std::vector<size_t>& dim) {
 
 Value::Tensor::Tensor(Type t, std::vector<size_t>&& d, std::vector<uint8_t>&& b) noexcept :
     type_(t), dim_(std::move(d)), buf_(std::move(b)) {
-  buf_.resize(CountSamples(dim_) * (t&0xFF));
+  buf_.resize(CountSamples(dim_) * (t&0xFF)/8);
 }
 
 Value::Tensor Value::Tensor::Deserialize(const msgpack::object& obj) {

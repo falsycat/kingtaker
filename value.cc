@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cinttypes>
 #include <optional>
 
 #include <imgui.h>
@@ -181,7 +182,7 @@ class ImmValue : public File, public iface::Node {
       mod = UpdateVec(v.getUniq<Value::Vec4>());
 
     } else if (v.has<Value::String>()) {
-      gui::ResizeGroup _("##ResizeGroup", &size_, {4, 4}, {24, 24*em}, em);
+      gui::ResizeGroup _("##ResizeGroup", &size_, {4, 4}, {24, 24}, em);
       mod = ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), size_*em);
 
     } else {
