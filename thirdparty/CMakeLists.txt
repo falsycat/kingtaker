@@ -161,6 +161,22 @@ target_sources(linalg.h
 )
 
 
+# ---- luajit ----
+# repository: https://github.com/LuaJIT/LuaJIT
+# license   : MIT
+
+FetchContent_Declare(
+  luajit
+  URL "https://github.com/LuaJIT/LuaJIT/archive/1d7b5029c5ba36870d25c67524034d452b761d27.zip"
+)
+FetchContent_Populate(luajit)
+
+function (include_luajit)
+  include(luajit.cmake)
+endfunction()
+include_luajit()
+
+
 # ---- MsgPack C++ ----
 # repository: https://github.com/msgpack/msgpack-c
 # license   : Boost

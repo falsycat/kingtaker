@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(kingtaker CXX)
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
 # ---- configuration ----
+project(kingtaker CXX)
+
 option(KINGTAKER_STATIC "link all libs statically" ON)
 
 set(KINGTAKER_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/include/generated")
@@ -38,9 +40,11 @@ target_compile_definitions(kingtaker
 )
 target_sources(kingtaker
   PRIVATE
+    kingtaker.hh
+
     generic.cc
     kingtaker.cc
-    kingtaker.hh
+    luajit.cc
     main.cc
     node.cc
     system.cc
@@ -69,6 +73,7 @@ target_link_libraries(kingtaker
     imnodes
     implot
     linalg.h
+    luajit
     msgpackc-cxx
 )
 

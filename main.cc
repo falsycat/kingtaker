@@ -35,13 +35,19 @@ static constexpr size_t kTasksPerFrame = 10000;
 
 
 namespace kingtaker {
+  // initializers
+  bool InitLuaJIT();
+  void DeinitLuaJIT();
+
+  // task queue
   iface::SimpleQueue mainq_;
   iface::SimpleQueue subq_;
+
 }  // namespace kingtaker
 
-static std::unique_ptr<File> root_;
-static std::optional<std::string>       panic_;
-static bool                             alive_;
+static std::unique_ptr<File>      root_;
+static std::optional<std::string> panic_;
+static bool                       alive_;
 
 
 void Initialize() noexcept {
@@ -149,7 +155,7 @@ void Update() noexcept {
   File::RefStack path;
   gui->Update(path);
 
-  // main thread task
+  // execute tasks
   try {
     iface::SimpleQueue::Item item;
     size_t done = 0;
@@ -163,6 +169,7 @@ void Update() noexcept {
 
 
 int main(int, char**) {
+  // init display
   glfwSetErrorCallback(
       [](int, const char* msg) {
         std::cout << "GLFW error: " << msg << std::endl;
@@ -172,7 +179,6 @@ int main(int, char**) {
   GLFWwindow* window;
   const char* glsl_version;
   glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-
 # if defined(__APPLE__)
     glsl_version = "#version 150";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -186,12 +192,12 @@ int main(int, char**) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 # endif
-
   window = glfwCreateWindow(1280, 720, "KINGTAKER", NULL, NULL);
   if (window == NULL) return 1;
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
 
+  // init ImGUI
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImPlot::CreateContext();
@@ -203,12 +209,17 @@ int main(int, char**) {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
+  // init subsystem
+  if (!InitLuaJIT()) return 1;
+
+  // init kingtaker
   Initialize();
   File::root(root_.get());
 
   glfwShowWindow(window);
-
   alive_ = true;
+
+  // main loop
   while (alive_) {
     glfwPollEvents();
 
@@ -230,11 +241,16 @@ int main(int, char**) {
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
 
+  // teardown subsystem
+  DeinitLuaJIT();
+
+  // teardown ImGUI
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImPlot::DestroyContext();
   ImGui::DestroyContext();
 
+  // teardown display
   glfwDestroyWindow(window);
   glfwTerminate();
   return 0;
