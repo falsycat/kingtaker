@@ -18,8 +18,9 @@
 
 #include "kingtaker.hh"
 
+#include "util/queue.hh"
+
 #include "iface/gui.hh"
-#include "iface/queue.hh"
 
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
@@ -38,134 +39,24 @@ namespace kingtaker {
   // initializers
   bool InitLuaJIT();
   void DeinitLuaJIT();
-
-  // task queue
-  iface::SimpleQueue mainq_;
-  iface::SimpleQueue subq_;
-
 }  // namespace kingtaker
 
-static std::unique_ptr<File>      root_;
+
 static std::optional<std::string> panic_;
 static bool                       alive_;
 
+static SimpleQueue mainq_;
+static SimpleQueue subq_;
+Queue& Queue::main() noexcept { return mainq_; }
+Queue& Queue::sub() noexcept { return subq_; }
 
-void Initialize() noexcept {
-  if (!std::filesystem::exists(kFileName)) {
-    static const uint8_t kInitialRoot[] = {
-#     include "generated/kingtaker.inc"
-    };
-    msgpack::object_handle obj =
-        msgpack::unpack(reinterpret_cast<const char*>(kInitialRoot),
-                        sizeof(kInitialRoot));
-    root_ = File::Deserialize(obj.get());
-    assert(root_);
-    return;
-  }
+static std::unique_ptr<File> root_;
+File& File::root() noexcept { return *root_; }
 
-  try {
-    // open the file
-    std::ifstream st(kFileName, std::ios::binary);
-    if (!st) {
-      throw DeserializeException("failed to open: "s+kFileName);
-    }
-    root_ = File::Deserialize(st);
 
-  } catch (msgpack::unpack_error& e) {
-    panic_ = "MessagePack unpack error: "s+e.what();
-
-  } catch (DeserializeException& e) {
-    panic_ = e.Stringify();
-  }
-}
-void Save() noexcept {
-  std::ofstream f(kFileName, std::ios::binary);
-  if (!f) {
-    panic_ = "failed to open: "s+kFileName;
-    return;
-  }
-
-  msgpack::packer<std::ostream> pk(f);
-  root_->SerializeWithTypeInfo(pk);
-  if (!f) {
-    panic_ = "failed to write: "s+kFileName;
-    return;
-  }
-}
-
-void UpdatePanic() noexcept {
-  static const char*    kWinId    = "PANIC##kingtaker/main.cc";
-  static constexpr auto kWinFlags =
-      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-
-  static constexpr auto kWidth  = 32;  /* em */
-  static constexpr auto kHeight = 8;  /* em */
-
-  const float em = ImGui::GetFontSize();
-  ImGui::SetNextWindowContentSize({kWidth*em, 0});
-
-  if (ImGui::BeginPopupModal(kWinId, nullptr, kWinFlags)) {
-    ImGui::Text("### something went wrong X( ###");
-    ImGui::InputTextMultiline(
-        "##message",
-        panic_->data(), panic_->size(),
-        ImVec2 {kWidth*em, kHeight*em},
-        ImGuiInputTextFlags_ReadOnly);
-
-    if (ImGui::Button("IGNORE")) {
-      panic_ = std::nullopt;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("ABORT")) {
-      alive_ = false;
-    }
-    ImGui::EndPopup();
-
-  } else if (panic_) {
-    ImGui::OpenPopup(kWinId);
-  }
-}
-void Update() noexcept {
-  if (panic_) {
-    UpdatePanic();
-    return;
-  }
-
-  // application menu
-  if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("App")) {
-      if (ImGui::MenuItem("Save")) {
-        mainq_.Push(Save, "saving to "s+kFileName);
-      }
-      if (ImGui::MenuItem("Quit")) {
-        alive_ = false;
-      }
-      ImGui::EndMenu();
-    }
-    ImGui::EndMainMenuBar();
-  }
-
-  // update GUI
-  auto gui = root_->iface<iface::GUI>();
-  if (!gui) {
-    panic_ = "ROOT doesn't have a GUI interface X(";
-    return;
-  }
-  File::RefStack path;
-  gui->Update(path);
-
-  // execute tasks
-  try {
-    iface::SimpleQueue::Item item;
-    size_t done = 0;
-    while (mainq_.Pop(item)) item.task(), ++done;
-    while (done < kTasksPerFrame && subq_.Pop(item)) item.task(), ++done;
-
-  } catch (Exception& e) {
-    panic_ = e.Stringify();
-  }
-}
+void InitKingtaker() noexcept;
+void Save() noexcept;
+void Update() noexcept;
 
 
 int main(int, char**) {
@@ -213,8 +104,7 @@ int main(int, char**) {
   if (!InitLuaJIT()) return 1;
 
   // init kingtaker
-  Initialize();
-  File::root(root_.get());
+  InitKingtaker();
 
   glfwShowWindow(window);
   alive_ = true;
@@ -254,4 +144,121 @@ int main(int, char**) {
   glfwDestroyWindow(window);
   glfwTerminate();
   return 0;
+}
+
+
+void InitKingtaker() noexcept {
+  if (!std::filesystem::exists(kFileName)) {
+    static const uint8_t kInitialRoot[] = {
+#     include "generated/kingtaker.inc"
+    };
+    msgpack::object_handle obj =
+        msgpack::unpack(reinterpret_cast<const char*>(kInitialRoot),
+                        sizeof(kInitialRoot));
+    root_ = File::Deserialize(obj.get());
+    assert(root_);
+    return;
+  }
+
+  try {
+    // open the file
+    std::ifstream st(kFileName, std::ios::binary);
+    if (!st) {
+      throw DeserializeException("failed to open: "s+kFileName);
+    }
+    root_ = File::Deserialize(st);
+
+  } catch (msgpack::unpack_error& e) {
+    panic_ = "MessagePack unpack error: "s+e.what();
+
+  } catch (DeserializeException& e) {
+    panic_ = e.Stringify();
+  }
+}
+
+void Save() noexcept {
+  std::ofstream f(kFileName, std::ios::binary);
+  if (!f) {
+    panic_ = "failed to open: "s+kFileName;
+    return;
+  }
+
+  msgpack::packer<std::ostream> pk(f);
+  root_->SerializeWithTypeInfo(pk);
+  if (!f) {
+    panic_ = "failed to write: "s+kFileName;
+    return;
+  }
+}
+
+void Update() noexcept {
+  // panic msg
+  if (panic_) {
+    static const char*    kWinId    = "PANIC##kingtaker/main.cc";
+    static constexpr auto kWinFlags =
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+
+    static constexpr auto kWidth  = 32;  /* em */
+    static constexpr auto kHeight = 8;   /* em */
+
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowContentSize({kWidth*em, 0});
+
+    if (ImGui::BeginPopupModal(kWinId, nullptr, kWinFlags)) {
+      ImGui::Text("### something went wrong X( ###");
+      ImGui::InputTextMultiline(
+          "##message",
+          panic_->data(), panic_->size(),
+          ImVec2 {kWidth*em, kHeight*em},
+          ImGuiInputTextFlags_ReadOnly);
+
+      if (ImGui::Button("IGNORE")) {
+        panic_ = std::nullopt;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("ABORT")) {
+        alive_ = false;
+      }
+      ImGui::EndPopup();
+
+    } else if (panic_) {
+      ImGui::OpenPopup(kWinId);
+    }
+    return;
+  }
+
+  // application menu
+  if (ImGui::BeginMainMenuBar()) {
+    if (ImGui::BeginMenu("App")) {
+      if (ImGui::MenuItem("Save")) {
+        mainq_.Push(Save, "saving to "s+kFileName);
+      }
+      if (ImGui::MenuItem("Quit")) {
+        alive_ = false;
+      }
+      ImGui::EndMenu();
+    }
+    ImGui::EndMainMenuBar();
+  }
+
+  // update GUI
+  auto gui = root_->iface<iface::GUI>();
+  if (!gui) {
+    panic_ = "ROOT doesn't have a GUI interface X(";
+    return;
+  }
+  File::RefStack path;
+  gui->Update(path);
+
+  // execute tasks
+  try {
+    SimpleQueue::Item item;
+    size_t done = 0;
+    while (mainq_.Pop(item)) item.task(), ++done;
+    while (done < kTasksPerFrame && subq_.Pop(item)) item.task(), ++done;
+
+  } catch (Exception& e) {
+    panic_ = e.Stringify();
+  }
 }

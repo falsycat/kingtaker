@@ -54,10 +54,10 @@ target_sources(kingtaker
     iface/gui.hh
     iface/history.hh
     iface/node.hh
-    iface/queue.hh
 
     util/gui.hh
     util/gui.cc
+    util/queue.hh
     util/value.hh
     util/value.cc
 )

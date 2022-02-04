@@ -54,6 +54,28 @@ class DeserializeException : public Exception {
 };
 
 
+// Task queue. Any operations are thread-safe.
+class Queue {
+ public:
+  using Task = std::function<void()>;
+
+  // Queued task is absolutely processed on each frame.
+  static Queue& main() noexcept;
+
+  // Queued task might be skipped when many tasks are queued.
+  static Queue& sub() noexcept;
+
+  Queue() = default;
+  virtual ~Queue() = default;
+  Queue(const Queue&) = delete;
+  Queue(Queue&&) = delete;
+  Queue& operator=(const Queue&) = delete;
+  Queue& operator=(Queue&&) = delete;
+
+  virtual void Push(Task&&, std::string_view = "") noexcept = 0;
+};
+
+
 class File {
  public:
   using Clock  = std::chrono::system_clock;
@@ -74,15 +96,8 @@ class File {
   static std::unique_ptr<File> Deserialize(const msgpack::object&);
   static std::unique_ptr<File> Deserialize(std::istream&);
 
-  // Queues the function as a task executed by main thread.
-  // The main task is absolutely processed on each frame. In other hands,
-  // the sub task might be skipped when many tasks are queued.
-  static void QueueMainTask(std::function<void()>&&, std::string_view = "") noexcept;
-  static void QueueSubTask(std::function<void()>&&, std::string_view = "") noexcept;
-
   // An entrypoint must set root file by calling root(File*) before entering main loop.
-  static File& root() noexcept { return *root_; }
-  static void root(File* f) noexcept { assert(!root_); root_ = f; }
+  static File& root() noexcept;
 
   static const auto& registry() noexcept { return registry_(); }
 
@@ -139,9 +154,10 @@ class File {
   const TypeInfo& type() const noexcept { return *type_; }
 
  private:
-  static std::map<std::string, TypeInfo*>& registry_() noexcept;
-
-  static File* root_;
+  static std::map<std::string, TypeInfo*>& registry_() noexcept {
+    static std::map<std::string, TypeInfo*> registry_;
+    return registry_;
+  }
 
   const TypeInfo* type_;
 };

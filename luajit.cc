@@ -4,6 +4,7 @@
 
 
 namespace kingtaker {
+namespace {
 
 static lua_State* L = nullptr;
 
@@ -17,4 +18,7 @@ void DeinitLuaJIT() {
   lua_close(L);
 }
 
+
+
+}
 }  // namespace kingtaker

@@ -3,15 +3,10 @@
 #include <cassert>
 #include <sstream>
 
-#include "iface/queue.hh"
-
 namespace kingtaker {
 
 std::string                   Exception::msg_;
 boost::stacktrace::stacktrace Exception::strace_;
-
-File* File::root_ = nullptr;
-
 
 std::string Exception::Stringify() noexcept {
   std::stringstream st;
@@ -71,26 +66,12 @@ std::unique_ptr<File> File::Deserialize(std::istream& st) {
   return Deserialize(obj.get());
 }
 
-void File::QueueMainTask(std::function<void()>&& task, std::string_view msg) noexcept {
-  extern iface::SimpleQueue mainq_;
-  mainq_.Push(std::move(task), msg);
-}
-void File::QueueSubTask(std::function<void()>&& task, std::string_view msg) noexcept {
-  extern iface::SimpleQueue subq_;
-  subq_.Push(std::move(task), msg);
-}
-
 void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
   pk.pack_map(2);
   pk.pack("type");
   pk.pack(type().name());
   pk.pack("param");
   Serialize(pk);
-}
-
-std::map<std::string, File::TypeInfo*>& File::registry_() noexcept {
-  static std::map<std::string, TypeInfo*> registry_;
-  return registry_;
 }
 
 

@@ -84,7 +84,7 @@ class SimpleHistory : public History {
     ++cursor_;
   }
   void Queue(std::unique_ptr<T>&& cmd) noexcept {
-    File::QueueMainTask([this, ptr = cmd.release()]() { Add(std::unique_ptr<T>(ptr)); });
+    Queue::main().Push([this, ptr = cmd.release()]() { Add(std::unique_ptr<T>(ptr)); });
   }
 
   void Drop(size_t dist) noexcept {

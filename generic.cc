@@ -211,7 +211,7 @@ class GenericDir : public File {
             }
 
             if (enter && !dup && valid) {
-              File::QueueMainTask(
+              Queue::main().Push(
                   [&dir = owner_->dir_, name = name_for_new_, &type]() {
                     dir.Add(name, type.Create());
                   });
@@ -263,10 +263,10 @@ class GenericDir : public File {
       if (ImGui::BeginPopupContextItem()) {
         if (ImGui::MenuItem("Remove")) {
           const std::string name = ref.top().name();
-          File::QueueMainTask([this, name]() { owner_->dir_.Remove(name); });
+          Queue::main().Push([this, name]() { owner_->dir_.Remove(name); });
         }
         if (ImGui::MenuItem("Rename")) {
-          File::QueueMainTask([this]() { throw Exception("not implemented"); });
+          Queue::main().Push([this]() { throw Exception("not implemented"); });
         }
         if (ditem && (ditem->flags() & kMenu)) {
           ImGui::Separator();

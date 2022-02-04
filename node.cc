@@ -21,7 +21,6 @@
 #include "iface/gui.hh"
 #include "iface/history.hh"
 #include "iface/node.hh"
-#include "iface/queue.hh"
 
 #include "util/gui.hh"
 #include "util/value.hh"
@@ -521,7 +520,7 @@ class NodeNet : public File, public iface::Node {
           owner_->history_.Clear();
         }
         if (ImGui::MenuItem("Clear entire context")) {
-          File::QueueMainTask([this]() { owner_->ctx_ = std::make_shared<Context>(); });
+          Queue::main().Push([this]() { owner_->ctx_ = std::make_shared<Context>(); });
         }
         ImGui::EndPopup();
       }
@@ -1076,7 +1075,7 @@ class RefNode : public File, public iface::Node {
           ImGui::CloseCurrentPopup();
 
           path_editing_ = newref.Stringify();
-          File::QueueMainTask(
+          Queue::main().Push(
               [this, fullpath = newref.Stringify()]() {
                 try {
                   SyncSocks(FetchNode(nullptr, RefStack().Resolve(fullpath)));
@@ -1102,7 +1101,7 @@ class RefNode : public File, public iface::Node {
       auto n    = FetchNode(this, nref);
 
       if (ImGui::MenuItem("Re-sync")) {
-        File::QueueMainTask(
+        Queue::main().Push(
             [this, fullpath = nref.Stringify()]() {
               try {
                 SyncSocks(FetchNode(nullptr, RefStack().Resolve(fullpath)));

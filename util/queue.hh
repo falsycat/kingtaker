@@ -11,30 +11,7 @@
 #include <utility>
 
 
-namespace kingtaker::iface {
-
-// All methods are thread-safe.
-class Queue {
- public:
-  using Task = std::function<void()>;
-
-  static Queue& Find(const File::RefStack& ref, std::string_view name) {
-    const auto p = ref.ResolveUpward(File::Path {"_queue", std::string(name)});
-
-    auto q = File::iface<Queue>(p.top().file());
-    if (!q) throw File::UnsupportedException(p, "Queue");
-    return *q;
-  }
-
-  Queue() = default;
-  virtual ~Queue() = default;
-  Queue(const Queue&) = delete;
-  Queue(Queue&&) = delete;
-  Queue& operator=(const Queue&) = delete;
-  Queue& operator=(Queue&&) = delete;
-
-  virtual void Push(Task&&, std::string_view = "") noexcept = 0;
-};
+namespace kingtaker {
 
 class SimpleQueue : public Queue {
  public:
@@ -72,4 +49,5 @@ class SimpleQueue : public Queue {
   std::deque<Item> q_;
 };
 
-}  // namespace kingtaker::iface
+}  // namespace kingtaker
+
