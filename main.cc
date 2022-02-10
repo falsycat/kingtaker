@@ -35,13 +35,6 @@ static const char*      kFileName      = "kingtaker.bin";
 static constexpr size_t kTasksPerFrame = 10000;
 
 
-namespace kingtaker {
-  // initializers
-  bool InitLuaJIT();
-  void DeinitLuaJIT();
-}  // namespace kingtaker
-
-
 static std::optional<std::string> panic_;
 static bool                       alive_;
 
@@ -100,9 +93,6 @@ int main(int, char**) {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
-  // init subsystem
-  if (!InitLuaJIT()) return 1;
-
   // init kingtaker
   InitKingtaker();
 
@@ -130,9 +120,6 @@ int main(int, char**) {
     glfwSwapBuffers(window);
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
-
-  // teardown subsystem
-  DeinitLuaJIT();
 
   // teardown ImGUI
   ImGui_ImplOpenGL3_Shutdown();
