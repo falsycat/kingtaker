@@ -33,8 +33,6 @@ class SystemImGuiConfig : public File {
     pk.pack_str(static_cast<uint32_t>(n));
     pk.pack_str_body(ini, static_cast<uint32_t>(n));
   }
-
-  Time lastModified() const noexcept override { return {}; }
 };
 
 } }  // namespace kingtaker

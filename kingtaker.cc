@@ -131,19 +131,6 @@ File::RefStack File::RefStack::Resolve(const Path& p) const {
   return a;
 }
 
-File::RefStack File::RefStack::ResolveUpward(const Path& p) const {
-  auto a = *this;
-  for (;;) {
-    auto b = a;
-    if (b.ResolveInplace(p)) return b;
-    if (a.terms_.empty()) {
-      throw NotFoundException("Upward resolving failed: "+StringifyPath(p));
-    }
-    a.Pop();
-  }
-  
-}
-
 bool File::RefStack::ResolveInplace(const Path& p) {
   for (const auto& name : p) {
     if (name == "..") {
