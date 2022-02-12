@@ -24,7 +24,7 @@ class SimpleQueue : public Queue {
 
   void Push(Task&& t, std::string_view msg) noexcept override {
     std::unique_lock<std::mutex> _(mtx_);
-    q_.emplace_back(std::move(t), std::string(msg));
+    q_.push_back({std::move(t), std::string(msg)});
     cv_.notify_all();
   }
   bool Pop(Item& item) noexcept {

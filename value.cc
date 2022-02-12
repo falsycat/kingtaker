@@ -343,7 +343,7 @@ class Oscilloscope : public File, public iface::Node {
 
   Time lastModified() const noexcept override { return {}; }
 
-  void* iface(const std::type_index& t) noexcept {
+  void* iface(const std::type_index& t) noexcept override {
     if (t == typeid(iface::Node)) return static_cast<iface::Node*>(this);
     return nullptr;
   }
@@ -544,7 +544,7 @@ class ExternalText final : public File,
           ImGui::Text("(save error)");
         }
 
-        if (!str_.unique()) str_ = std::make_shared<std::string>(*str_);
+        if (1 != str_.use_count()) str_ = std::make_shared<std::string>(*str_);
         modified_ |= ImGui::InputTextMultiline(
             "##Editor", str_.get(), {-FLT_MIN, -FLT_MIN});
       }

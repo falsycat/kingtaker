@@ -36,7 +36,12 @@ target_include_directories(kingtaker PRIVATE . "${PROJECT_BINARY_DIR}/include")
 target_compile_definitions(kingtaker
   PRIVATE
     IMGUI_DEFINE_MATH_OPERATORS
+
     $<$<PLATFORM_ID:Linux>:BOOST_STACKTRACE_USE_ADDR2LINE>
+    $<$<PLATFORM_ID:Linux>:_GNU_SOURCE>
+
+    $<$<PLATFORM_ID:Darwin>:GL_SILENCE_DEPRECATION>
+    $<$<PLATFORM_ID:Darwin>:_GNU_SOURCE>
 )
 target_sources(kingtaker
   PRIVATE
@@ -67,7 +72,7 @@ target_link_libraries(kingtaker
     $<$<PLATFORM_ID:Linux,Darwin>:pthread>
     $<$<PLATFORM_ID:Linux>:dl>
 
-    Boost::boost
+    Boost::headers
     glew
     glfw
     imgui

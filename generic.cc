@@ -36,7 +36,7 @@ class GenericDir : public File {
     if (itr == items_.end()) return nullptr;
     return itr->second.get();
   }
-  void Scan(std::function<void(std::string_view, File*)> L) const noexcept {
+  void Scan(std::function<void(std::string_view, File*)> L) const noexcept override {
     for (auto& p : items_) L(p.first, p.second.get());
   }
 
@@ -219,7 +219,7 @@ class GenericDir : public File {
             ImGui::EndMenu();
           }
           if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(type.desc().c_str());
+            ImGui::SetTooltip("%s", type.desc().c_str());
           }
         }
 
@@ -250,7 +250,7 @@ class GenericDir : public File {
         flags |= ImGuiTreeNodeFlags_Leaf;
       }
 
-      const bool open = ImGui::TreeNodeEx(f, flags, ref.top().name().c_str());
+      const bool open = ImGui::TreeNodeEx(f, flags, "%s", ref.top().name().c_str());
       if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
         ImGui::Text("%s", f->type().name().c_str());
@@ -266,7 +266,7 @@ class GenericDir : public File {
           Queue::main().Push([this, name]() { owner_->dir_.Remove(name); });
         }
         if (ImGui::MenuItem("Rename")) {
-          Queue::main().Push([this]() { throw Exception("not implemented"); });
+          Queue::main().Push([]() { throw Exception("not implemented"); });
         }
         if (ditem && (ditem->flags() & kMenu)) {
           ImGui::Separator();

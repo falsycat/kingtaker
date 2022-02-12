@@ -80,7 +80,7 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
         inline_result_ = "-> "s + inline_result_;
       }
       if (inline_result_.size()) {
-        ImGui::TextWrapped(inline_result_.c_str());
+        ImGui::TextWrapped("%s", inline_result_.c_str());
       }
     }
 
@@ -102,7 +102,7 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
     }
   }
 
-  void* iface(const std::type_index& t) noexcept {
+  void* iface(const std::type_index& t) noexcept override {
     if (t == typeid(iface::GUI))     return static_cast<iface::GUI*>(this);
     if (t == typeid(iface::DirItem)) return static_cast<iface::DirItem*>(this);
     return nullptr;

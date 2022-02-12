@@ -72,7 +72,7 @@ class Value final {
 
     } else if constexpr (IsSharedPtr<T>) {
       auto& ptr = std::get<T>(v_);
-      if (!ptr.unique()) v_ = std::make_unique<T::element_type>(*ptr);
+      if (1 != ptr.use_count()) v_ = std::make_unique<T::element_type>(*ptr);
       return std::get<T>(v_);
 
     } else {

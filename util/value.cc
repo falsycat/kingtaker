@@ -89,7 +89,7 @@ Value Value::Deserialize(const msgpack::object& obj) {
     default:
       ;
     }
-  } catch (msgpack::type_error& e) {
+  } catch (msgpack::type_error&) {
   }
   throw DeserializeException("invalid value");
 }

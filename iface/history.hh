@@ -61,7 +61,7 @@ class SimpleHistory : public History {
         for (; ret < dist; ++ret) {
           cmds_[--cursor_]->Revert();
         }
-      } catch (Exception& e) {
+      } catch (Exception&) {
       }
     }
     if (step > 0) {
@@ -70,7 +70,7 @@ class SimpleHistory : public History {
         for (; ret < dist; ++ret) {
           cmds_[cursor_++]->Apply();
         }
-      } catch (Exception& e) {
+      } catch (Exception&) {
       }
     }
     return ret;

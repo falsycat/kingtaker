@@ -4,7 +4,8 @@ if (UNIX)
 
   set(lib "${src}/libluajit.a")
   add_custom_target(luajit-build
-    COMMAND ${MAKE} -j BUILDMODE=static CFLAGS=-fPIC
+    COMMAND
+      ${MAKE} -j BUILDMODE=static CFLAGS=-fPIC
 
     WORKING_DIRECTORY "${luajit_SOURCE_DIR}"
     VERBATIM

@@ -91,11 +91,11 @@ class NodeNet : public File, public iface::Node {
             id, std::move(f), n, ImVec2 {p.first, p.second});
         try {
           h->select_ = msgpack::find(obj, "select"s).as<bool>();
-        } catch (msgpack::type_error& e) {
+        } catch (msgpack::type_error&) {
         }
         return h;
 
-      } catch (msgpack::type_error& e) {
+      } catch (msgpack::type_error&) {
         throw DeserializeException("broken NodeHolder structure");
       }
     }
@@ -120,7 +120,7 @@ class NodeNet : public File, public iface::Node {
             Node::Link(out, in);
           }
         }
-      } catch (msgpack::type_error& e) {
+      } catch (msgpack::type_error&) {
         throw DeserializeException("broken NodeHolder link");
       }
     }
@@ -273,7 +273,7 @@ class NodeNet : public File, public iface::Node {
       for (auto& h : ret->nodes_) h->Setup(ret.get());
       return ret;
 
-    } catch (msgpack::type_error& e) {
+    } catch (msgpack::type_error&) {
       throw DeserializeException("broken data structure");
     }
   }
@@ -405,11 +405,16 @@ class NodeNet : public File, public iface::Node {
   }
 
  private:
+  // MSVC doesn't allow inner class to access protected members came from super class.
+  auto& node_in_() noexcept { return in_; }
+  auto& node_out_() noexcept { return out_; }
+
   NodeHolder& FindHolder(const Node& n) noexcept {
     for (auto& h: nodes_) {
       if (&h->entity() == &n) return *h;
     }
     assert(false);
+    std::abort();
   }
 
   Time lastmod_;
@@ -448,7 +453,7 @@ class NodeNet : public File, public iface::Node {
         msgpack::find(obj, "offset"s).convert(offset);
         canvas_.Offset = {offset.first, offset.second};
 
-      } catch (msgpack::type_error& e) {
+      } catch (msgpack::type_error&) {
         shown_         = false;
         canvas_.Zoom   = 1.f;
         canvas_.Offset = {0, 0};
@@ -492,7 +497,7 @@ class NodeNet : public File, public iface::Node {
                   NodeHolder::Create(owner_->next_id_++, t.Create()));
             }
             if (ImGui::IsItemHovered()) {
-              ImGui::SetTooltip(t.desc().c_str());
+              ImGui::SetTooltip("%s", t.desc().c_str());
             }
           }
           ImGui::Separator();
@@ -543,7 +548,7 @@ class NodeNet : public File, public iface::Node {
             auto& dsth = owner_->FindHolder(dst->owner());
             auto  dsts = dst->name().c_str();
             if (!ImNodes::Connection(&dsth, dsts, &srch, srcs)) {
-              rm_conns.emplace_back(dst, src);
+              rm_conns.push_back({dst, src});
             }
           }
         }
@@ -718,7 +723,7 @@ class NodeNet : public File, public iface::Node {
           holders_.reserve(refs_.size());
           for (auto& r : refs_) {
             auto itr = std::find_if(nodes.begin(), nodes.end(),
-                                    [this, r](auto& e) { return e.get() == r; });
+                                    [r](auto& e) { return e.get() == r; });
             if (itr == nodes.end()) {
               throw Exception("target node is missing");
             }
@@ -872,7 +877,7 @@ class NodeNet : public File, public iface::Node {
     static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
       return std::make_unique<InputNode>(obj.as<std::string>());
     }
-    std::unique_ptr<File> Clone() const noexcept {
+    std::unique_ptr<File> Clone() const noexcept override {
       return std::make_unique<InputNode>(name_);
     }
 
@@ -905,7 +910,7 @@ class NodeNet : public File, public iface::Node {
     };
 
     std::vector<std::shared_ptr<InSock>>& GetList(NodeNet* owner) const noexcept override {
-      return owner->in_;
+      return owner->node_in_();
     }
     std::shared_ptr<CtxSock> Create(NodeNet* o, std::string_view n) const noexcept override {
       return std::make_shared<CtxInSock>(o, n);
@@ -923,7 +928,7 @@ class NodeNet : public File, public iface::Node {
     static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
       return std::make_unique<OutputNode>(obj.as<std::string>());
     }
-    std::unique_ptr<File> Clone() const noexcept {
+    std::unique_ptr<File> Clone() const noexcept override {
       return std::make_unique<OutputNode>(name_);
     }
 
@@ -955,8 +960,9 @@ class NodeNet : public File, public iface::Node {
         CtxSock::Send(ctx, std::move(v));
       }
     };
+
     std::vector<std::shared_ptr<OutSock>>& GetList(NodeNet* owner) const noexcept override {
-      return owner->out_;
+      return owner->node_out_();
     }
     std::shared_ptr<CtxSock> Create(NodeNet* o, std::string_view n) const noexcept override {
       return std::make_shared<CtxOutSock>(o, n);
@@ -1042,7 +1048,7 @@ class RefNode : public File, public iface::Node {
       ImGui::PopID();
       ref.Pop();
     } catch (Exception& e) {
-      ImGui::TextDisabled(e.msg().c_str());
+      ImGui::TextDisabled("%s", e.msg().c_str());
       in_.clear();
       out_.clear();
     }
@@ -1085,7 +1091,7 @@ class RefNode : public File, public iface::Node {
                 }
               });
         }
-      } catch (NotFoundException& e) {
+      } catch (NotFoundException&) {
         ImGui::Bullet();
         ImGui::TextUnformatted("file not found");
       } catch (Exception& e) {
@@ -1116,7 +1122,7 @@ class RefNode : public File, public iface::Node {
           ImGui::EndMenu();
         }
       }
-    } catch (Exception& e) {
+    } catch (Exception&) {
     }
   }
 
@@ -1163,7 +1169,7 @@ class RefNode : public File, public iface::Node {
              return std::make_shared<OutSock>(this, str);
            });
 
-    } catch (Exception& e) {
+    } catch (Exception&) {
     }
   }
 
@@ -1182,6 +1188,7 @@ class RefNode : public File, public iface::Node {
 
     void Inform(std::string_view msg) noexcept override {
       (void) msg;
+      (void) owner_;
       // TODO(falsycat)
     }
 

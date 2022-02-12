@@ -11,16 +11,14 @@
 #include <imgui_impl_opengl3.h>
 #include <implot.h>
 
-#if defined(IMGUI_IMPL_OPENGL_ES2)
-# include <GLES2/gl2.h>
-#endif
-#include <GLFW/glfw3.h>
-
 #include "kingtaker.hh"
 
 #include "util/queue.hh"
 
 #include "iface/gui.hh"
+
+// To prevent conflicts because of fucking windows.h, include GLFW last.
+#include <GLFW/glfw3.h>
 
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)

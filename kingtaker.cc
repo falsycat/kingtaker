@@ -55,7 +55,7 @@ std::unique_ptr<File> File::Deserialize(const msgpack::object& v) {
     const auto type = Lookup(name);
     if (!type) throw DeserializeException(std::string("unknown file type: ")+name);
     return type->Deserialize(msgpack::find(v, "param"s));
-  } catch (msgpack::type_error& e) {
+  } catch (msgpack::type_error&) {
     throw DeserializeException("invalid File data");
   }
 }

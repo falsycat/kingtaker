@@ -1,0 +1,83 @@
+name: build
+on:
+  push:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - { full: Debug,          short: debug }
+          - { full: RelWithDebInfo, short: fat   }
+          - { full: MinSizeRel,     short: slim  }
+          - { full: Release,        short: rel   }
+
+        env:
+          - name : elf-x86_64
+            os   : ubuntu-latest
+            path : build/kingtaker
+
+          - name : mo-x86_64
+            os   : macos-latest
+            path : build/kingtaker
+
+          - name  : pe-x86_64
+            os    : windows-latest
+            cache : ../nuget
+            path  : |
+              build/Debug/kingtaker.exe
+              build/MinSizeRel/kingtaker.exe
+              build/Release/kingtaker.exe
+              build/RelWithDebInfo/kingtaker.exe
+
+    name   : kingtaker-${{ matrix.env.name }}-${{ matrix.mode.short }}
+    runs-on: ${{ matrix.env.os }}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name : setup
+        shell: bash
+        run  : |
+          if [[ $RUNNER_OS == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends  \
+              gcc-11  \
+              g++-11  \
+              libboost-all-dev  \
+              libgl1-mesa-dev  \
+              libglu1-mesa-dev  \
+              mesa-common-dev  \
+              xorg-dev
+            sudo update-alternatives  \
+              --install /usr/bin/gcc gcc /usr/bin/gcc-11 110  \
+              --slave /usr/bin/g++ g++ /usr/bin/g++-11  \
+              --slave /usr/bin/gcov gcov /usr/bin/gcov-11
+
+          elif [[ $RUNNER_OS == macOS ]]; then
+            brew install boost
+
+          elif [[ $RUNNER_OS == Windows ]]; then
+            mkdir -p ../nuget
+            nuget install boost -OutputDirectory ../nuget
+            echo "BOOSTROOT=$(realpath ../nuget/boost*/lib/native)" >> $GITHUB_ENV
+          fi
+          mkdir build
+
+      - name : build
+        shell: bash
+        env  :
+          MACOSX_DEPLOYMENT_TARGET: 10.15
+        run  : |
+          cmake -DCMAKE_BUILD_TYPE=${{ matrix.mode.full }} "${{ github.workspace }}"
+          cmake --build . --config ${{ matrix.mode.full }} --verbose --parallel
+        working-directory: ./build
+
+      - name: upload
+        uses: actions/upload-artifact@v2
+        with:
+          name: kingtaker-${{ matrix.env.name }}-${{ matrix.mode.short }}
+          path: ${{ matrix.env.path }}
+          if-no-files-found: ignore
