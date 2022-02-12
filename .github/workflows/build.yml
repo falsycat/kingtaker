@@ -8,10 +8,10 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - { full: Debug,          short: debug }
-          - { full: RelWithDebInfo, short: fat   }
-          - { full: MinSizeRel,     short: slim  }
-          - { full: Release,        short: rel   }
+          - { full: Debug,          short: debug   }
+          - { full: RelWithDebInfo, short: fat     }
+          - { full: MinSizeRel,     short: slim    }
+          - { full: Release,        short: release }
 
         env:
           - name : elf-x86_64
@@ -24,7 +24,7 @@ jobs:
 
           - name  : pe-x86_64
             os    : windows-latest
-            cache : ../nuget
+            cache : ~/nuget
             path  : |
               build/Debug/kingtaker.exe
               build/MinSizeRel/kingtaker.exe
@@ -37,6 +37,15 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
+
+      - name: cache
+        uses: actions/cache@v2
+        if  : matrix.env.cache != ''
+        with:
+          path        : ${{ matrix.env.cache }}
+          key         : cache-${{ matrix.env.name }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            cache-${{ matrix.env.name }}-
 
       - name : setup
         shell: bash
@@ -60,9 +69,9 @@ jobs:
             brew install boost
 
           elif [[ $RUNNER_OS == Windows ]]; then
-            mkdir -p ../nuget
-            nuget install boost -OutputDirectory ../nuget
-            echo "BOOSTROOT=$(realpath ../nuget/boost*/lib/native)" >> $GITHUB_ENV
+            mkdir -p ~/nuget
+            nuget install boost -OutputDirectory ~/nuget
+            echo "BOOSTROOT=$(realpath ~/nuget/boost*/lib/native)" >> $GITHUB_ENV
           fi
           mkdir build
 
