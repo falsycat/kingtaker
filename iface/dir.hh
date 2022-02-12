@@ -35,6 +35,7 @@ class DirItem {
   static DirItem& null() noexcept { static DirItem inst_(0); return inst_; }
 
   enum Flag : uint8_t {
+    kNone    = 0,
     kTree    = 0b001,
     kMenu    = 0b010,
     kTooltip = 0b100,

@@ -51,6 +51,7 @@ class Value final {
   Value(const char* v) noexcept : Value(std::string(v)) { }
   Value(String&& v) noexcept : v_(std::make_shared<String>(std::move(v))) { }
   Value(const String& v) noexcept : v_(std::make_shared<String>(v)) { }
+  Value(const std::shared_ptr<String>& v) noexcept : v_(v) { }
 
   Value(Tensor&& t) noexcept : v_(std::make_shared<Tensor>(std::move(t))) { }
 
