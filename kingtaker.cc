@@ -18,7 +18,7 @@ std::string Exception::Stringify() noexcept {
 
 
 File::Path File::ParsePath(std::string_view path) noexcept {
-  Path ret = {":"};
+  Path ret;
   while (path.size()) {
     const auto a = path.find_first_not_of('/');
     if (a != std::string::npos) {
@@ -134,6 +134,7 @@ File::RefStack File::RefStack::Resolve(const Path& p) const {
 bool File::RefStack::ResolveInplace(const Path& p) {
   for (const auto& name : p) {
     if (name == "..") {
+      if (terms_.empty()) return false;
       Pop();
     } else if (name == ":") {
       terms_.clear();
