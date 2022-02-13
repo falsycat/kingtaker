@@ -13,6 +13,8 @@
 #include "iface/dir.hh"
 #include "iface/gui.hh"
 
+#include "util/ptr_selector.hh"
+
 
 namespace kingtaker {
 namespace {
@@ -95,11 +97,8 @@ class GenericDir : public File {
     return last_modified_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return
-        t == typeid(iface::Dir)?     static_cast<void*>(&dir_):
-        t == typeid(iface::DirItem)? static_cast<void*>(&gui_):
-        t == typeid(iface::GUI)?     static_cast<void*>(&gui_):
-        nullptr;
+    return PtrSelector<iface::Dir, iface::DirItem, iface::GUI>(t).
+        Select(&dir_, &gui_);
   }
 
  private:

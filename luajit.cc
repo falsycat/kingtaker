@@ -9,6 +9,8 @@
 #include "iface/gui.hh"
 #include "iface/node.hh"
 
+#include "util/ptr_selector.hh"
+
 
 namespace kingtaker {
 namespace {
@@ -103,9 +105,7 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
   }
 
   void* iface(const std::type_index& t) noexcept override {
-    if (t == typeid(iface::GUI))     return static_cast<iface::GUI*>(this);
-    if (t == typeid(iface::DirItem)) return static_cast<iface::DirItem*>(this);
-    return nullptr;
+    return PtrSelector<iface::DirItem, iface::GUI>(t).Select(this);
   }
 
  private:

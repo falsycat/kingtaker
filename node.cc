@@ -23,6 +23,7 @@
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/ptr_selector.hh"
 #include "util/value.hh"
 
 namespace kingtaker {
@@ -397,11 +398,8 @@ class NodeNet : public File, public iface::Node {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    if (typeid(iface::DirItem) == t) return static_cast<iface::DirItem*>(&gui_);
-    if (typeid(iface::GUI)     == t) return static_cast<iface::GUI*>(&gui_);
-    if (typeid(iface::History) == t) return &history_;
-    if (typeid(iface::Node)    == t) return static_cast<iface::Node*>(this);
-    return nullptr;
+    return PtrSelector<iface::DirItem, iface::GUI, iface::History, iface::Node>(t).
+        Select(this, &gui_, &history_);
   }
 
  private:
@@ -848,10 +846,8 @@ class NodeNet : public File, public iface::Node {
       data_->sock = nullptr;
     }
 
-    Time lastModified() const noexcept override { return {}; }
     void* iface(const std::type_index& t) noexcept override {
-      if (typeid(Node) == t) return static_cast<iface::Node*>(this);
-      return nullptr;
+      return PtrSelector<iface::Node>(t).Select(this);
     }
 
    protected:
@@ -1126,10 +1122,8 @@ class RefNode : public File, public iface::Node {
     }
   }
 
-  Time lastModified() const noexcept override { return {}; }
   void* iface(const std::type_index& t) noexcept override {
-    if (typeid(iface::Node) == t) return static_cast<iface::Node*>(this);
-    return nullptr;
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:

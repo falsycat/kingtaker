@@ -18,6 +18,7 @@
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/ptr_selector.hh"
 #include "util/value.hh"
 
 
@@ -59,8 +60,7 @@ class PulseValue : public File, public iface::Node {
   }
 
   void* iface(const std::type_index& t) noexcept override {
-    if (t == typeid(iface::Node)) return static_cast<iface::Node*>(this);
-    return nullptr;
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:
@@ -218,8 +218,7 @@ class ImmValue : public File, public iface::Node {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    if (t == typeid(iface::Node)) return static_cast<iface::Node*>(this);
-    return nullptr;
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:
@@ -344,8 +343,7 @@ class Oscilloscope : public File, public iface::Node {
   Time lastModified() const noexcept override { return {}; }
 
   void* iface(const std::type_index& t) noexcept override {
-    if (t == typeid(iface::Node)) return static_cast<iface::Node*>(this);
-    return nullptr;
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:
@@ -556,16 +554,7 @@ class ExternalText final : public File,
   }
 
   void* iface(const std::type_index& t) noexcept override {
-    if (t == typeid(iface::DirItem)) {
-      return static_cast<iface::DirItem*>(this);
-    }
-    if (t == typeid(iface::GUI)) {
-      return static_cast<iface::GUI*>(this);
-    }
-    if (t == typeid(iface::Factory<Value>)) {
-      return static_cast<iface::Factory<Value>*>(this);
-    }
-    return nullptr;
+    return PtrSelector<iface::DirItem, iface::GUI, iface::Factory<Value>>(t).Select(this);
   }
 
  private:
