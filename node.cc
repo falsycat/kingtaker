@@ -1252,6 +1252,7 @@ class RefNode : public File, public iface::Node {
   // volatile params
   std::shared_ptr<std::monostate> life_;
   std::shared_ptr<Context>        ctx_;
+  std::string                     basepath_;
 
   bool        synced_ = false;
   std::string path_editing_;
@@ -1264,6 +1265,7 @@ class RefNode : public File, public iface::Node {
     GUI(RefNode* o) : owner_(o) { }
 
     void Update(RefStack& ref) noexcept override {
+      owner_->basepath_ = ref.Stringify();
       owner_->Watch(&*ref.Resolve(owner_->path_));
     }
 
@@ -1327,8 +1329,8 @@ class RefNode : public File, public iface::Node {
       if (life_.expired()) return;
 
       try {
-        // FIXME: don't treat path_ as an absolute path
-        auto node = File::iface<Node>(*RefStack().Resolve(owner_->path_));
+        auto node = File::iface<Node>(
+            *RefStack().Resolve(owner_->basepath_).Resolve(owner_->path_));
         if (!node) throw Exception("missing entity");
 
         auto dst = node->FindIn(name());
@@ -1363,7 +1365,6 @@ class RefNode : public File, public iface::Node {
 
     std::weak_ptr<std::monostate> life_;
   };
-
 };
 
 } }  // namespace kingtaker
