@@ -338,7 +338,7 @@ class NodeNet : public File, public iface::Node {
     return std::make_unique<NodeNet>(Clock::now(), std::move(nodes));
   }
 
-  File* Find(std::string_view name) const noexcept {
+  File* Find(std::string_view name) const noexcept override {
     try {
       size_t pos;
       const auto id = static_cast<size_t>(std::stoll(std::string(name), &pos));
@@ -1239,7 +1239,7 @@ class RefNode : public File, public iface::Node {
   void SyncSocks(const std::string& base) noexcept {
     try {
       SyncSocks(&*RefStack().Resolve(base).Resolve(path_));
-    } catch (NotFoundException& e) {
+    } catch (NotFoundException&) {
       in_.clear();
       out_.clear();
     }
