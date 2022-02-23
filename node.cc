@@ -18,6 +18,7 @@
 #include <linalg.hh>
 
 #include "iface/dir.hh"
+#include "iface/factory.hh"
 #include "iface/gui.hh"
 #include "iface/history.hh"
 #include "iface/node.hh"
@@ -335,6 +336,23 @@ class NodeNet : public File, public iface::Node {
       }
     }
     return std::make_unique<NodeNet>(Clock::now(), std::move(nodes));
+  }
+
+  File* Find(std::string_view name) const noexcept override {
+    try {
+      size_t pos;
+      const auto id = static_cast<size_t>(std::stoll(std::string(name), &pos));
+      if (name.size() != pos) return nullptr;
+
+      auto itr = std::find_if(nodes_.begin(), nodes_.end(),
+                              [id](auto& e) { return e->id() == id; });
+      return itr != nodes_.end()? &(*itr)->file(): nullptr;
+
+    } catch (std::invalid_argument&) {
+      return nullptr;
+    } catch (std::out_of_range&) {
+      return nullptr;
+    }
   }
 
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override {
@@ -983,7 +1001,7 @@ class RefNode : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<RefNode>(
       "RefNode", "uses node as lambda",
-      {typeid(iface::Node)});
+      {typeid(iface::Node), typeid(iface::GUI)});
 
   using Life = std::weak_ptr<std::monostate>;
 
@@ -991,8 +1009,10 @@ class RefNode : public File, public iface::Node {
           const std::vector<std::string>& in  = {},
           const std::vector<std::string>& out = {}) noexcept :
       File(&type_), Node(kMenu),
-      life_(std::make_shared<std::monostate>()), path_(path),
-      ctx_(std::make_shared<Context>(std::make_unique<EditContextWatcher>(this, life_))) {
+      path_(path),
+      life_(std::make_shared<std::monostate>()),
+      ctx_(std::make_shared<Context>(std::make_unique<EditContextWatcher>(this, life_))),
+      gui_(this) {
     in_.reserve(in.size());
     out_.reserve(out.size());
 
@@ -1031,28 +1051,27 @@ class RefNode : public File, public iface::Node {
     const auto line = ImGui::GetCursorPosY();
     ImGui::SetCursorPosY(line + ImGui::GetFrameHeightWithSpacing());
 
+    auto f = &*ref.Resolve(path_);
     ImGui::BeginGroup();
-    try {
-      auto r = ref.Resolve(path_);
-      auto n = FetchNode(this, r);
-
-      ref.Push({"@", &*r});
-      ImGui::PushID(n);
-
-      n->Update(ref, ctx_);
-
-      ImGui::PopID();
-      ref.Pop();
-    } catch (Exception& e) {
-      ImGui::TextDisabled("%s", e.msg().c_str());
+    if (f == this || ref.size() > 256) {
+      ImGui::TextDisabled("recursive reference");
       in_.clear();
       out_.clear();
+    } else {
+      ref.Push({"@", f});
+      ImGui::PushID(f);
+      UpdateEntity(ref, f);
+      ImGui::PopID();
+      ref.Pop();
     }
     ImGui::EndGroup();
 
     ImGui::SetCursorPosY(line);
     ImGui::Button(("-> "s+(path_.size()? path_: "(empty)"s)).c_str(),
                   {ImGui::GetItemRectSize().x, 0});
+    if (path_.size() && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", path_.c_str());
+    }
 
     gui::NodeCanvasResetZoom();
     if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
@@ -1069,74 +1088,103 @@ class RefNode : public File, public iface::Node {
       static const char* const kHint = "enter new path...";
 
       ImGui::SetKeyboardFocusHere();
-      const bool submit = ImGui::InputTextWithHint(
-          "##renamer", kHint, &path_editing_, kFlags);
+      const bool submit = ImGui::InputTextWithHint("##renamer", kHint, &path_editing_, kFlags);
+      if (ImGui::IsItemActivated()) path_editing_ = path_;
+
       try {
         auto newref = ref.Resolve(path_editing_);
         if (submit) {
           ImGui::CloseCurrentPopup();
-
-          path_editing_ = newref.Stringify();
-          Queue::main().Push(
-              [this, fullpath = newref.Stringify()]() {
-                try {
-                  SyncSocks(FetchNode(nullptr, RefStack().Resolve(fullpath)));
-                  path_ = fullpath;
-                } catch (Exception& e) {
-                  ctx_->Inform(e.msg());
-                }
-              });
+          path_ = path_editing_;
+          Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
         }
       } catch (NotFoundException&) {
         ImGui::Bullet();
         ImGui::TextUnformatted("file not found");
-      } catch (Exception& e) {
-        ImGui::Bullet();
-        ImGui::TextUnformatted(e.msg().c_str());
       }
-
       ImGui::EndMenu();
     }
 
-    try {
-      auto nref = ref.Resolve(path_);
-      auto n    = FetchNode(this, nref);
+    if (ImGui::MenuItem("Re-sync")) {
+      Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
+    }
 
-      if (ImGui::MenuItem("Re-sync")) {
-        Queue::main().Push(
-            [this, fullpath = nref.Stringify()]() {
-              try {
-                SyncSocks(FetchNode(nullptr, RefStack().Resolve(fullpath)));
-              } catch (Exception& e) {
-                ctx_->Inform(e.msg());
-              }
-            });
-      }
-      if (n->flags() & kMenu) {
-        if (ImGui::BeginMenu("Target")) {
-          n->UpdateMenu(ref, ctx);
-          ImGui::EndMenu();
+    try {
+      auto eref = ref.Resolve(path_);
+      auto f    = &*eref;
+
+      ref.Push({"@", f});
+      ImGui::PushID(f);
+
+      auto node = File::iface<Node>(f);
+      if (node) {
+        if (node->flags() & kMenu) {
+          if (ImGui::BeginMenu("Target Node")) {
+            node->UpdateMenu(ref, ctx);
+            ImGui::EndMenu();
+          }
         }
       }
+
+      ImGui::PopID();
+      ref.Pop();
     } catch (Exception&) {
     }
   }
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node, iface::GUI>(t).Select(this, &gui_);
   }
 
  private:
-  static Node* FetchNode(RefNode* owner, const RefStack& ref) {
-    auto f = &*ref;
-    if (f == owner || ref.size() > 256) {
-      throw Exception("recursive reference");
+  void UpdateEntity(RefStack& ref, File* f) noexcept {
+    if (f == this) return;
+    const auto em = ImGui::GetFontSize();
+
+    auto node = File::iface<Node>(f);
+    if (node) {
+      node->Update(ref, ctx_);
+      return;
     }
 
-    auto n = File::iface<Node>(f);
-    if (!n) throw Exception("target is not a node");
-    return n;
+    auto factory = File::iface<iface::Factory<Value>>(f);
+    if (factory) {
+      static const char* kTitle = "Value Factory";
+
+      const auto w = ImGui::CalcTextSize(kTitle).x;
+      ImGui::TextUnformatted(kTitle);
+
+      const auto wt = ImGui::CalcTextSize("out").x + em;
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX()+w-wt);
+      ImGui::TextUnformatted("out");
+      ImGui::SameLine();
+      if (ImNodes::BeginOutputSlot("out", 1)) {
+        gui::NodeSocket();
+        ImNodes::EndSlot();
+      }
+      return;
+    }
   }
+
+  // detects changes of the entity
+  void Watch(File* f) noexcept {
+    if (f == this) return;
+    if (!synced_) SyncSocks(f);
+
+    auto node = File::iface<Node>(f);
+    if (node) return;
+
+    auto factory = File::iface<iface::Factory<Value>>(f);
+    if (factory) {
+      const auto mod = f->lastModified();
+      if (last_mod_ < mod) {
+        out_[0]->Send(ctx_, factory->Create());
+        last_mod_ = mod;
+      }
+      return;
+    }
+  }
+
   template <typename T>
   static void Sync(std::vector<std::shared_ptr<T>>& dst,
                    const std::span<const std::shared_ptr<T>>& src,
@@ -1154,27 +1202,79 @@ class RefNode : public File, public iface::Node {
       }
     }
   }
-  void SyncSocks(Node* n) {
-    try {
-      Sync<InSock>(in_, n->in(), [this](auto str) {
+  void SyncSocks(File* f) noexcept {
+    synced_ = true;
+
+    if (f == this) {
+      in_.clear();
+      out_.clear();
+      return;
+    }
+
+    auto node = File::iface<Node>(f);
+    if (node) {
+      Sync<InSock>(in_, node->in(), [this](auto str) {
              return std::make_shared<Input>(this, str);
            });
-      Sync<OutSock>(out_, n->out(), [this](auto str) {
+      Sync<OutSock>(out_, node->out(), [this](auto str) {
              return std::make_shared<OutSock>(this, str);
            });
+      return;
+    }
 
-    } catch (Exception&) {
+    auto factory = File::iface<iface::Factory<Value>>(f);
+    if (factory) {
+      in_.clear();
+      const auto itr = std::find_if(
+          out_.begin(), out_.end(), [](auto& e) { return e->name() == "out"; });
+      if (itr != out_.end()) {
+        std::swap(out_[0], *itr);
+        out_.resize(1);
+      } else {
+        out_ = { std::make_shared<OutSock>(this, "out") };
+      }
+      return;
+    }
+  }
+  void SyncSocks(const std::string& base) noexcept {
+    try {
+      SyncSocks(&*RefStack().Resolve(base).Resolve(path_));
+    } catch (NotFoundException&) {
+      in_.clear();
+      out_.clear();
     }
   }
 
-  std::shared_ptr<std::monostate> life_;
 
+  // permanentized params
   std::string path_;
 
-  std::shared_ptr<Context> ctx_;
+  // volatile params
+  std::shared_ptr<std::monostate> life_;
+  std::shared_ptr<Context>        ctx_;
+  std::string                     basepath_;
 
+  bool        synced_ = false;
   std::string path_editing_;
+  Time        last_mod_;
 
+
+  // just calls owner's Watch() method
+  class GUI : public iface::GUI {
+   public:
+    GUI(RefNode* o) : owner_(o) { }
+
+    void Update(RefStack& ref) noexcept override {
+      owner_->basepath_ = ref.Stringify();
+      owner_->Watch(&*ref.Resolve(owner_->path_));
+    }
+
+   private:
+    RefNode* owner_;
+  } gui_;
+
+
+  // A watcher for a context on the editor
   class EditContextWatcher final : public ContextWatcher {
    public:
     EditContextWatcher(RefNode* o, const Life& life) noexcept : owner_(o), life_(life) {
@@ -1192,6 +1292,8 @@ class RefNode : public File, public iface::Node {
     std::weak_ptr<std::monostate> life_;
   };
 
+
+  // A watcher for a context of lambda execution
   class LambdaContextWatcher final : public ContextWatcher {
    public:
     LambdaContextWatcher(RefNode* o, const Life& life, const std::shared_ptr<Context>& outctx) :
@@ -1216,20 +1318,8 @@ class RefNode : public File, public iface::Node {
     std::weak_ptr<Context> outctx_;
   };
 
-  class Data final : public Context::Data {
-   public:
-    Data() = delete;
-    Data(RefNode* o, const Life& life, const std::shared_ptr<Context>& ctx) :
-        ctx_(std::make_shared<Context>(
-                std::make_unique<LambdaContextWatcher>(o, life, ctx))) {
-    }
 
-    const std::shared_ptr<Context>& ctx() noexcept { return ctx_; }
-
-   private:
-    std::shared_ptr<Context> ctx_;
-  };
-
+  // An input pin which redirects to the entity
   class Input : public InSock {
    public:
     Input(RefNode* o, std::string_view n) :
@@ -1239,9 +1329,11 @@ class RefNode : public File, public iface::Node {
       if (life_.expired()) return;
 
       try {
-        const auto ref = RefStack().Resolve(owner_->path_);
+        auto node = File::iface<Node>(
+            *RefStack().Resolve(owner_->basepath_).Resolve(owner_->path_));
+        if (!node) throw Exception("missing entity");
 
-        auto dst = FetchNode(nullptr, ref)->FindIn(name());
+        auto dst = node->FindIn(name());
         if (!dst) throw Exception("socket mismatch");
 
         auto& data = ctx->GetOrNew<Data>(owner_, owner_, life_, ctx);
@@ -1253,11 +1345,26 @@ class RefNode : public File, public iface::Node {
     }
 
    private:
+    // One instance per one RefNode.
+    // This holds a lambda context shared with all input pins.
+    class Data final : public Context::Data {
+     public:
+      Data() = delete;
+      Data(RefNode* o, const Life& life, const std::shared_ptr<Context>& ctx) :
+          ctx_(std::make_shared<Context>(
+                  std::make_unique<LambdaContextWatcher>(o, life, ctx))) {
+      }
+
+      const std::shared_ptr<Context>& ctx() noexcept { return ctx_; }
+
+     private:
+      std::shared_ptr<Context> ctx_;
+    };
+
     RefNode* owner_;
 
     std::weak_ptr<std::monostate> life_;
   };
-
 };
 
 } }  // namespace kingtaker
