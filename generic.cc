@@ -19,6 +19,7 @@
 namespace kingtaker {
 namespace {
 
+// A simple implementation of directory file.
 class GenericDir : public File {
  public:
   static inline TypeInfo type_ = TypeInfo::New<GenericDir>(
@@ -106,6 +107,7 @@ class GenericDir : public File {
 
   ItemList items_;
 
+
   class Dir final : public iface::Dir {
    public:
     Dir(GenericDir* owner) : owner_(owner) { }
@@ -137,6 +139,7 @@ class GenericDir : public File {
     GenericDir* owner_;
   } dir_;
 
+
   class GUI final : public iface::GUI, public iface::DirItem {
    public:
     GUI(GenericDir* owner) : DirItem(kTree | kMenu), owner_(owner) { }
@@ -153,142 +156,146 @@ class GenericDir : public File {
       pk.pack("shown"); pk.pack(shown_);
     }
 
-    void Update(File::RefStack& ref) noexcept override {
-      for (auto& child : owner_->items_) {
-        ref.Push({child.first, child.second.get()});
-        File::iface(*child.second, iface::GUI::null()).Update(ref);
-        ref.Pop();
-      }
-
-      if (!shown_) return;
-
-      const auto em = ImGui::GetFontSize();
-      ImGui::SetNextWindowSize({16*em, 12*em}, ImGuiCond_FirstUseEver);
-
-      const auto id = ref.Stringify()+": GenericDir TreeView";
-      if (ImGui::Begin(id.c_str())) {
-        if (ImGui::BeginPopupContextWindow()) {
-          UpdateMenu(ref);
-          ImGui::EndPopup();
-        }
-        UpdateTree(ref);
-      }
-      ImGui::End();
-    }
-    void UpdateMenu(File::RefStack&) noexcept override {
-      ImGui::PushID(this);
-
-      if (ImGui::BeginMenu("New")) {
-        for (const auto& reg : File::registry()) {
-          const auto& type = *reg.second;
-          if (!type.factory() || !type.CheckImplemented<DirItem>()) continue;
-
-          const auto w = 16.f*ImGui::GetFontSize();
-
-          ImGui::SetNextWindowSize({w, 0.f});
-          if (ImGui::BeginMenu(reg.first.c_str())) {
-            constexpr auto kFlags =
-                ImGuiInputTextFlags_EnterReturnsTrue |
-                ImGuiInputTextFlags_AutoSelectAll;
-            static const char* kHint = "input name and enter";
-
-            ImGui::SetNextItemWidth(w);
-            ImGui::SetKeyboardFocusHere();
-
-            const bool enter =
-                ImGui::InputTextWithHint("##NameForNew", kHint, &name_for_new_, kFlags);
-
-            const bool dup = !!owner_->Find(name_for_new_);
-            if (dup) {
-              ImGui::Bullet();
-              ImGui::Text("name duplication");
-            }
-            const bool valid = iface::Dir::ValidateName(name_for_new_);
-            if (!valid) {
-              ImGui::Bullet();
-              ImGui::Text("invalid format");
-            }
-
-            if (enter && !dup && valid) {
-              Queue::main().Push(
-                  [&dir = owner_->dir_, name = name_for_new_, &type]() {
-                    dir.Add(name, type.Create());
-                  });
-            }
-            ImGui::EndMenu();
-          }
-          if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", type.desc().c_str());
-          }
-        }
-
-        ImGui::EndMenu();
-      }
-
-      ImGui::Separator();
-      ImGui::MenuItem("TreeView", nullptr, &shown_);
-
-      ImGui::PopID();
-    }
-    void UpdateTree(File::RefStack& ref) noexcept override {
-      for (auto& child : owner_->items_) {
-        ref.Push({child.first, child.second.get()});
-        UpdateItem(ref, child.second.get());
-        ref.Pop();
-      }
-    }
+    void Update(RefStack& ref) noexcept override;
+    void UpdateMenu(RefStack&) noexcept override;
+    void UpdateTree(RefStack& ref) noexcept override;
+    void UpdateItem(RefStack& ref, File* f) noexcept;
 
    private:
-    void UpdateItem(RefStack& ref, File* f) noexcept {
-      ImGuiTreeNodeFlags flags =
-          ImGuiTreeNodeFlags_NoTreePushOnOpen |
-          ImGuiTreeNodeFlags_SpanFullWidth;
+    GenericDir* owner_;
 
-      auto* ditem = File::iface<iface::DirItem>(f);
-      if (ditem && !(ditem->flags() & kTree)) {
-        flags |= ImGuiTreeNodeFlags_Leaf;
+    // permanentized params
+    bool shown_ = false;
+
+    // volatile params
+    std::string name_for_new_;
+  } gui_;
+};
+void GenericDir::GUI::Update(File::RefStack& ref) noexcept {
+  for (auto& child : owner_->items_) {
+    ref.Push({child.first, child.second.get()});
+    File::iface(*child.second, iface::GUI::null()).Update(ref);
+    ref.Pop();
+  }
+
+  if (!shown_) return;
+
+  const auto em = ImGui::GetFontSize();
+  ImGui::SetNextWindowSize({16*em, 12*em}, ImGuiCond_FirstUseEver);
+
+  const auto id = ref.Stringify()+": GenericDir TreeView";
+  if (ImGui::Begin(id.c_str())) {
+    if (ImGui::BeginPopupContextWindow()) {
+      UpdateMenu(ref);
+      ImGui::EndPopup();
+    }
+    UpdateTree(ref);
+  }
+  ImGui::End();
+}
+void GenericDir::GUI::UpdateMenu(File::RefStack&) noexcept {
+  ImGui::PushID(this);
+
+  if (ImGui::BeginMenu("New")) {
+    for (const auto& reg : File::registry()) {
+      const auto& type = *reg.second;
+      if (!type.factory() || !type.CheckImplemented<DirItem>()) continue;
+
+      const auto w = 16.f*ImGui::GetFontSize();
+
+      ImGui::SetNextWindowSize({w, 0.f});
+      if (ImGui::BeginMenu(reg.first.c_str())) {
+        constexpr auto kFlags =
+            ImGuiInputTextFlags_EnterReturnsTrue |
+            ImGuiInputTextFlags_AutoSelectAll;
+        static const char* kHint = "input name and enter";
+
+        ImGui::SetNextItemWidth(w);
+        ImGui::SetKeyboardFocusHere();
+
+        const bool enter =
+            ImGui::InputTextWithHint("##NameForNew", kHint, &name_for_new_, kFlags);
+
+        const bool dup = !!owner_->Find(name_for_new_);
+        if (dup) {
+          ImGui::Bullet();
+          ImGui::Text("name duplication");
+        }
+        const bool valid = iface::Dir::ValidateName(name_for_new_);
+        if (!valid) {
+          ImGui::Bullet();
+          ImGui::Text("invalid format");
+        }
+
+        if (enter && !dup && valid) {
+          Queue::main().Push(
+              [&dir = owner_->dir_, name = name_for_new_, &type]() {
+                dir.Add(name, type.Create());
+              });
+        }
+        ImGui::EndMenu();
       }
-
-      const bool open = ImGui::TreeNodeEx(f, flags, "%s", ref.top().name().c_str());
       if (ImGui::IsItemHovered()) {
-        ImGui::BeginTooltip();
-        ImGui::Text("%s", f->type().name().c_str());
-        ImGui::Text("%s", ref.Stringify().c_str());
-        if (ditem && (ditem->flags() & kTooltip)) {
-          ditem->UpdateTooltip(ref);
-        }
-        ImGui::EndTooltip();
-      }
-      if (ImGui::BeginPopupContextItem()) {
-        if (ImGui::MenuItem("Remove")) {
-          const std::string name = ref.top().name();
-          Queue::main().Push([this, name]() { owner_->dir_.Remove(name); });
-        }
-        if (ImGui::MenuItem("Rename")) {
-          Queue::main().Push([]() { throw Exception("not implemented"); });
-        }
-        if (ditem && (ditem->flags() & kMenu)) {
-          ImGui::Separator();
-          ditem->UpdateMenu(ref);
-        }
-        ImGui::EndPopup();
-      }
-      if (open) {
-        ImGui::TreePush(f);
-        if (ditem && (ditem->flags() & kTree)) {
-          ditem->UpdateTree(ref);
-        }
-        ImGui::TreePop();
+        ImGui::SetTooltip("%s", type.desc().c_str());
       }
     }
 
-    GenericDir* owner_;
+    ImGui::EndMenu();
+  }
 
-    std::string name_for_new_;
+  ImGui::Separator();
+  ImGui::MenuItem("TreeView", nullptr, &shown_);
 
-    // values to be serialized
-    bool shown_ = false;
-  } gui_;
-};
+  ImGui::PopID();
+}
+void GenericDir::GUI::UpdateTree(File::RefStack& ref) noexcept {
+  for (auto& child : owner_->items_) {
+    ref.Push({child.first, child.second.get()});
+    UpdateItem(ref, child.second.get());
+    ref.Pop();
+  }
+}
+void GenericDir::GUI::UpdateItem(File::RefStack& ref, File* f) noexcept {
+  ImGuiTreeNodeFlags flags =
+      ImGuiTreeNodeFlags_NoTreePushOnOpen |
+      ImGuiTreeNodeFlags_SpanFullWidth;
+
+  auto* ditem = File::iface<iface::DirItem>(f);
+  if (ditem && !(ditem->flags() & kTree)) {
+    flags |= ImGuiTreeNodeFlags_Leaf;
+  }
+
+  const bool open = ImGui::TreeNodeEx(f, flags, "%s", ref.top().name().c_str());
+  if (ImGui::IsItemHovered()) {
+    ImGui::BeginTooltip();
+    ImGui::Text("%s", f->type().name().c_str());
+    ImGui::Text("%s", ref.Stringify().c_str());
+    if (ditem && (ditem->flags() & kTooltip)) {
+      ditem->UpdateTooltip(ref);
+    }
+    ImGui::EndTooltip();
+  }
+  if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::MenuItem("Remove")) {
+      const std::string name = ref.top().name();
+      Queue::main().Push([this, name]() { owner_->dir_.Remove(name); });
+    }
+    if (ImGui::MenuItem("Rename")) {
+      Queue::main().Push([]() { throw Exception("not implemented"); });
+    }
+    if (ditem && (ditem->flags() & kMenu)) {
+      ImGui::Separator();
+      ditem->UpdateMenu(ref);
+    }
+    ImGui::EndPopup();
+  }
+  if (open) {
+    ImGui::TreePush(f);
+    if (ditem && (ditem->flags() & kTree)) {
+      ditem->UpdateTree(ref);
+    }
+    ImGui::TreePop();
+  }
+}
 
 } }  // namespace kingtaker

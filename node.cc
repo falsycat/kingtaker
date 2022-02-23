@@ -30,6 +30,7 @@
 namespace kingtaker {
 namespace {
 
+// holds nodes and their links and transmits input and output to them
 class NodeNet : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<NodeNet>(
@@ -45,10 +46,8 @@ class NodeNet : public File, public iface::Node {
   };
   using ConnList = std::vector<Conn>;
 
-  struct NodeHolder;
-  using NodeHolderList    = std::vector<std::unique_ptr<NodeHolder>>;
-  using NodeHolderRefList = std::vector<NodeHolder*>;
 
+  // wrapper struct for node file
   struct NodeHolder final {
    public:
     enum Type { kGeneric, kInput, kOutput };
@@ -169,74 +168,37 @@ class NodeNet : public File, public iface::Node {
       if (inter) inter->Teardown(owner);
     }
 
-    void UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
-      ref.Push({std::to_string(id_), file_.get()});
-      ImGui::PushID(file_.get());
-
-      if (first_) {
-        ImNodes::AutoPositionNode(this);
-        first_ = false;
-      }
-
-      if (ImNodes::BeginNode(this, &pos_, &select_)) {
-        entity_->Update(ref, owner->ctx_);
-      }
-      ImNodes::EndNode();
-
-      gui::NodeCanvasResetZoom();
-      if (ImGui::BeginPopupContextItem()) {
-        if (ImGui::MenuItem("Clone")) {
-          owner->history_.AddNodeIf(Clone(owner->next_id_++));
-        }
-        if (ImGui::MenuItem("Remove")) {
-          owner->history_.RemoveNodes({this});
-        }
-        if (entity_->flags() & Node::kMenu) {
-          ImGui::Separator();
-          entity_->UpdateMenu(ref, owner->ctx_);
-        }
-        ImGui::EndPopup();
-      }
-      gui::NodeCanvasSetZoom();
-
-      ImGui::PopID();
-      ref.Pop();
-    }
-    void UpdateWindow(RefStack& ref) noexcept {
-      ref.Push({std::to_string(id_), file_.get()});
-      ImGui::PushID(file_.get());
-
-      File::iface<iface::GUI>(*file_, iface::GUI::null()).Update(ref);
-
-      ImGui::PopID();
-      ref.Pop();
-    }
+    void UpdateNode(NodeNet* owner, RefStack& ref) noexcept;
+    void UpdateWindow(RefStack& ref) noexcept;
 
     size_t id() const noexcept { return id_; }
     File& file() const noexcept { return *file_; }
     Node& entity() const noexcept { return *entity_; }
 
    private:
+    // permanentized
     size_t id_;
 
     std::unique_ptr<File> file_;
+    Node*                 entity_;
 
-    Node* entity_;
+    ImVec2 pos_    = {0, 0};
+    bool   select_ = false;
 
-    ImVec2 pos_ = {0, 0};
-
-    bool select_ = false;
-
+    // volatile
     bool first_ = false;
   };
+  using NodeHolderList    = std::vector<std::unique_ptr<NodeHolder>>;
+  using NodeHolderRefList = std::vector<NodeHolder*>;
+
 
   NodeNet() noexcept : NodeNet(Clock::now()) { }
   NodeNet(Time lastmod,
           NodeHolderList&& nodes = {},
           size_t next = 0) noexcept :
       File(&type_), Node(kNone),
-      lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
       ctx_(std::make_shared<Context>()),
+      lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
       gui_(this), history_(this) {
   }
 
@@ -355,62 +317,7 @@ class NodeNet : public File, public iface::Node {
     }
   }
 
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override {
-    const auto em   = ImGui::GetFontSize();
-    const auto line = ImGui::GetCursorPosY();
-    ImGui::NewLine();
-
-    ImGui::BeginGroup();
-    if (in_.size() || out_.size()) {
-      ImGui::BeginGroup();
-      for (auto& in : in_) {
-        const auto c = in->name().c_str();
-        if (ImNodes::BeginInputSlot(c, 1)) {
-          gui::NodeSocket();
-          ImNodes::EndSlot();
-        }
-        ImGui::SameLine();
-        ImGui::TextUnformatted(c);
-      }
-      ImGui::EndGroup();
-
-      ImGui::SameLine();
-      ImGui::Dummy({2*em, 1});
-      ImGui::SameLine();
-
-      float wmax = 0;
-      for (auto& out : out_) {
-        wmax = std::max(wmax, ImGui::CalcTextSize(out->name().c_str()).x);
-      }
-      ImGui::BeginGroup();
-      for (auto& out : out_) {
-        const auto c = out->name().c_str();
-        const auto w = ImGui::CalcTextSize(c).x;
-
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (wmax-w));
-        ImGui::TextUnformatted(c);
-
-        ImGui::SameLine();
-        if (ImNodes::BeginOutputSlot(c, 1)) {
-          gui::NodeSocket();
-          ImNodes::EndSlot();
-        }
-      }
-      ImGui::EndGroup();
-    } else {
-      ImGui::TextDisabled("No I/O");
-    }
-    ImGui::EndGroup();
-
-    static const char* title = "NodeNet";
-    const auto w  = ImGui::GetItemRectSize().x;
-    const auto tw = ImGui::CalcTextSize(title).x;
-    if (w > tw) {
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w-tw)/2);
-    }
-    ImGui::SetCursorPosY(line);
-    ImGui::TextUnformatted("NodeNet");
-  }
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   Time lastModified() const noexcept override {
     return lastmod_;
@@ -433,13 +340,14 @@ class NodeNet : public File, public iface::Node {
     std::abort();
   }
 
-  Time lastmod_;
-
-  NodeHolderList nodes_;
-
-  size_t next_id_ = 0;
 
   std::shared_ptr<Context> ctx_;
+
+  // permanentized params
+  Time           lastmod_;
+  NodeHolderList nodes_;
+  size_t         next_id_ = 0;
+
 
   class GUI final : public iface::GUI, public iface::DirItem {
    public:
@@ -476,161 +384,25 @@ class NodeNet : public File, public iface::Node {
       }
     }
 
-    void Update(RefStack& ref) noexcept override {
-      for (auto& h : owner_->nodes_) {
-        h->UpdateWindow(ref);
-      }
+    void Update(RefStack&) noexcept override;
+    void UpdateMenu(RefStack&) noexcept override;
+    void UpdateCanvas(RefStack&) noexcept;
 
-      if (shown_) {
-        constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-
-        ImGui::SetNextWindowSize(ImVec2 {24.f, 24.f}*ImGui::GetFontSize(),
-                                 ImGuiCond_FirstUseEver);
-
-        const auto id = ref.Stringify() + ": NodeNet Editor";
-        if (ImGui::Begin(id.c_str(), nullptr, kFlags)) {
-          UpdateCanvas(ref);
-        }
-        ImGui::End();
-      }
-    }
-    void UpdateMenu(RefStack&) noexcept override {
-      ImGui::MenuItem("NodeNet Editor", nullptr, &shown_);
-    }
-
-    void UpdateCanvas(RefStack& ref) noexcept {
-      ImNodes::BeginCanvas(&canvas_);
-      gui::NodeCanvasSetZoom();
-
-      gui::NodeCanvasResetZoom();
-      if (ImGui::BeginPopupContextItem()) {
-        if (ImGui::BeginMenu("New")) {
-          for (auto& p : File::registry()) {
-            auto& t = *p.second;
-            if (!t.factory() || !t.CheckImplemented<Node>()) continue;
-            if (ImGui::MenuItem(t.name().c_str())) {
-              owner_->history_.AddNodeIf(
-                  NodeHolder::Create(owner_->next_id_++, t.Create()));
-            }
-            if (ImGui::IsItemHovered()) {
-              ImGui::SetTooltip("%s", t.desc().c_str());
-            }
-          }
-          ImGui::Separator();
-          if (ImGui::BeginMenu("Input")) {
-            UpdateNewIO<InputNode>(owner_->in_);
-            ImGui::EndMenu();
-          }
-          if (ImGui::BeginMenu("Output")) {
-            UpdateNewIO<OutputNode>(owner_->out_);
-            ImGui::EndMenu();
-          }
-          ImGui::EndMenu();
-        }
-
-        ImGui::Separator();
-        if (ImGui::MenuItem("Undo")) {
-          owner_->history_.Move(-1);
-        }
-        if (ImGui::MenuItem("Redo")) {
-          owner_->history_.Move(1);
-        }
-
-        ImGui::Separator();
-        if (ImGui::MenuItem("Clear history")) {
-          owner_->history_.Clear();
-        }
-        if (ImGui::MenuItem("Clear entire context")) {
-          Queue::main().Push([this]() { owner_->ctx_ = std::make_shared<Context>(); });
-        }
-        ImGui::EndPopup();
-      }
-      gui::NodeCanvasSetZoom();
-
-      for (auto& h : owner_->nodes_) {
-        h->UpdateNode(owner_, ref);
-      }
-
-      ConnList rm_conns;
-      for (auto& h : owner_->nodes_) {
-        auto node = &h->entity();
-        for (auto src : node->out()) {
-          for (auto w_dst : src->dst()) {
-            auto dst = w_dst.lock();
-            if (!dst) continue;
-
-            auto& srch = owner_->FindHolder(src->owner());
-            auto  srcs = src->name().c_str();
-            auto& dsth = owner_->FindHolder(dst->owner());
-            auto  dsts = dst->name().c_str();
-            if (!ImNodes::Connection(&dsth, dsts, &srch, srcs)) {
-              rm_conns.push_back({dst, src});
-            }
-          }
-        }
-      }
-      if (rm_conns.size()) {
-        owner_->history_.Unlink(std::move(rm_conns));
-      }
-
-      void* inptr;
-      void* outptr;
-      const char* srcs;
-      const char* dsts;
-      if (ImNodes::GetNewConnection(&inptr, &dsts, &outptr, &srcs)) {
-        auto dstn = reinterpret_cast<NodeHolder*>(inptr);
-        auto srcn = reinterpret_cast<NodeHolder*>(outptr);
-
-        auto src = srcn->entity().FindOut(srcs);
-        auto dst = dstn->entity().FindIn(dsts);
-        if (src && dst) owner_->history_.Link({{dst, src}});
-      }
-
-      gui::NodeCanvasResetZoom();
-      ImNodes::EndCanvas();
-    }
-
+    // display input popup for creating new IO pins
     template <typename T, typename U>
-    void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
-      constexpr auto kFlags =
-          ImGuiInputTextFlags_EnterReturnsTrue |
-          ImGuiInputTextFlags_AutoSelectAll;
-
-      static const char* kHint = "enter to add...";
-
-      ImGui::SetKeyboardFocusHere();
-      const bool submit = ImGui::InputTextWithHint("##newIO", kHint, &io_name_, kFlags);
-
-      const bool empty = io_name_.empty();
-      const bool dup   = list.end() !=
-          std::find_if(list.begin(), list.end(),
-                       [this](auto& e) { return e->name() == io_name_; });
-
-      if (empty) {
-        ImGui::Bullet();
-        ImGui::TextUnformatted("empty name");
-      }
-      if (dup) {
-        ImGui::Bullet();
-        ImGui::TextUnformatted("name duplication");
-      }
-      if (submit && !empty && !dup) {
-        owner_->history_.AddNodeIf(
-            NodeHolder::Create(owner_->next_id_++, std::make_unique<T>(io_name_)));
-        io_name_ = "";
-        ImGui::CloseCurrentPopup();
-      }
-    }
+    void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
 
    private:
     NodeNet* owner_;
-
     ImNodes::CanvasState canvas_;
 
+    // permanentized params
     bool shown_ = false;
 
+    // volatile params
     std::string io_name_;
   } gui_;
+
 
   class History : public iface::SimpleHistory<> {
    public:
@@ -644,20 +416,16 @@ class NodeNet : public File, public iface::Node {
       AddNodes(std::move(list));
     }
     void AddNodes(NodeHolderList&& h) noexcept {
-      prev_ = {};
       Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
     }
     void RemoveNodes(NodeHolderRefList&& h) noexcept {
-      prev_ = {};
       Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
     }
     void Link(ConnList&& conns) noexcept {
-      prev_ = {};
       Queue(std::make_unique<LinkSwapCommand>(
               owner_, LinkSwapCommand::kLink, std::move(conns)));
     }
     void Unlink(ConnList&& conns) noexcept {
-      prev_ = {};
       Queue(std::make_unique<LinkSwapCommand>(
               owner_, LinkSwapCommand::kUnlink, std::move(conns)));
     }
@@ -665,6 +433,7 @@ class NodeNet : public File, public iface::Node {
    private:
     NodeNet* owner_;
 
+    // a command for link creation or removal
     class LinkSwapCommand : public Command {
      public:
       enum Type {
@@ -690,7 +459,6 @@ class NodeNet : public File, public iface::Node {
           }
         }
       }
-
       void Apply() override {
         switch (type_) {
         case kLink  : Link();   break;
@@ -706,11 +474,11 @@ class NodeNet : public File, public iface::Node {
 
      private:
       NodeNet* owner_;
-
-      Type type_;
-
+      Type     type_;
       ConnList conns_;
     };
+
+    // a command for node creation or removal
     class SwapCommand : public Command {
      public:
       SwapCommand(NodeNet* o, NodeHolderList&& h = {}) :
@@ -780,18 +548,14 @@ class NodeNet : public File, public iface::Node {
         links_.emplace(owner_, LinkSwapCommand::kUnlink, std::move(conns));
       }
 
-      NodeNet* owner_;
-
-      NodeHolderList holders_;
-
-      NodeHolderRefList refs_;
-
+      NodeNet*                       owner_;
+      NodeHolderList                 holders_;
+      NodeHolderRefList              refs_;
       std::optional<LinkSwapCommand> links_;
     };
-
-    std::variant<std::monostate> prev_;
   } history_;
 
+  // an interface for nodes depends on NodeNet
   class InternalNode {
    public:
     InternalNode() = default;
@@ -801,9 +565,12 @@ class NodeNet : public File, public iface::Node {
     virtual void Teardown(NodeNet*) noexcept { }
   };
 
+  // common implementation for IO pins
+  // T must be InSock or OutSock
   template <typename T>
   class AbstractIONode : public File, public Node, public InternalNode {
    public:
+    // An interface of IO sockets which has a list of attached nodes.
     class CtxSock : public T {
      public:
       CtxSock(NodeNet* owner, std::string_view name) : T(owner, name) {
@@ -820,6 +587,8 @@ class NodeNet : public File, public iface::Node {
      protected:
       std::unordered_set<Node*> nodes_;
     };
+
+    // data struct registered to Node::Context
     struct Data final {
      public:
       Data() = default;
@@ -835,6 +604,7 @@ class NodeNet : public File, public iface::Node {
       pk.pack(name_);
     }
 
+    // called when this is inserted to the NodeNet
     void Setup(NodeNet* owner) noexcept override {
       auto& list = GetList(owner);
       auto itr = std::find_if(
@@ -854,6 +624,7 @@ class NodeNet : public File, public iface::Node {
       assert(data_->sock);
       data_->sock->Attach(this);
     }
+    // called when this is removed from the NodeNet
     void Teardown(NodeNet* owner) noexcept override {
       auto& list = GetList(owner);
 
@@ -895,38 +666,21 @@ class NodeNet : public File, public iface::Node {
       return std::make_unique<InputNode>(name_);
     }
 
-    void Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept override {
-      auto owner = ref.FindParent<NodeNet>();
-      if (!owner) {
-        ImGui::TextUnformatted("INPUT");
-        ImGui::TextUnformatted("ERROR X(");
-        ImGui::TextUnformatted("This node must be used at inside of NodeNet");
-        return;
-      }
-
-      ImGui::Text("IN> %s", data_->sock->name().c_str());
-
-      ImGui::SameLine();
-      if (ImNodes::BeginOutputSlot("out", 1)) {
-        gui::NodeSocket();
-        ImNodes::EndSlot();
-      }
-    }
+    void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
    private:
-    class CtxInSock : public CtxSock {
-     public:
-      CtxInSock(NodeNet* o, std::string_view n) : CtxSock(o, n) {
-      }
-      void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-        for (auto n : nodes_) n->out()[0]->Send(ctx, Value(v));
-      }
-    };
-
     std::vector<std::shared_ptr<InSock>>& GetList(NodeNet* owner) const noexcept override {
       return owner->node_in_();
     }
     std::shared_ptr<CtxSock> Create(NodeNet* o, std::string_view n) const noexcept override {
+      class CtxInSock : public CtxSock {
+       public:
+        CtxInSock(NodeNet* o, std::string_view n) : CtxSock(o, n) {
+        }
+        void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+          for (auto n : nodes_) n->out()[0]->Send(ctx, Value(v));
+        }
+      };
       return std::make_shared<CtxInSock>(o, n);
     }
   };
@@ -934,6 +688,19 @@ class NodeNet : public File, public iface::Node {
    public:
     static inline TypeInfo type_ = TypeInfo::New<OutputNode>(
         "NodeNet_OutputNode", "output receiver in NodeNet", {});
+
+    // takes input value and send it to CtxSock stored in Node::Context
+    class Receiver : public InSock {
+     public:
+      Receiver(OutputNode* o) noexcept : InSock(o, "in"), data_(o->data_) { }
+
+      void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+        if (data_->sock) data_->sock->Send(ctx, Value(v));
+      }
+
+     private:
+      std::shared_ptr<Data> data_;
+    };
 
     OutputNode(std::string_view name) noexcept : AbstractIONode(&type_, name) {
       in_.emplace_back(new Receiver(this));
@@ -946,57 +713,304 @@ class NodeNet : public File, public iface::Node {
       return std::make_unique<OutputNode>(name_);
     }
 
-    void Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept override {
-      auto owner = ref.FindParent<NodeNet>();
-      if (!owner) {
-        ImGui::TextUnformatted("OUTPUT");
-        ImGui::TextUnformatted("ERROR X(");
-        ImGui::TextUnformatted("This node must be used at inside of NodeNet");
-        return;
-      }
+    void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
-      if (ImNodes::BeginInputSlot("in", 1)) {
-        gui::NodeSocket();
-        ImNodes::EndSlot();
-      }
-
-      ImGui::SameLine();
-      ImGui::Text("%s >OUT", data_->sock->name().c_str());
-    }
-
-   protected:
-    class CtxOutSock : public CtxSock {
-     public:
-      CtxOutSock(NodeNet* o, std::string_view n) : CtxSock(o, n) {
-      }
-      void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-        ctx->Receive(name(), Value(v));
-        CtxSock::Send(ctx, std::move(v));
-      }
-    };
-
+   private:
     std::vector<std::shared_ptr<OutSock>>& GetList(NodeNet* owner) const noexcept override {
       return owner->node_out_();
     }
     std::shared_ptr<CtxSock> Create(NodeNet* o, std::string_view n) const noexcept override {
+      class CtxOutSock : public CtxSock {
+       public:
+        CtxOutSock(NodeNet* o, std::string_view n) : CtxSock(o, n) {
+        }
+        void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+          ctx->Receive(name(), Value(v));
+          CtxSock::Send(ctx, std::move(v));
+        }
+      };
       return std::make_shared<CtxOutSock>(o, n);
     }
-
-   private:
-    class Receiver : public InSock {
-     public:
-      Receiver(OutputNode* o) noexcept : InSock(o, "in"), data_(o->data_) { }
-
-      void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-        if (data_->sock) data_->sock->Send(ctx, Value(v));
-      }
-
-     private:
-      std::shared_ptr<Data> data_;
-    };
   };
 };
+void NodeNet::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+  const auto em   = ImGui::GetFontSize();
+  const auto line = ImGui::GetCursorPosY();
+  ImGui::NewLine();
 
+  ImGui::BeginGroup();
+  if (in_.size() || out_.size()) {
+    ImGui::BeginGroup();
+    for (auto& in : in_) {
+      const auto c = in->name().c_str();
+      if (ImNodes::BeginInputSlot(c, 1)) {
+        gui::NodeSocket();
+        ImNodes::EndSlot();
+      }
+      ImGui::SameLine();
+      ImGui::TextUnformatted(c);
+    }
+    ImGui::EndGroup();
+
+    ImGui::SameLine();
+    ImGui::Dummy({2*em, 1});
+    ImGui::SameLine();
+
+    float wmax = 0;
+    for (auto& out : out_) {
+      wmax = std::max(wmax, ImGui::CalcTextSize(out->name().c_str()).x);
+    }
+    ImGui::BeginGroup();
+    for (auto& out : out_) {
+      const auto c = out->name().c_str();
+      const auto w = ImGui::CalcTextSize(c).x;
+
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (wmax-w));
+      ImGui::TextUnformatted(c);
+
+      ImGui::SameLine();
+      if (ImNodes::BeginOutputSlot(c, 1)) {
+        gui::NodeSocket();
+        ImNodes::EndSlot();
+      }
+    }
+    ImGui::EndGroup();
+  } else {
+    ImGui::TextDisabled("No I/O");
+  }
+  ImGui::EndGroup();
+
+  static const char* title = "NodeNet";
+  const auto w  = ImGui::GetItemRectSize().x;
+  const auto tw = ImGui::CalcTextSize(title).x;
+  if (w > tw) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w-tw)/2);
+  }
+  ImGui::SetCursorPosY(line);
+  ImGui::TextUnformatted("NodeNet");
+}
+void NodeNet::NodeHolder::UpdateWindow(RefStack& ref) noexcept {
+  ref.Push({std::to_string(id_), file_.get()});
+  ImGui::PushID(file_.get());
+
+  File::iface<iface::GUI>(*file_, iface::GUI::null()).Update(ref);
+
+  ImGui::PopID();
+  ref.Pop();
+}
+void NodeNet::NodeHolder::UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
+  ref.Push({std::to_string(id_), file_.get()});
+  ImGui::PushID(file_.get());
+
+  if (first_) {
+    ImNodes::AutoPositionNode(this);
+    first_ = false;
+  }
+
+  if (ImNodes::BeginNode(this, &pos_, &select_)) {
+    entity_->Update(ref, owner->ctx_);
+  }
+  ImNodes::EndNode();
+
+  gui::NodeCanvasResetZoom();
+  if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::MenuItem("Clone")) {
+      owner->history_.AddNodeIf(Clone(owner->next_id_++));
+    }
+    if (ImGui::MenuItem("Remove")) {
+      owner->history_.RemoveNodes({this});
+    }
+    if (entity_->flags() & Node::kMenu) {
+      ImGui::Separator();
+      entity_->UpdateMenu(ref, owner->ctx_);
+    }
+    ImGui::EndPopup();
+  }
+  gui::NodeCanvasSetZoom();
+
+  ImGui::PopID();
+  ref.Pop();
+}
+void NodeNet::GUI::Update(RefStack& ref) noexcept {
+  for (auto& h : owner_->nodes_) {
+    h->UpdateWindow(ref);
+  }
+
+  if (shown_) {
+    constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+
+    ImGui::SetNextWindowSize(ImVec2 {24.f, 24.f}*ImGui::GetFontSize(),
+                             ImGuiCond_FirstUseEver);
+
+    const auto id = ref.Stringify() + ": NodeNet Editor";
+    if (ImGui::Begin(id.c_str(), nullptr, kFlags)) {
+      UpdateCanvas(ref);
+    }
+    ImGui::End();
+  }
+}
+void NodeNet::GUI::UpdateMenu(RefStack&) noexcept {
+  ImGui::MenuItem("NodeNet Editor", nullptr, &shown_);
+}
+void NodeNet::GUI::UpdateCanvas(RefStack& ref) noexcept {
+  ImNodes::BeginCanvas(&canvas_);
+  gui::NodeCanvasSetZoom();
+
+  gui::NodeCanvasResetZoom();
+  if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::BeginMenu("New")) {
+      for (auto& p : File::registry()) {
+        auto& t = *p.second;
+        if (!t.factory() || !t.CheckImplemented<Node>()) continue;
+        if (ImGui::MenuItem(t.name().c_str())) {
+          owner_->history_.AddNodeIf(
+              NodeHolder::Create(owner_->next_id_++, t.Create()));
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip("%s", t.desc().c_str());
+        }
+      }
+      ImGui::Separator();
+      if (ImGui::BeginMenu("Input")) {
+        UpdateNewIO<InputNode>(owner_->in_);
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Output")) {
+        UpdateNewIO<OutputNode>(owner_->out_);
+        ImGui::EndMenu();
+      }
+      ImGui::EndMenu();
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Undo")) {
+      owner_->history_.Move(-1);
+    }
+    if (ImGui::MenuItem("Redo")) {
+      owner_->history_.Move(1);
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Clear history")) {
+      owner_->history_.Clear();
+    }
+    if (ImGui::MenuItem("Clear entire context")) {
+      Queue::main().Push([this]() { owner_->ctx_ = std::make_shared<Context>(); });
+    }
+    ImGui::EndPopup();
+  }
+  gui::NodeCanvasSetZoom();
+
+  for (auto& h : owner_->nodes_) {
+    h->UpdateNode(owner_, ref);
+  }
+
+  ConnList rm_conns;
+  for (auto& h : owner_->nodes_) {
+    auto node = &h->entity();
+    for (auto src : node->out()) {
+      for (auto w_dst : src->dst()) {
+        auto dst = w_dst.lock();
+        if (!dst) continue;
+
+        auto& srch = owner_->FindHolder(src->owner());
+        auto  srcs = src->name().c_str();
+        auto& dsth = owner_->FindHolder(dst->owner());
+        auto  dsts = dst->name().c_str();
+        if (!ImNodes::Connection(&dsth, dsts, &srch, srcs)) {
+          rm_conns.push_back({dst, src});
+        }
+      }
+    }
+  }
+  if (rm_conns.size()) {
+    owner_->history_.Unlink(std::move(rm_conns));
+  }
+
+  void* inptr;
+  void* outptr;
+  const char* srcs;
+  const char* dsts;
+  if (ImNodes::GetNewConnection(&inptr, &dsts, &outptr, &srcs)) {
+    auto dstn = reinterpret_cast<NodeHolder*>(inptr);
+    auto srcn = reinterpret_cast<NodeHolder*>(outptr);
+
+    auto src = srcn->entity().FindOut(srcs);
+    auto dst = dstn->entity().FindIn(dsts);
+    if (src && dst) owner_->history_.Link({{dst, src}});
+  }
+
+  gui::NodeCanvasResetZoom();
+  ImNodes::EndCanvas();
+}
+template <typename T, typename U>
+void NodeNet::GUI::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
+  constexpr auto kFlags =
+      ImGuiInputTextFlags_EnterReturnsTrue |
+      ImGuiInputTextFlags_AutoSelectAll;
+
+  static const char* kHint = "enter to add...";
+
+  ImGui::SetKeyboardFocusHere();
+  const bool submit = ImGui::InputTextWithHint("##newIO", kHint, &io_name_, kFlags);
+
+  const bool empty = io_name_.empty();
+  const bool dup   = list.end() !=
+      std::find_if(list.begin(), list.end(),
+                   [this](auto& e) { return e->name() == io_name_; });
+
+  if (empty) {
+    ImGui::Bullet();
+    ImGui::TextUnformatted("empty name");
+  }
+  if (dup) {
+    ImGui::Bullet();
+    ImGui::TextUnformatted("name duplication");
+  }
+  if (submit && !empty && !dup) {
+    owner_->history_.AddNodeIf(
+        NodeHolder::Create(owner_->next_id_++, std::make_unique<T>(io_name_)));
+    io_name_ = "";
+    ImGui::CloseCurrentPopup();
+  }
+}
+void NodeNet::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  auto owner = ref.FindParent<NodeNet>();
+  if (!owner) {
+    ImGui::TextUnformatted("INPUT");
+    ImGui::TextUnformatted("ERROR X(");
+    ImGui::TextUnformatted("This node must be used at inside of NodeNet");
+    return;
+  }
+
+  ImGui::Text("IN> %s", data_->sock->name().c_str());
+
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+}
+void NodeNet::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  auto owner = ref.FindParent<NodeNet>();
+  if (!owner) {
+    ImGui::TextUnformatted("OUTPUT");
+    ImGui::TextUnformatted("ERROR X(");
+    ImGui::TextUnformatted("This node must be used at inside of NodeNet");
+    return;
+  }
+
+  if (ImNodes::BeginInputSlot("in", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+
+  ImGui::SameLine();
+  ImGui::Text("%s >OUT", data_->sock->name().c_str());
+}
+
+
+// RefNode allows other nodes to be treated as lambda
 class RefNode : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<RefNode>(
@@ -1045,126 +1059,15 @@ class RefNode : public File, public iface::Node {
     return std::make_unique<RefNode>(path_);
   }
 
-  void Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept override {
-    ImGui::TextUnformatted("REF");
-
-    const auto line = ImGui::GetCursorPosY();
-    ImGui::SetCursorPosY(line + ImGui::GetFrameHeightWithSpacing());
-
-    auto f = &*ref.Resolve(path_);
-    ImGui::BeginGroup();
-    if (f == this || ref.size() > 256) {
-      ImGui::TextDisabled("recursive reference");
-      in_.clear();
-      out_.clear();
-    } else {
-      ref.Push({"@", f});
-      ImGui::PushID(f);
-      UpdateEntity(ref, f);
-      ImGui::PopID();
-      ref.Pop();
-    }
-    ImGui::EndGroup();
-
-    ImGui::SetCursorPosY(line);
-    ImGui::Button(("-> "s+(path_.size()? path_: "(empty)"s)).c_str(),
-                  {ImGui::GetItemRectSize().x, 0});
-    if (path_.size() && ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", path_.c_str());
-    }
-
-    gui::NodeCanvasResetZoom();
-    if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-      UpdateMenu(ref, ctx_);
-      ImGui::EndPopup();
-    }
-    gui::NodeCanvasSetZoom();
-  }
-  void UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept override {
-    if (ImGui::BeginMenu("Change")) {
-      constexpr auto kFlags = 
-          ImGuiInputTextFlags_EnterReturnsTrue |
-          ImGuiInputTextFlags_AutoSelectAll;
-      static const char* const kHint = "enter new path...";
-
-      ImGui::SetKeyboardFocusHere();
-      const bool submit = ImGui::InputTextWithHint("##renamer", kHint, &path_editing_, kFlags);
-      if (ImGui::IsItemActivated()) path_editing_ = path_;
-
-      try {
-        auto newref = ref.Resolve(path_editing_);
-        if (submit) {
-          ImGui::CloseCurrentPopup();
-          path_ = path_editing_;
-          Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
-        }
-      } catch (NotFoundException&) {
-        ImGui::Bullet();
-        ImGui::TextUnformatted("file not found");
-      }
-      ImGui::EndMenu();
-    }
-
-    if (ImGui::MenuItem("Re-sync")) {
-      Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
-    }
-
-    try {
-      auto eref = ref.Resolve(path_);
-      auto f    = &*eref;
-
-      ref.Push({"@", f});
-      ImGui::PushID(f);
-
-      auto node = File::iface<Node>(f);
-      if (node) {
-        if (node->flags() & kMenu) {
-          if (ImGui::BeginMenu("Target Node")) {
-            node->UpdateMenu(ref, ctx);
-            ImGui::EndMenu();
-          }
-        }
-      }
-
-      ImGui::PopID();
-      ref.Pop();
-    } catch (Exception&) {
-    }
-  }
+  void Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node, iface::GUI>(t).Select(this, &gui_);
   }
 
  private:
-  void UpdateEntity(RefStack& ref, File* f) noexcept {
-    if (f == this) return;
-    const auto em = ImGui::GetFontSize();
-
-    auto node = File::iface<Node>(f);
-    if (node) {
-      node->Update(ref, ctx_);
-      return;
-    }
-
-    auto factory = File::iface<iface::Factory<Value>>(f);
-    if (factory) {
-      static const char* kTitle = "Value Factory";
-
-      const auto w = ImGui::CalcTextSize(kTitle).x;
-      ImGui::TextUnformatted(kTitle);
-
-      const auto wt = ImGui::CalcTextSize("out").x + em;
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX()+w-wt);
-      ImGui::TextUnformatted("out");
-      ImGui::SameLine();
-      if (ImNodes::BeginOutputSlot("out", 1)) {
-        gui::NodeSocket();
-        ImNodes::EndSlot();
-      }
-      return;
-    }
-  }
+  void UpdateEntity(RefStack& ref, File* f) noexcept;
 
   // detects changes of the entity
   void Watch(File* f) noexcept {
@@ -1185,6 +1088,8 @@ class RefNode : public File, public iface::Node {
     }
   }
 
+  // synchronize IO socket list
+  // T must be a InSock or OutSock
   template <typename T>
   static void Sync(std::vector<std::shared_ptr<T>>& dst,
                    const std::span<const std::shared_ptr<T>>& src,
@@ -1205,6 +1110,7 @@ class RefNode : public File, public iface::Node {
   void SyncSocks(File* f) noexcept {
     synced_ = true;
 
+    // self reference is illegal
     if (f == this) {
       in_.clear();
       out_.clear();
@@ -1361,10 +1267,125 @@ class RefNode : public File, public iface::Node {
       std::shared_ptr<Context> ctx_;
     };
 
+
     RefNode* owner_;
 
     std::weak_ptr<std::monostate> life_;
   };
 };
+void RefNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  ImGui::TextUnformatted("REF");
+
+  const auto line = ImGui::GetCursorPosY();
+  ImGui::SetCursorPosY(line + ImGui::GetFrameHeightWithSpacing());
+
+  auto f = &*ref.Resolve(path_);
+  ImGui::BeginGroup();
+  if (f == this || ref.size() > 256) {
+    ImGui::TextDisabled("recursive reference");
+    in_.clear();
+    out_.clear();
+  } else {
+    ref.Push({"@", f});
+    ImGui::PushID(f);
+    UpdateEntity(ref, f);
+    ImGui::PopID();
+    ref.Pop();
+  }
+  ImGui::EndGroup();
+
+  ImGui::SetCursorPosY(line);
+  ImGui::Button(("-> "s+(path_.size()? path_: "(empty)"s)).c_str(),
+                {ImGui::GetItemRectSize().x, 0});
+  if (path_.size() && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", path_.c_str());
+  }
+
+  gui::NodeCanvasResetZoom();
+  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+    UpdateMenu(ref, ctx_);
+    ImGui::EndPopup();
+  }
+  gui::NodeCanvasSetZoom();
+}
+void RefNode::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
+  if (ImGui::BeginMenu("Change")) {
+    constexpr auto kFlags = 
+        ImGuiInputTextFlags_EnterReturnsTrue |
+        ImGuiInputTextFlags_AutoSelectAll;
+    static const char* const kHint = "enter new path...";
+
+    ImGui::SetKeyboardFocusHere();
+    const bool submit = ImGui::InputTextWithHint("##renamer", kHint, &path_editing_, kFlags);
+    if (ImGui::IsItemActivated()) path_editing_ = path_;
+
+    try {
+      auto newref = ref.Resolve(path_editing_);
+      if (submit) {
+        ImGui::CloseCurrentPopup();
+        path_ = path_editing_;
+        Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
+      }
+    } catch (NotFoundException&) {
+      ImGui::Bullet();
+      ImGui::TextUnformatted("file not found");
+    }
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::MenuItem("Re-sync")) {
+    Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
+  }
+
+  try {
+    auto eref = ref.Resolve(path_);
+    auto f    = &*eref;
+
+    ref.Push({"@", f});
+    ImGui::PushID(f);
+
+    auto node = File::iface<Node>(f);
+    if (node) {
+      if (node->flags() & kMenu) {
+        if (ImGui::BeginMenu("Target Node")) {
+          node->UpdateMenu(ref, ctx);
+          ImGui::EndMenu();
+        }
+      }
+    }
+
+    ImGui::PopID();
+    ref.Pop();
+  } catch (Exception&) {
+  }
+}
+void RefNode::UpdateEntity(RefStack& ref, File* f) noexcept {
+  if (f == this) return;
+  const auto em = ImGui::GetFontSize();
+
+  auto node = File::iface<Node>(f);
+  if (node) {
+    node->Update(ref, ctx_);
+    return;
+  }
+
+  auto factory = File::iface<iface::Factory<Value>>(f);
+  if (factory) {
+    static const char* kTitle = "Value Factory";
+
+    const auto w = ImGui::CalcTextSize(kTitle).x;
+    ImGui::TextUnformatted(kTitle);
+
+    const auto wt = ImGui::CalcTextSize("out").x + em;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+w-wt);
+    ImGui::TextUnformatted("out");
+    ImGui::SameLine();
+    if (ImNodes::BeginOutputSlot("out", 1)) {
+      gui::NodeSocket();
+      ImNodes::EndSlot();
+    }
+    return;
+  }
+}
 
 } }  // namespace kingtaker
