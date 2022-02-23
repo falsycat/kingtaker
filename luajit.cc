@@ -15,6 +15,7 @@
 namespace kingtaker {
 namespace {
 
+// LuaJIT context file which owns lua_State*
 class LuaJIT : public File, public iface::GUI, public iface::DirItem {
  public:
   static inline TypeInfo type_ = TypeInfo::New<LuaJIT>(
@@ -39,70 +40,9 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
     return std::make_unique<LuaJIT>();
   }
 
-  void Update(RefStack& ref) noexcept override {
-    const auto id = ref.Stringify() + ": LuaJIT Context Inspector";
-    if (shown_) {
-      if (ImGui::Begin(id.c_str())) {
-        UpdateInspector(ref);
-      }
-      ImGui::End();
-    }
-  }
-  void UpdateMenu(RefStack&) noexcept override {
-    ImGui::MenuItem("Context Inspector", nullptr, &shown_);
-  }
-  void UpdateInspector(RefStack&) noexcept {
-    const auto& style = ImGui::GetStyle();
-
-    constexpr auto kHeaderFlags = ImGuiTreeNodeFlags_DefaultOpen;
-    if (!L) {
-      ImGui::Text("Context creation failed!!");
-      ImGui::Text("memory shortage?");
-      return;
-    }
-
-    ImGui::Text("LuaJIT version: %.0f", *lua_version(L));
-
-    if (ImGui::CollapsingHeader("Inline Execution", kHeaderFlags)) {
-      constexpr auto kHint  = "enter to execute...";
-      constexpr auto kFlags = ImGuiInputTextFlags_EnterReturnsTrue;
-
-      ImGui::SetNextItemWidth(ImGui::CalcTextSize("expr").x + style.ItemInnerSpacing.x);
-      ImGui::LabelText("##InlineExprLabel", "expr");
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::InputTextWithHint("##InlineExpr", kHint, &inline_expr_, kFlags)) {
-        ImGui::SetKeyboardFocusHere(-1);
-        luaL_dostring(L, ("return "s + inline_expr_).c_str());
-        if (lua_isstring(L, -1)) {
-          inline_result_ = lua_tostring(L, -1);
-        } else {
-          inline_result_ = lua_typename(L, lua_type(L, -1));
-        }
-        inline_result_ = "-> "s + inline_result_;
-      }
-      if (inline_result_.size()) {
-        ImGui::TextWrapped("%s", inline_result_.c_str());
-      }
-    }
-
-    if (ImGui::CollapsingHeader("Debug Output", kHeaderFlags)) {
-      constexpr auto kFlags = ImGuiWindowFlags_HorizontalScrollbar;
-      if (ImGui::BeginChild("scroll", {0, 0}, true, kFlags)) {
-        ImGuiListClipper clip;
-        clip.Begin(static_cast<int>(logs_.size()));
-        for (const auto& v : logs_) {
-          ImGui::TextUnformatted(v.c_str());
-        }
-        clip.End();
-
-        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-          ImGui::SetScrollHereY(1.f);
-        }
-      }
-      ImGui::EndChild();
-    }
-  }
+  void Update(RefStack& ref) noexcept override;
+  void UpdateMenu(RefStack&) noexcept override;
+  void UpdateInspector(RefStack&) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::GUI>(t).Select(this);
@@ -133,5 +73,69 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
     return 0;
   }
 };
+void LuaJIT::Update(RefStack& ref) noexcept {
+  const auto id = ref.Stringify() + ": LuaJIT Context Inspector";
+  if (shown_) {
+    if (ImGui::Begin(id.c_str())) {
+      UpdateInspector(ref);
+    }
+    ImGui::End();
+  }
+}
+void LuaJIT::UpdateMenu(RefStack&) noexcept {
+  ImGui::MenuItem("Context Inspector", nullptr, &shown_);
+}
+void LuaJIT::UpdateInspector(RefStack&) noexcept {
+  const auto& style = ImGui::GetStyle();
+
+  constexpr auto kHeaderFlags = ImGuiTreeNodeFlags_DefaultOpen;
+  if (!L) {
+    ImGui::Text("Context creation failed!!");
+    ImGui::Text("memory shortage?");
+    return;
+  }
+
+  ImGui::Text("LuaJIT version: %.0f", *lua_version(L));
+
+  if (ImGui::CollapsingHeader("Inline Execution", kHeaderFlags)) {
+    constexpr auto kHint  = "enter to execute...";
+    constexpr auto kFlags = ImGuiInputTextFlags_EnterReturnsTrue;
+
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("expr").x + style.ItemInnerSpacing.x);
+    ImGui::LabelText("##InlineExprLabel", "expr");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    if (ImGui::InputTextWithHint("##InlineExpr", kHint, &inline_expr_, kFlags)) {
+      ImGui::SetKeyboardFocusHere(-1);
+      luaL_dostring(L, ("return "s + inline_expr_).c_str());
+      if (lua_isstring(L, -1)) {
+        inline_result_ = lua_tostring(L, -1);
+      } else {
+        inline_result_ = lua_typename(L, lua_type(L, -1));
+      }
+      inline_result_ = "-> "s + inline_result_;
+    }
+    if (inline_result_.size()) {
+      ImGui::TextWrapped("%s", inline_result_.c_str());
+    }
+  }
+
+  if (ImGui::CollapsingHeader("Debug Output", kHeaderFlags)) {
+    constexpr auto kFlags = ImGuiWindowFlags_HorizontalScrollbar;
+    if (ImGui::BeginChild("scroll", {0, 0}, true, kFlags)) {
+      ImGuiListClipper clip;
+      clip.Begin(static_cast<int>(logs_.size()));
+      for (const auto& v : logs_) {
+        ImGui::TextUnformatted(v.c_str());
+      }
+      clip.End();
+
+      if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+        ImGui::SetScrollHereY(1.f);
+      }
+    }
+    ImGui::EndChild();
+  }
+}
 
 } }  // namespace kingtaker
