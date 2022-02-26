@@ -59,11 +59,14 @@ class Queue {
  public:
   using Task = std::function<void()>;
 
-  // Queued task is absolutely processed on each frame.
+  // task is absolutely processed on each frame.
   static Queue& main() noexcept;
 
-  // Queued task might be skipped when many tasks are queued.
+  // task might be skipped when many tasks are queued.
   static Queue& sub() noexcept;
+
+  // task is executed asnyc by other threads
+  static Queue& cpu() noexcept;
 
   Queue() = default;
   virtual ~Queue() = default;
@@ -72,7 +75,7 @@ class Queue {
   Queue& operator=(const Queue&) = delete;
   Queue& operator=(Queue&&) = delete;
 
-  virtual void Push(Task&&, std::string_view = "") noexcept = 0;
+  virtual void Push(Task&&, std::chrono::milliseconds delay = 0ms) noexcept = 0;
 };
 
 

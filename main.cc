@@ -38,8 +38,10 @@ static bool                       alive_;
 
 static SimpleQueue mainq_;
 static SimpleQueue subq_;
+static CpuQueue    cpuq_(2);
 Queue& Queue::main() noexcept { return mainq_; }
 Queue& Queue::sub() noexcept { return subq_; }
+Queue& Queue::cpu() noexcept { return cpuq_; }
 
 static std::unique_ptr<File> root_;
 File& File::root() noexcept { return *root_; }
@@ -213,11 +215,17 @@ void Update() noexcept {
     return;
   }
 
+  // tick task queues
+  const auto q_tick = SimpleQueue::GetSystemTick();
+  mainq_.Tick(q_tick);
+  subq_ .Tick(q_tick);
+  cpuq_ .Tick(q_tick);
+
   // application menu
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("App")) {
       if (ImGui::MenuItem("Save")) {
-        mainq_.Push(Save, "saving to "s+kFileName);
+        mainq_.Push(Save);
       }
       if (ImGui::MenuItem("Quit")) {
         alive_ = false;
@@ -238,11 +246,9 @@ void Update() noexcept {
 
   // execute tasks
   try {
-    SimpleQueue::Item item;
     size_t done = 0;
-    while (mainq_.Pop(item)) item.task(), ++done;
-    while (done < kTasksPerFrame && subq_.Pop(item)) item.task(), ++done;
-
+    while (mainq_.Pop()) ++done;
+    while (done < kTasksPerFrame && subq_.Pop()) ++done;
   } catch (Exception& e) {
     panic_ = e.Stringify();
   }
