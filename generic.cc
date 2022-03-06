@@ -156,6 +156,20 @@ class GenericDir : public File {
       pk.pack("shown"); pk.pack(shown_);
     }
 
+    void OnSaved(File::RefStack& ref) noexcept {
+      Iterate(ref, [](auto& ref, auto& gui) { gui.OnSaved(ref); });
+    }
+    bool OnClosing(File::RefStack& ref) noexcept {
+      bool closing = true;
+      Iterate(ref, [&closing](auto& ref, auto& gui) {
+                closing = gui.OnClosing(ref) && closing;
+              });
+      return closing;
+    }
+    void OnClosed(File::RefStack& ref) noexcept {
+      Iterate(ref, [](auto& ref, auto& gui) { gui.OnClosed(ref); });
+    }
+
     void Update(RefStack& ref) noexcept override;
     void UpdateMenu(RefStack&) noexcept override;
     void UpdateTree(RefStack& ref) noexcept override;
@@ -169,15 +183,20 @@ class GenericDir : public File {
 
     // volatile params
     std::string name_for_new_;
+
+
+    void Iterate(File::RefStack& ref,
+                 const std::function<void(File::RefStack&, iface::GUI&)>& f) {
+      for (auto& child : owner_->items_) {
+        ref.Push({child.first, child.second.get()});
+        f(ref, File::iface(*child.second, iface::GUI::null()));
+        ref.Pop();
+      }
+    }
   } gui_;
 };
 void GenericDir::GUI::Update(File::RefStack& ref) noexcept {
-  for (auto& child : owner_->items_) {
-    ref.Push({child.first, child.second.get()});
-    File::iface(*child.second, iface::GUI::null()).Update(ref);
-    ref.Pop();
-  }
-
+  Iterate(ref, [](auto& ref, auto& gui) { gui.Update(ref); });
   if (!shown_) return;
 
   const auto em = ImGui::GetFontSize();
