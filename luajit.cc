@@ -1,5 +1,11 @@
 #include "kingtaker.hh"
 
+#include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <thread>
+
 #include <lua.hpp>
 
 #include <imgui.h>
@@ -22,12 +28,20 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
       "LuaJIT", "LuaJIT module",
       {typeid(iface::DirItem), typeid(iface::GUI)});
 
+
+  using Command = std::function<void()>;
+
+
   LuaJIT() noexcept : File(&type_), DirItem(kMenu) {
     L = luaL_newstate();
-    SetupBuiltinFeatures();
+    if (L) {
+      th_ = std::thread([this]() { Main(); });
+    }
   }
   ~LuaJIT() noexcept {
-    if (L) lua_close(L);
+    alive_ = false;
+    th_.join();
+    lua_close(L);
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object&) {
@@ -38,6 +52,11 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
   }
   std::unique_ptr<File> Clone() const noexcept override {
     return std::make_unique<LuaJIT>();
+  }
+
+  void Queue(Command&& cmd) noexcept {
+    cmds_.push_back(std::move(cmd));
+    cv_.notify_all();
   }
 
   void Update(RefStack& ref) noexcept override;
@@ -51,13 +70,39 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
  private:
   lua_State* L = nullptr;
 
+  // thread and command queue
+  std::thread             th_;
+  std::deque<Command>     cmds_;
+  std::mutex              mtx_;
+  std::condition_variable cv_;
+
+  std::atomic<bool> alive_ = true;
+
   // permanentized parameters
   bool shown_ = false;
 
-  // volatile parameters
+  // volatile parameters for GUI
   std::vector<std::string> logs_;
   std::string inline_expr_;
   std::string inline_result_;
+
+
+  void Main() noexcept {
+    SetupBuiltinFeatures();
+    while (alive_) {
+      std::unique_lock<std::mutex> k(mtx_);
+      cv_.wait(k);
+      k.unlock();
+      for (;;) {
+        k.lock();
+        if (cmds_.empty()) break;
+        auto cmd = std::move(cmds_.front());
+        cmds_.pop_front();
+        k.unlock();
+        cmd();
+      }
+    }
+  }
 
 
   void SetupBuiltinFeatures() noexcept {
@@ -107,13 +152,20 @@ void LuaJIT::UpdateInspector(RefStack&) noexcept {
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     if (ImGui::InputTextWithHint("##InlineExpr", kHint, &inline_expr_, kFlags)) {
       ImGui::SetKeyboardFocusHere(-1);
-      luaL_dostring(L, ("return "s + inline_expr_).c_str());
-      if (lua_isstring(L, -1)) {
-        inline_result_ = lua_tostring(L, -1);
-      } else {
-        inline_result_ = lua_typename(L, lua_type(L, -1));
-      }
-      inline_result_ = "-> "s + inline_result_;
+
+      // Queue a task that executes inline expr and assigns its result into
+      // inline_result_.
+      Queue([this, expr = inline_expr_]() noexcept {
+        luaL_dostring(L, ("return "s + expr).c_str());
+
+        std::string ret;
+        if (lua_isstring(L, -1)) {
+          ret = lua_tostring(L, -1);
+        } else {
+          ret = lua_typename(L, lua_type(L, -1));
+        }
+        Queue::main().Push([this, ret]() { inline_result_ = ret; });
+      });
     }
     if (inline_result_.size()) {
       ImGui::TextWrapped("%s", inline_result_.c_str());
