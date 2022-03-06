@@ -33,15 +33,12 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
 
 
   LuaJIT() noexcept : File(&type_), DirItem(kMenu) {
-    L = luaL_newstate();
-    if (L) {
-      th_ = std::thread([this]() { Main(); });
-    }
+    th_ = std::thread([this]() { Main(); });
   }
   ~LuaJIT() noexcept {
     alive_ = false;
+    cv_.notify_all();
     th_.join();
-    lua_close(L);
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object&) {
@@ -76,7 +73,9 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
   std::mutex              mtx_;
   std::condition_variable cv_;
 
+  std::atomic<bool> init_  = true;
   std::atomic<bool> alive_ = true;
+  std::atomic<bool> dead_  = false;
 
   // permanentized parameters
   bool shown_ = false;
@@ -88,20 +87,26 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
 
 
   void Main() noexcept {
-    SetupBuiltinFeatures();
-    while (alive_) {
-      std::unique_lock<std::mutex> k(mtx_);
-      cv_.wait(k);
-      k.unlock();
-      for (;;) {
-        k.lock();
-        if (cmds_.empty()) break;
-        auto cmd = std::move(cmds_.front());
-        cmds_.pop_front();
+    L = luaL_newstate();
+    init_ = false;
+    if (L) {
+      SetupBuiltinFeatures();
+      while (alive_) {
+        std::unique_lock<std::mutex> k(mtx_);
+        cv_.wait(k);
         k.unlock();
-        cmd();
+        for (;;) {
+          k.lock();
+          if (cmds_.empty()) break;
+          auto cmd = std::move(cmds_.front());
+          cmds_.pop_front();
+          k.unlock();
+          cmd();
+        }
       }
+      lua_close(L);
     }
+    dead_ = true;
   }
 
 
@@ -131,11 +136,17 @@ void LuaJIT::UpdateMenu(RefStack&) noexcept {
   ImGui::MenuItem("Context Inspector", nullptr, &shown_);
 }
 void LuaJIT::UpdateInspector(RefStack&) noexcept {
+  constexpr auto kHeaderFlags = ImGuiTreeNodeFlags_DefaultOpen;
+
   const auto& style = ImGui::GetStyle();
 
-  constexpr auto kHeaderFlags = ImGuiTreeNodeFlags_DefaultOpen;
+  if (init_) {
+    ImGui::Text("initializing context...");
+    ImGui::Text("be patient :)");
+    return;
+  }
   if (!L) {
-    ImGui::Text("Context creation failed!!");
+    ImGui::Text("context creation failed!!");
     ImGui::Text("memory shortage?");
     return;
   }

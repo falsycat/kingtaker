@@ -108,6 +108,11 @@ int main(int, char**) {
     ImGui::NewFrame();
 
     Update();
+    if (!alive_) {
+      // call OnClosing event
+      File::RefStack path;
+      alive_ = !File::iface(*root_, iface::GUI::null()).OnClosing(path);
+    }
     ImGui::Render();
 
     int w, h;
@@ -120,6 +125,10 @@ int main(int, char**) {
     glfwSwapBuffers(window);
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
+
+  // call OnClosed event
+  File::RefStack path;
+  File::iface(*root_, iface::GUI::null()).OnClosed(path);
 
   // teardown ImGUI
   ImGui_ImplOpenGL3_Shutdown();
@@ -164,6 +173,9 @@ void InitKingtaker() noexcept {
 }
 
 void Save() noexcept {
+  File::RefStack path;
+  File::iface(*root_, iface::GUI::null()).OnSaved(path);
+
   std::ofstream f(kFileName, std::ios::binary);
   if (!f) {
     panic_ = "failed to open: "s+kFileName;
@@ -205,7 +217,7 @@ void Update() noexcept {
       }
       ImGui::SameLine();
       if (ImGui::Button("ABORT")) {
-        alive_ = false;
+        std::abort();  // immediate death
       }
       ImGui::EndPopup();
 
