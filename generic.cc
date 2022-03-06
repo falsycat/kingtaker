@@ -156,17 +156,17 @@ class GenericDir : public File {
       pk.pack("shown"); pk.pack(shown_);
     }
 
-    void OnSaved(File::RefStack& ref) noexcept {
+    void OnSaved(File::RefStack& ref) noexcept override {
       Iterate(ref, [](auto& ref, auto& gui) { gui.OnSaved(ref); });
     }
-    bool OnClosing(File::RefStack& ref) noexcept {
+    bool OnClosing(File::RefStack& ref) noexcept override {
       bool closing = true;
       Iterate(ref, [&closing](auto& ref, auto& gui) {
                 closing = gui.OnClosing(ref) && closing;
               });
       return closing;
     }
-    void OnClosed(File::RefStack& ref) noexcept {
+    void OnClosed(File::RefStack& ref) noexcept override {
       Iterate(ref, [](auto& ref, auto& gui) { gui.OnClosed(ref); });
     }
 
