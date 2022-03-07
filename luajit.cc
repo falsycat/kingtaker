@@ -81,9 +81,11 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
   bool shown_ = false;
 
   // volatile parameters for GUI
-  std::vector<std::string> logs_;
   std::string inline_expr_;
   std::string inline_result_;
+
+  std::mutex               logs_mtx_;
+  std::vector<std::string> logs_;
 
 
   void Main() noexcept {
@@ -117,9 +119,8 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
   }
   static int L_debug(lua_State* L) {
     auto f = (LuaJIT*) lua_topointer(L, lua_upvalueindex(1));
-
-    auto str = luaL_checkstring(L, 1);
-    f->logs_.push_back(str);
+    std::unique_lock<std::mutex> k(f->lgos_mtx_);
+    f->logs_.push_back(luaL_checkstring(L, 1));
     return 0;
   }
 };
