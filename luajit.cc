@@ -43,7 +43,8 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
 
 
   LuaJIT() noexcept : File(&type_), DirItem(kMenu) {
-    th_ = std::thread([this]() { Main(); });
+    data_ = std::make_shared<Data>();
+    th_   = std::thread([this]() { Main(); });
   }
   ~LuaJIT() noexcept {
     alive_ = false;
@@ -77,6 +78,12 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
  private:
   lua_State* L = nullptr;
 
+  struct Data final {
+    std::mutex  mtx;
+    std::string inline_result;
+  };
+  std::shared_ptr<Data> data_;
+
   // thread and command queue
   std::thread             th_;
   std::deque<Command>     cmds_;
@@ -90,19 +97,14 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
   // permanentized parameters
   bool shown_ = false;
 
-  // volatile parameters for GUI
+  // volatile parameters
   std::string inline_expr_;
-  std::string inline_result_;
-
-  std::mutex               logs_mtx_;
-  std::vector<std::string> logs_;
 
 
   void Main() noexcept {
     L = luaL_newstate();
     init_ = false;
     if (L) {
-      SetupBuiltinFeatures();
       while (alive_) {
         std::unique_lock<std::mutex> k(mtx_);
         cv_.wait(k);
@@ -119,19 +121,6 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
       lua_close(L);
     }
     dead_ = true;
-  }
-
-
-  void SetupBuiltinFeatures() noexcept {
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, L_debug, 1);
-    lua_setglobal(L, "debug");
-  }
-  static int L_debug(lua_State* L) {
-    auto f = (LuaJIT*) lua_topointer(L, lua_upvalueindex(1));
-    std::unique_lock<std::mutex> k(f->logs_mtx_);
-    f->logs_.push_back(luaL_checkstring(L, 1));
-    return 0;
   }
 };
 void LuaJIT::Update(RefStack& ref) noexcept {
@@ -175,41 +164,23 @@ void LuaJIT::UpdateInspector(RefStack&) noexcept {
     if (ImGui::InputTextWithHint("##InlineExpr", kHint, &inline_expr_, kFlags)) {
       ImGui::SetKeyboardFocusHere(-1);
 
-      // Queue a task that executes inline expr and assigns its result into
-      // inline_result_.
-      Queue([this, expr = inline_expr_](auto L) noexcept {
+      // Queue a task that executes inline expr and saves its result.
+      Queue([data = data_, expr = inline_expr_](auto L) mutable noexcept {
         luaL_dostring(L, ("return "s + expr).c_str());
 
-        std::string ret;
+        std::unique_lock<std::mutex> k(data->mtx);
         if (lua_isstring(L, -1)) {
-          ret = lua_tostring(L, -1);
+          data->inline_result = lua_tostring(L, -1);
         } else {
-          ret = lua_typename(L, lua_type(L, -1));
+          data->inline_result = lua_typename(L, lua_type(L, -1));
         }
-        // FIXME: sync issue (this file may be removed when this task is executed)
-        Queue::main().Push([this, ret]() { inline_result_ = ret; });
       });
     }
-    if (inline_result_.size()) {
-      ImGui::TextWrapped("%s", inline_result_.c_str());
-    }
-  }
 
-  if (ImGui::CollapsingHeader("Debug Output", kHeaderFlags)) {
-    constexpr auto kFlags = ImGuiWindowFlags_HorizontalScrollbar;
-    if (ImGui::BeginChild("scroll", {0, 0}, true, kFlags)) {
-      ImGuiListClipper clip;
-      clip.Begin(static_cast<int>(logs_.size()));
-      for (const auto& v : logs_) {
-        ImGui::TextUnformatted(v.c_str());
-      }
-      clip.End();
-
-      if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-        ImGui::SetScrollHereY(1.f);
-      }
+    std::unique_lock<std::mutex> k(data_->mtx);
+    if (data_->inline_result.size()) {
+      ImGui::TextWrapped("%s", data_->inline_result.c_str());
     }
-    ImGui::EndChild();
   }
 }
 
