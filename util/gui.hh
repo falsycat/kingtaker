@@ -1,6 +1,10 @@
 #pragma once
 
+#include <string>
+
 #include <imgui.h>
+
+#include "kingtaker.hh"
 
 
 namespace kingtaker::gui {
@@ -24,5 +28,8 @@ class ResizeGroup final {
 void NodeSocket() noexcept;
 void NodeCanvasSetZoom() noexcept;
 void NodeCanvasResetZoom() noexcept;
+
+
+bool InputPathMenu(File::RefStack&, std::string* editing, std::string* path) noexcept;
 
 }  // namespace kingtaker::gui

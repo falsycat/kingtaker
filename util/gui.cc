@@ -4,6 +4,7 @@
 #include <cassert>
 
 #include <imgui_internal.h>
+#include <imgui_stdlib.h>
 #include <ImNodes.h>
 
 
@@ -45,6 +46,7 @@ ResizeGroup::~ResizeGroup() noexcept {
   ImGui::EndGroup();
 }
 
+
 void NodeSocket() noexcept {
   const auto em     = ImGui::GetFontSize();
   const auto radius = em/2 / ImNodes::CanvasState().Zoom;
@@ -78,6 +80,31 @@ void NodeCanvasSetZoom() noexcept {
 void NodeCanvasResetZoom() noexcept {
   ImGui::SetWindowFontScale(1.f);
   ImGui::PopStyleVar(6);
+}
+
+
+bool InputPathMenu(File::RefStack& ref, std::string* editing, std::string* path) noexcept {
+  constexpr auto kFlags = 
+      ImGuiInputTextFlags_EnterReturnsTrue |
+      ImGuiInputTextFlags_AutoSelectAll;
+  static const char* const kHint = "enter new path...";
+
+  ImGui::SetKeyboardFocusHere();
+  const bool submit = ImGui::InputTextWithHint("##InputPathMenu", kHint, editing, kFlags);
+  if (ImGui::IsItemActivated()) *editing = *path;
+
+  try {
+    auto newref = ref.Resolve(*editing);
+    if (submit) {
+      ImGui::CloseCurrentPopup();
+      *path = std::move(*editing);
+      return true;
+    }
+  } catch (File::NotFoundException&) {
+    ImGui::Bullet();
+    ImGui::TextUnformatted("file not found");
+  }
+  return false;
 }
 
 }  // namespace kingtaker::gui
