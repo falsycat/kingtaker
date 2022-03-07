@@ -207,7 +207,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
           msgpack::find(obj, "path"s).as<std::string>(),
           msgpack::find(obj, "shown"s).as<bool>(),
           msgpack::find(obj, "auto_compile"s).as<bool>());
-    } catch (msgpack::type_error& e) {
+    } catch (msgpack::type_error&) {
       throw DeserializeException("broken LuaJIT Script");
     }
   }
