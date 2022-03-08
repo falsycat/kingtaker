@@ -35,8 +35,8 @@ class LuaJIT : public File, public iface::GUI, public iface::DirItem {
   using Command = std::function<void(lua_State* L)>;
 
 
-  static LuaJIT* Find(const RefStack& ref, const std::string& path) {
-    auto ctx = dynamic_cast<LuaJIT*>(&*ref.Resolve(path));
+  static LuaJIT* Cast(const RefStack& ref) {
+    auto ctx = dynamic_cast<LuaJIT*>(&*ref);
     if (!ctx) throw Exception("it's not LuaJIT context: "s+path);
     return ctx;
   }
@@ -191,6 +191,24 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
       "LuaJIT Script", "LuaJIT script",
       {typeid(iface::DirItem), typeid(iface::GUI)});
 
+
+  struct Data final {
+    std::mutex  mtx;
+    std::string msg = "not compiled yet";
+
+    Time lastmod;
+
+    int reg_func = LUA_REFNIL;
+  };
+
+
+  static LuaJITScript* Cast(const RefStack& ref) {
+    auto ctx = dynamic_cast<LuaJITScript*>(&*ref);
+    if (!ctx) throw Exception("it's not LuaJIT script: "s+path);
+    return ctx;
+  }
+
+
   LuaJITScript(const std::string& ctx  = "",
                const std::string& path = "",
                bool shown        = false,
@@ -241,16 +259,39 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::GUI, iface::DirItem>(t).Select(this);
   }
+  const std::shared_ptr<Data>& data() noexcept {
+    return data_;
+  }
+
+
+  LuaJIT* GetContext(const File::RefStack& ref) {
+    return LuaJIT::Cast(&*ref.Resolve(path_ctx_));
+  }
+  void CompileIf(const File::RefStack& ref) noexcept {
+    try {
+      auto ctx = GetContext(ref);
+      auto f   = &*ref.Resolve(path_);
+      {
+        std::unique_lock<std::mutex> k(data_->mtx);
+        if (f->lastModified() <= data_->lastmod) return;
+      }
+      Compile_(ctx, f);
+
+    } catch (Exception& e) {
+      std::unique_lock<std::mutex> k(data_->mtx);
+      data_->msg = e.msg();
+    }
+  }
+  void Compile(File::RefStack& ref) noexcept {
+    try {
+      Compile_(GetContext(), &*ref.Resolve(path_));
+    } catch (Exception& e) {
+      std::unique_lock<std::mutex> k(data_->mtx);
+      data_->msg = e.msg();
+    }
+  }
 
  private:
-  struct Data final {
-    std::mutex  mtx;
-    std::string msg = "not compiled yet";
-
-    Time lastmod;
-
-    int reg_func = LUA_REFNIL;
-  };
   std::shared_ptr<Data> data_;
 
   // permanentized params
@@ -265,22 +306,11 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
   std::string path_editing_;
 
 
-  void Compile(File::RefStack& ref) noexcept {
+  void Compile_(LuaJIT* ctx, File* f) {
     // fetch script
-    LuaJIT* ctx;
-    std::shared_ptr<std::string> script;
-    try {
-      ctx = LuaJIT::Find(ref, path_ctx_);
-
-      auto factory = File::iface<iface::Factory<Value>>(&*ref.Resolve(path_));
-      if (!factory) throw Exception("no factory interface for Value");
-      script = factory->Create().get<std::shared_ptr<Value::String>>();
-
-    } catch (Exception& e) {
-      std::unique_lock<std::mutex> k(data_->mtx);
-      data_->msg = e.msg();
-      return;
-    }
+    auto factory = File::iface<iface::Factory<Value>>(f);
+    if (!factory) throw Exception("no factory interface for Value");
+    auto script = factory->Create().get<std::shared_ptr<Value::String>>();
 
     // compile the script
     auto task = [data = data_, scr = script](auto L) mutable {
@@ -304,7 +334,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
 void LuaJITScript::Update(File::RefStack& ref) noexcept {
   const auto id = ref.Stringify() + ": LuaJIT Script Compiler";
   if (shown_) {
-    if (ImGui::Begin(id.c_str())) {
+    if (ImGui::Begin(id.c_str(), &shown_)) {
       if (ImGui::BeginPopupContextWindow()) {
         UpdateMenu(ref);
         ImGui::EndPopup();
@@ -313,6 +343,8 @@ void LuaJITScript::Update(File::RefStack& ref) noexcept {
     }
     ImGui::End();
   }
+
+  // TODO(falsycat): auto-recompile
 }
 void LuaJITScript::UpdateMenu(File::RefStack& ref) noexcept {
   ImGui::MenuItem("Compiler View", nullptr, &shown_);
@@ -366,6 +398,7 @@ class LuaJITNode : public File, public iface::Node {
   }
 
   void Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateMenu(File::RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -374,9 +407,43 @@ class LuaJITNode : public File, public iface::Node {
  private:
   // permanentized params
   std::string path_;
+
+  bool auto_rebuild_ = true;
+
+  // volatile params
+  std::string path_editing_;
+
+
+  void Rebuild(RefStack& ref) noexcept {
+    LuaJIT*       ctx;
+    LuaJITScript* script;
+    try {
+      auto script_ref = ref.Resolve(path_);
+      script = LuaJITScript::Cast(script_ref);
+      ctx    = script->GetContext(script_ref);
+      script->CompileIf(script_ref);
+    } catch (Exception&) {
+      /* TODO */
+      return;
+    }
+
+    auto task = [data = script->data()](auto L) mutable {
+      // TODO
+      data = nullptr;
+    };
+  }
 };
 void LuaJITNode::Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept {
   ImGui::TextUnformatted("LuaJIT Node");
+}
+void LuaJITNode::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  if (ImGui::BeginMenu("script path")) {
+    if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
+      Rebuild();
+    }
+    ImGui::EndMenu();
+  }
+  ImGui::MenuItem("auto-rebuild", &auto_rebuild_);
 }
 
 } }  // namespace kingtaker
