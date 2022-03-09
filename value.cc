@@ -340,8 +340,6 @@ class Oscilloscope : public File, public iface::Node {
     }
   }
 
-  Time lastModified() const noexcept override { return {}; }
-
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
   }
@@ -543,8 +541,10 @@ class ExternalText final : public File,
         }
 
         if (1 != str_.use_count()) str_ = std::make_shared<std::string>(*str_);
-        modified_ |= ImGui::InputTextMultiline(
-            "##Editor", str_.get(), {-FLT_MIN, -FLT_MIN});
+        if (ImGui::InputTextMultiline("##Editor", str_.get(), {-FLT_MIN, -FLT_MIN})) {
+          lastmod_  = Clock::now();
+          modified_ = true;
+        }
       }
       ImGui::End();
     }
@@ -552,6 +552,8 @@ class ExternalText final : public File,
   void UpdateMenu(RefStack&) noexcept override {
     ImGui::MenuItem("Text Editor", nullptr, &editor_shown_);
   }
+
+  Time lastModified() const noexcept override { return lastmod_; }
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::GUI, iface::Factory<Value>>(t).Select(this);
@@ -584,6 +586,8 @@ class ExternalText final : public File,
       return false;
     }
 
+    lastmod_ = Clock::now();
+
     modified_     = false;
     save_failure_ = false;
 
@@ -598,6 +602,8 @@ class ExternalText final : public File,
 
   // volatile params
   std::shared_ptr<std::string> str_;
+
+  Time lastmod_;
 
   std::string input_path_;
   bool        input_path_load_failure_ = false;

@@ -94,7 +94,10 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
 
     Time lastmod;
 
+    // TODO: unref
     int reg_func = LUA_REFNIL;
+
+    std::atomic<bool> compiling;
   };
 
 
@@ -106,10 +109,10 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
 
 
   LuaJITScript(const std::string& path = "",
-               bool shown        = false,
-               bool auto_compile = false) noexcept :
+               bool shown          = false,
+               bool auto_recompile = false) noexcept :
       File(&type_), DirItem(kMenu),
-      path_(path), shown_(shown), auto_compile_(auto_compile) {
+      path_(path), shown_(shown), auto_recompile_(auto_recompile) {
     data_ = std::make_shared<Data>();
   }
 
@@ -118,7 +121,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
       return std::make_unique<LuaJITScript>(
           msgpack::find(obj, "path"s).as<std::string>(),
           msgpack::find(obj, "shown"s).as<bool>(),
-          msgpack::find(obj, "auto_compile"s).as<bool>());
+          msgpack::find(obj, "auto_recompile"s).as<bool>());
     } catch (msgpack::type_error&) {
       throw DeserializeException("broken LuaJIT Script");
     }
@@ -132,11 +135,11 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
     pk.pack("shown"s);
     pk.pack(shown_);
 
-    pk.pack("auto_compile"s);
-    pk.pack(auto_compile_);
+    pk.pack("auto_recompile"s);
+    pk.pack(auto_recompile_);
   }
   std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<LuaJITScript>(path_, shown_, auto_compile_);
+    return std::make_unique<LuaJITScript>(path_, shown_, auto_recompile_);
   }
 
   void Update(File::RefStack&) noexcept override;
@@ -187,8 +190,8 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
   // permanentized params
   std::string path_;
 
-  bool shown_        = false;
-  bool auto_compile_ = false;
+  bool shown_          = false;
+  bool auto_recompile_ = false;
 
   // volatile params
   std::string path_editing_;
@@ -200,19 +203,23 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
     if (!factory) throw Exception("no factory interface for Value");
     auto script = factory->Create().get<std::shared_ptr<Value::String>>();
 
+    const auto lastmod = f->lastModified();
+
     // compile the script
-    auto task = [data = data_, scr = script](auto L) mutable {
+    auto task = [data = data_, scr = script, lastmod](auto L) mutable {
+      data->compiling = true;
       if (luaL_loadstring(L, scr->c_str()) == 0) {
         std::unique_lock<std::mutex> k(data->mtx);
         luaL_unref(L, LUA_REGISTRYINDEX, data->reg_func);
 
         data->reg_func = luaL_ref(L, LUA_REGISTRYINDEX);
-        data->lastmod  = Clock::now();
+        data->lastmod  = lastmod;
         data->msg      = "ok";
       } else {
         std::unique_lock<std::mutex> k(data->mtx);
         data->msg = luaL_checkstring(L, 1);
       }
+      data->compiling = false;
       data = nullptr;
       scr  = nullptr;
     };
@@ -220,6 +227,8 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
   }
 };
 void LuaJITScript::Update(File::RefStack& ref) noexcept {
+  if (auto_recompile_) CompileIf(ref);
+
   const auto id = ref.Stringify() + ": LuaJIT Script Compiler";
   if (shown_) {
     if (ImGui::Begin(id.c_str(), &shown_)) {
@@ -231,8 +240,6 @@ void LuaJITScript::Update(File::RefStack& ref) noexcept {
     }
     ImGui::End();
   }
-
-  // TODO(falsycat): auto-recompile
 }
 void LuaJITScript::UpdateMenu(File::RefStack& ref) noexcept {
   ImGui::MenuItem("Compiler View", nullptr, &shown_);
@@ -244,10 +251,12 @@ void LuaJITScript::UpdateMenu(File::RefStack& ref) noexcept {
   ImGui::Separator();
 
   if (ImGui::BeginMenu("script path")) {
-    gui::InputPathMenu(ref, &path_editing_, &path_);
+    if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
+      Compile(ref);
+    }
     ImGui::EndMenu();
   }
-  ImGui::MenuItem("re-compile automatically", nullptr, &auto_compile_);
+  ImGui::MenuItem("re-compile automatically", nullptr, &auto_recompile_);
 }
 void LuaJITScript::UpdateCompiler(File::RefStack& ref) noexcept {
   if (ImGui::Button("compile")) Compile(ref);
@@ -261,11 +270,11 @@ void LuaJITScript::UpdateCompiler(File::RefStack& ref) noexcept {
 }
 
 
-class LuaJITNode : public File, public iface::Node {
+class LuaJITNode : public File, public iface::GUI, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<LuaJITNode>(
       "LuaJIT Node", "Node driven by LuaJIT",
-      {typeid(iface::Node)});
+      {typeid(iface::GUI), typeid(iface::Node)});
 
   LuaJITNode(std::string_view path = "",
              bool auto_rebuild = false) noexcept :
@@ -295,11 +304,16 @@ class LuaJITNode : public File, public iface::Node {
     return std::make_unique<LuaJITNode>(path_, auto_rebuild_);
   }
 
+  void Update(File::RefStack&) noexcept override;
   void Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept override;
   void UpdateMenu(File::RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
+  Time lastModified() const noexcept override {
+    std::unique_lock<std::recursive_mutex> k(data_->mtx);
+    return data_->lastmod;
+  }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
+    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
   }
 
  private:
@@ -330,10 +344,13 @@ class LuaJITNode : public File, public iface::Node {
     std::recursive_mutex mtx;
     std::weak_ptr<std::monostate> life;
 
+    Time lastmod;
     std::string msg = "not built";
 
-    std::atomic<bool> setup = false;
     std::vector<std::unique_ptr<Sock>> in, out;
+
+    std::atomic<bool> building = false;
+    std::atomic<bool> setup    = false;
   };
   std::shared_ptr<std::monostate> life_;
   std::shared_ptr<Data>           data_;
@@ -415,6 +432,8 @@ class LuaJITNode : public File, public iface::Node {
     LuaJITScript* script;
     {
       std::unique_lock<std::recursive_mutex> k(data_->mtx);
+      if (data_->building) return;
+
       data_->msg = "building...";
       try {
         auto script_ref = ref.Resolve(path_);
@@ -427,14 +446,18 @@ class LuaJITNode : public File, public iface::Node {
     }
 
     auto task = [self = this, data = data_, sdata = script->data()](auto L) mutable {
+      data->building = true;
       {
-        int index;
+        Time lastmod;
+        int  index;
         {
           std::unique_lock<std::mutex> k(sdata->mtx);
-          index = sdata->reg_func;
+          index   = sdata->reg_func;
+          lastmod = sdata->lastmod;
         }
 
         std::unique_lock<std::recursive_mutex> k(data->mtx);
+
         auto in_bk  = std::move(data->in);
         auto out_bk = std::move(data->out);
 
@@ -446,14 +469,17 @@ class LuaJITNode : public File, public iface::Node {
         if (lua_pcall(L, 0, 0, 0) == 0) {
           auto task = [self, data = data]() mutable {
             if (data->life.lock()) self->BuildPostproc();
-            data = nullptr;
+            data->building = false;
+            data           = nullptr;
           };
           Queue::main().Push(std::move(task));
-          data->msg = "build succeeded";
+          data->msg     = "build succeeded";
+          data->lastmod = lastmod;
         } else {
-          data->msg = lua_tolstring(L, -1, nullptr);
-          data->in  = std::move(in_bk);
-          data->out = std::move(out_bk);
+          data->msg      = lua_tolstring(L, -1, nullptr);
+          data->in       = std::move(in_bk);
+          data->out      = std::move(out_bk);
+          data->building = false;
         }
         data->setup = false;
       }
@@ -481,6 +507,15 @@ class LuaJITNode : public File, public iface::Node {
     }
   }
 };
+void LuaJITNode::Update(File::RefStack& ref) noexcept {
+  if (auto_rebuild_) {
+    try {
+      auto f = &*ref.Resolve(path_);
+      if (f->lastModified() > lastModified()) Build(ref);
+    } catch (NotFoundException& e) {
+    }
+  }
+}
 void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::TextUnformatted("LuaJIT Node");
 
@@ -559,7 +594,7 @@ void LuaJITNode::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&
     }
     ImGui::EndMenu();
   }
-  ImGui::MenuItem("auto-rebuild", nullptr, &auto_rebuild_);
+  ImGui::MenuItem("rebuild automatically", nullptr, &auto_rebuild_);
 }
 
 } }  // namespace kingtaker
