@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstring>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -10,6 +11,7 @@
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
+#include <ImNodes.h>
 
 #include "iface/dir.hh"
 #include "iface/factory.hh"
@@ -265,18 +267,32 @@ class LuaJITNode : public File, public iface::Node {
       "LuaJIT Node", "Node driven by LuaJIT",
       {typeid(iface::Node)});
 
-  LuaJITNode() noexcept : File(&type_), Node(kMenu) {
+  LuaJITNode(std::string_view path = "",
+             bool auto_rebuild = false) noexcept :
+      File(&type_), Node(kMenu),
+      path_(path), auto_rebuild_(auto_rebuild) {
+    life_ = std::make_shared<std::monostate>();
+
     data_ = std::make_shared<Data>();
+    data_->life = life_;
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object&) {
-    return std::make_unique<LuaJITNode>();
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+    return std::make_unique<LuaJITNode>(
+        msgpack::find(obj, "path"s).as<std::string>(),
+        msgpack::find(obj, "auto_rebuild"s).as<bool>());
   }
   void Serialize(Packer& pk) const noexcept override {
-    pk.pack_nil();
+    pk.pack_map(2);
+
+    pk.pack("path"s);
+    pk.pack(path_);
+
+    pk.pack("auto_rebuild"s);
+    pk.pack(auto_rebuild_);
   }
   std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<LuaJITNode>();
+    return std::make_unique<LuaJITNode>(path_, auto_rebuild_);
   }
 
   void Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept override;
@@ -287,11 +303,40 @@ class LuaJITNode : public File, public iface::Node {
   }
 
  private:
-  struct Data {
-    std::mutex  mtx;
-    std::string msg;
+  struct Sock final {
+    std::string name;
+    std::string description = "";
+
+    bool cache = true;
+
+    int reg_handler = LUA_REFNIL;
+
+    Sock(std::string_view n) noexcept {
+      name = n;
+    }
+    ~Sock() noexcept {
+      if (reg_handler == LUA_REFNIL) return;
+      auto task = [reg_handler = reg_handler](auto L) {
+        luaL_unref(L, LUA_REGISTRYINDEX, reg_handler);
+      };
+      dev_.Queue(std::move(task));
+    }
+    Sock(const Sock&) = delete;
+    Sock(Sock&&) = delete;
+    Sock& operator=(const Sock&) = delete;
+    Sock& operator=(Sock&&) = delete;
   };
-  std::shared_ptr<Data> data_;
+  struct Data final {
+    std::recursive_mutex mtx;
+    std::weak_ptr<std::monostate> life;
+
+    std::string msg = "not built";
+
+    std::atomic<bool> setup = false;
+    std::vector<std::unique_ptr<Sock>> in, out;
+  };
+  std::shared_ptr<std::monostate> life_;
+  std::shared_ptr<Data>           data_;
 
   // permanentized params
   std::string path_;
@@ -302,46 +347,215 @@ class LuaJITNode : public File, public iface::Node {
   std::string path_editing_;
 
 
-  void Rebuild(RefStack& ref) noexcept {
-    LuaJITScript* script;
-    try {
-      auto script_ref = ref.Resolve(path_);
-      script = LuaJITScript::Cast(script_ref);
-      script->CompileIf(script_ref);
-    } catch (Exception&) {
-      /* TODO */
-      return;
+  static void CreateEnvTable(lua_State* L, const std::shared_ptr<Data>& data) {
+    lua_createtable(L, 0, 0);  // G
+      lua_pushlightuserdata(L, data.get());
+      lua_pushlightuserdata(L, &data->in);
+      lua_pushcclosure(L, L_Sock_new, 2);
+      lua_setfield(L, -2, "Input");
+
+      lua_pushlightuserdata(L, data.get());
+      lua_pushlightuserdata(L, &data->out);
+      lua_pushcclosure(L, L_Sock_new, 2);
+      lua_setfield(L, -2, "Output");
+  }
+  static int L_Sock_new(lua_State* L) {
+    auto data = (Data*) lua_touserdata(L, lua_upvalueindex(1));
+    // data is locked while setup phase
+
+    if (!data->setup) {
+      return luaL_error(L, "adding socket can be called while setup phase");
     }
 
-    auto task = [data = data_, sdata = script->data()](auto L) mutable {
-      int index;
-      {
-        std::unique_lock<std::mutex> k(sdata->mtx);
-        index = sdata->reg_func;
+    const auto name = luaL_checkstring(L, 1);
+    auto       sock = std::make_unique<Sock>(name);
+
+    lua_createtable(L, 0, 0);
+      lua_pushlightuserdata(L, data);
+      lua_pushlightuserdata(L, sock.get());
+      lua_pushcclosure(L, L_Sock_set, 2);
+      lua_setfield(L, -2, "set");
+
+    auto socks = (std::vector<std::unique_ptr<Sock>>*) lua_touserdata(L, lua_upvalueindex(2));
+    socks->push_back(std::move(sock));
+    return 1;
+  }
+  static int L_Sock_set(lua_State* L) {
+    auto data = (Data*) lua_touserdata(L, lua_upvalueindex(1));
+    // data is locked while setup phase
+
+    if (!data->setup) {
+      return luaL_error(L, "adding socket can be called while setup phase");
+    }
+
+    auto        sock = (Sock*) lua_touserdata(L, lua_upvalueindex(2));
+    const char* name = luaL_checkstring(L, 2);
+
+    static constexpr auto kValueIndex = 3;
+    if (0 == std::strcmp(name, "description")) {
+      sock->description = luaL_checkstring(L, kValueIndex);
+
+    } else if (0 == std::strcmp(name, "cache")) {
+      sock->cache = !!luaL_checkint(L, kValueIndex);
+
+    } else if (0 == std::strcmp(name, "handler")) {
+      luaL_checktype(L, kValueIndex, LUA_TFUNCTION);
+      lua_pushvalue(L, kValueIndex);
+      sock->reg_handler = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    } else {
+      return luaL_error(L, "unknown field '%s'", name);
+    }
+    lua_pushvalue(L, 1);
+    return 1;
+  }
+
+
+  void Build(RefStack& ref) noexcept {
+    LuaJITScript* script;
+    {
+      std::unique_lock<std::recursive_mutex> k(data_->mtx);
+      data_->msg = "building...";
+      try {
+        auto script_ref = ref.Resolve(path_);
+        script = LuaJITScript::Cast(script_ref);
+        script->CompileIf(script_ref);
+      } catch (Exception& e) {
+        data_->msg = e.msg();
+        return;
       }
-      lua_rawgeti(L, LUA_REGISTRYINDEX, index);
-      if (lua_pcall(L, 0, 0, 0) == 0) {
-        // TODO
-      } else {
-        std::unique_lock<std::mutex> k(data->mtx);
-        data->msg = lua_tolstring(L, -1, nullptr);
+    }
+
+    auto task = [self = this, data = data_, sdata = script->data()](auto L) mutable {
+      {
+        int index;
+        {
+          std::unique_lock<std::mutex> k(sdata->mtx);
+          index = sdata->reg_func;
+        }
+
+        std::unique_lock<std::recursive_mutex> k(data->mtx);
+        auto in_bk  = std::move(data->in);
+        auto out_bk = std::move(data->out);
+
+        lua_rawgeti(L, LUA_REGISTRYINDEX, index);
+        CreateEnvTable(L, data);
+        lua_setfenv(L, -2);
+
+        data->setup = true;
+        if (lua_pcall(L, 0, 0, 0) == 0) {
+          auto task = [self, data = data]() mutable {
+            if (data->life.lock()) self->BuildPostproc();
+            data = nullptr;
+          };
+          Queue::main().Push(std::move(task));
+          data->msg = "build succeeded";
+        } else {
+          data->msg = lua_tolstring(L, -1, nullptr);
+          data->in  = std::move(in_bk);
+          data->out = std::move(out_bk);
+        }
+        data->setup = false;
       }
       data  = nullptr;
       sdata = nullptr;
     };
     dev_.Queue(std::move(task));
   }
+  void BuildPostproc() noexcept {
+    // TODO: use custom socket to receive events
+    std::unique_lock<std::recursive_mutex> k(data_->mtx);
+    for (auto& src : data_->in) {
+      if (src->cache) {
+        in_.push_back(std::make_shared<CachedInSock>(this, src->name, Value::Pulse()));
+      } else {
+        in_.push_back(std::make_shared<InSock>(this, src->name));
+      }
+    }
+    for (auto& src : data_->out) {
+      if (src->cache) {
+        out_.push_back(std::make_shared<CachedOutSock>(this, src->name, Value::Pulse()));
+      } else {
+        out_.push_back(std::make_shared<OutSock>(this, src->name));
+      }
+    }
+  }
 };
-void LuaJITNode::Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept {
+void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::TextUnformatted("LuaJIT Node");
 
-  std::unique_lock<std::mutex> k(data_->mtx);
-  ImGui::Text("status: %s", data_->msg.c_str());
+  const auto em = ImGui::GetFontSize();
+
+  const auto top = ImGui::GetCursorPosY();
+  ImGui::Dummy({1, ImGui::GetFrameHeight()});
+
+  std::unique_lock<std::recursive_mutex> k(data_->mtx);
+  ImGui::BeginGroup();
+  {
+    ImGui::BeginGroup();
+    if (data_->in.size() == 0) ImGui::TextDisabled("no input");
+    for (auto& sock : data_->in) {
+      if (ImNodes::BeginInputSlot(sock->name.c_str(), 1)) {
+        gui::NodeSocket();
+        ImGui::SameLine();
+        ImGui::TextUnformatted(sock->name.c_str());
+        ImNodes::EndSlot();
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(sock->description.c_str());
+      }
+    }
+    ImGui::EndGroup();
+
+    ImGui::SameLine();
+    ImGui::Dummy({1*em, 1});
+    ImGui::SameLine();
+
+    ImGui::BeginGroup();
+    if (data_->out.size() == 0) ImGui::TextDisabled("no output");
+    for (auto& sock : data_->out) {
+      if (ImNodes::BeginOutputSlot(sock->name.c_str(), 1)) {
+        ImGui::TextUnformatted(sock->name.c_str());
+        ImGui::SameLine();
+        gui::NodeSocket();
+        ImNodes::EndSlot();
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(sock->description.c_str());
+      }
+    }
+    ImGui::EndGroup();
+  }
+  ImGui::EndGroup();
+  const auto w = ImGui::GetItemRectSize().x;
+
+  if (data_->msg.size()) {
+    const char* msg   = data_->msg.c_str();
+    const auto  msg_w = ImGui::CalcTextSize(msg).x;
+    if (msg_w < w) {
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-msg_w)/2);
+      ImGui::TextUnformatted(msg);
+    } else {
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+w);
+      ImGui::TextWrapped("%s", msg);
+      ImGui::PopTextWrapPos();
+    }
+  }
+
+  ImGui::SetCursorPosY(top);
+  ImGui::Button(("-> "s+(path_.empty()? "(empty)"s: path_)).c_str(), {w, 0});
+  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+    UpdateMenu(ref, ctx);
+    ImGui::EndPopup();
+  }
 }
 void LuaJITNode::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  if (ImGui::MenuItem("Rebuild")) Build(ref);
+  ImGui::Separator();
+
   if (ImGui::BeginMenu("script path")) {
     if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
-      Rebuild(ref);
+      Build(ref);
     }
     ImGui::EndMenu();
   }
