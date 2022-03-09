@@ -512,7 +512,7 @@ void LuaJITNode::Update(File::RefStack& ref) noexcept {
     try {
       auto f = &*ref.Resolve(path_);
       if (f->lastModified() > lastModified()) Build(ref);
-    } catch (NotFoundException& e) {
+    } catch (NotFoundException&) {
     }
   }
 }
@@ -537,7 +537,7 @@ void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx
         ImNodes::EndSlot();
       }
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(sock->description.c_str());
+        ImGui::SetTooltip("%s", sock->description.c_str());
       }
     }
     ImGui::EndGroup();
@@ -556,7 +556,7 @@ void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx
         ImNodes::EndSlot();
       }
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(sock->description.c_str());
+        ImGui::SetTooltip("%s", sock->description.c_str());
       }
     }
     ImGui::EndGroup();
