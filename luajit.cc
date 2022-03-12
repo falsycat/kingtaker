@@ -33,6 +33,9 @@ class LuaJIT final {
   using Command = std::function<void(lua_State* L)>;
 
 
+  static constexpr size_t kSandboxInstructionLimit = 10000000;
+
+
   LuaJIT() noexcept {
     th_ = std::thread([this]() { Main(); });
   }
@@ -43,8 +46,24 @@ class LuaJIT final {
   }
 
   void Queue(Command&& cmd) noexcept {
+    std::unique_lock<std::mutex> k(mtx_);
     cmds_.push_back(std::move(cmd));
     cv_.notify_all();
+  }
+
+  int SandboxCall(lua_State* L, int narg, int nret) noexcept {
+    // set instruction limit
+    static const auto hook = [](auto L, auto) {
+      luaL_error(L, "reached instruction limit (<=1e8)");
+    };
+    lua_sethook(L, hook, LUA_MASKCOUNT, kSandboxInstructionLimit);
+
+    // set env to empty table
+    lua_rawgeti(L, LUA_REGISTRYINDEX, imm_table_);
+    lua_setfenv(L, -narg-2);
+
+    // call
+    return lua_pcall(L, narg, nret, 0);
   }
 
   template <typename T, typename... Args>
@@ -52,7 +71,9 @@ class LuaJIT final {
     auto ret = std::make_unique<T>(std::forward<Args>(args)...);
 
     auto ptr = (T**) lua_newuserdata(L, sizeof(T*));
-    if (luaL_newmetatable(L, typeid(T).name())) {
+
+    static const auto kName = "Obj_"s+typeid(T).name();
+    if (luaL_newmetatable(L, kName.c_str())) {
       static const auto gc = [](auto L) {
         auto udata = *(T**) lua_touserdata(L, 1);
         delete udata;
@@ -88,24 +109,30 @@ class LuaJIT final {
   std::atomic<bool> alive_ = true;
 
 
+  // lua values (modified only from lua thread)
+  int imm_table_ = LUA_REFNIL;
+
+
   void Main() noexcept {
+    std::unique_lock<std::mutex> k(mtx_);
     while (alive_) {
-      {
-        std::unique_lock<std::mutex> k(mtx_);
-        cv_.wait(k);
-      }
+      cv_.wait(k);
       for (;;) {
-        std::unique_lock<std::mutex> k(mtx_);
         if (cmds_.empty()) break;
-        if (!L && !SetUp()) break;
+        if (!L) {
+          k.unlock();
+          if (!SetUp()) break;
+          k.lock();
+        }
 
         auto cmd = std::move(cmds_.front());
         cmds_.pop_front();
-        k.unlock();
 
         // clear stack and execute the command
+        k.unlock();
         lua_settop(L, 0);
         cmd(L);
+        k.lock();
       }
     }
     if (L) lua_close(L);
@@ -113,6 +140,18 @@ class LuaJIT final {
   bool SetUp() noexcept {
     L = luaL_newstate();
     if (!L) return false;
+
+    // create immutable table for sandboxing
+    lua_createtable(L, 0, 0);
+      lua_createtable(L, 0, 0);
+        lua_createtable(L, 0, 0);
+        lua_setfield(L, -2, "__index");
+
+        lua_pushcfunction(L, [](auto L) { return luaL_error(L, "global is immutable"); });
+        lua_setfield(L, -2, "__newindex");
+
+      lua_setmetatable(L, -2);
+    imm_table_ = luaL_ref(L, LUA_REGISTRYINDEX);
 
     return true;
   }
@@ -443,7 +482,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
 
         lua_rawgeti(L, LUA_REGISTRYINDEX, index);
-        if (lua_pcall(L, 0, 1, 0) == 0 && ApplyBuildResult(L, data)) {
+        if (dev_.SandboxCall(L, 0, 1) == 0 && ApplyBuildResult(L, data)) {
           auto task = [self, data = data]() mutable {
             if (data->life.lock()) self->PostBuild();
             data->building = false;
@@ -617,7 +656,6 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           life = life_,
           self = this](auto L) mutable {
         lua_rawgeti(L, LUA_REGISTRYINDEX, sock->reg_handler);
-        // TODO instruction limit
 
         // push arguments
         L_PushValue(L, v);
@@ -629,7 +667,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         data->emittable = true;
         {
           std::unique_lock<std::recursive_mutex> k(data->mtx);
-          ret = lua_pcall(L, 3, 0, 0);
+          ret = dev_.SandboxCall(L, 3, 0);
         }
         data->emittable = false;
 
