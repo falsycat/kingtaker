@@ -51,7 +51,9 @@ class LuaJIT final {
     cv_.notify_all();
   }
 
-  int SandboxCall(lua_State* L, int narg, int nret) noexcept {
+  // the first arg is not used but necessary
+  // to make it ensure to be called from lua thread
+  int SandboxCall(lua_State*, int narg, int nret) noexcept {
     // set instruction limit
     static const auto hook = [](auto L, auto) {
       luaL_error(L, "reached instruction limit (<=1e8)");
@@ -67,9 +69,8 @@ class LuaJIT final {
   }
 
   template <typename T, typename... Args>
-  static T* NewObj(lua_State* L, Args&&... args) noexcept {
+  T* NewObj(lua_State*, Args&&... args) noexcept {
     auto ret = std::make_unique<T>(std::forward<Args>(args)...);
-
     auto ptr = (T**) lua_newuserdata(L, sizeof(T*));
 
     static const auto kName = "Obj_"s+typeid(T).name();
@@ -86,12 +87,12 @@ class LuaJIT final {
     return *ptr = ret.release();
   }
   template <typename T>
-  static T* GetObj(lua_State* L, int index) noexcept {
+  T* GetObj(lua_State*, int index) noexcept {
     auto ptr = (T**) lua_touserdata(L, index);
     return ptr? *ptr: nullptr;
   }
   template <typename T>
-  static T& GetObjOrThrow(lua_State* L, int index) noexcept {
+  T& GetObjOrThrow(lua_State*, int index) noexcept {
     auto ret = GetObj<T>(L, index);
     if (!ret) luaL_error(L, "invalid userdata");
     return *ret;
@@ -504,23 +505,16 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     dev_.Queue(std::move(task));
   }
   static bool ApplyBuildResult(lua_State* L, const std::shared_ptr<Data>& data) {
-    for (int t = 0; t < 2; ++t) {
-      const char* target_name;
-      std::vector<std::shared_ptr<SockMeta>>* target;
-      switch (t) {
-      case 0:
-        target      = &data->in;
-        target_name = "input";
-        break;
-      case 1:
-        target      = &data->out;
-        target_name = "output";
-        break;
-      default:
-        assert(false);
-      }
-
-      lua_getfield(L, -1, target_name);
+    struct T {
+      const char* name;
+      std::vector<std::shared_ptr<SockMeta>>* list;
+    };
+    const auto targets = {
+      T {"input", &data->in},
+      T {"output", &data->out},
+    };
+    for (const auto& target : targets) {
+      lua_getfield(L, -1, target.name);
       const size_t n = lua_objlen(L, -1);
       for (size_t i = 1; i <= n; ++i) {
         lua_rawgeti(L, -1, static_cast<int>(i));
@@ -529,7 +523,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         lua_getfield(L, -1, "name");
         const char* name = lua_tostring(L, -1);
         if (!name || !name[0]) return false;
-        for (auto& sock : *target) {
+        for (auto& sock : *target.list) {
           if (sock->name == name) return false;
         }
         lua_pop(L, 1);
@@ -548,7 +542,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         lua_getfield(L, -1, "handler");
         sock->reg_handler = luaL_ref(L, LUA_REGISTRYINDEX);
 
-        target->push_back(sock);
+        target.list->push_back(sock);
         lua_pop(L, 1);
       }
       lua_pop(L, 1);
