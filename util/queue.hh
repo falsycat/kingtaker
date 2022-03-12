@@ -38,7 +38,7 @@ class SimpleQueue : public Queue {
     if (delay == 0ms) cv_.notify_all();
   }
   bool Pop() {
-    std::unique_lock<std::mutex> _(mtx_);
+    std::unique_lock<std::mutex> k(mtx_);
     if (!pending()) return false;
 
     // take the task but not execute it yet because
@@ -46,6 +46,7 @@ class SimpleQueue : public Queue {
     auto task = std::move(q_.top().task);
     q_.pop();
 
+    k.unlock();
     task();
     return true;
   }

@@ -46,6 +46,22 @@ class LuaJIT final {
     cv_.notify_all();
   }
 
+  template <typename T, typename... Args>
+  static T* New(lua_State* L, Args... args) noexcept {
+    auto ptr = lua_newuserdata(L, sizeof(T));
+    if (luaL_newmetatable(L, typeid(T).name())) {
+      static const auto gc = [](auto L) {
+        auto udata = (T*) lua_touserdata(L, 1);
+        udata->~T();
+        return 0;
+      };
+      lua_pushcfunction(L, gc);
+      lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, -2);
+    return new(ptr) T(args...);
+  }
+
  private:
   lua_State* L = nullptr;
 
@@ -67,15 +83,24 @@ class LuaJIT final {
       for (;;) {
         std::unique_lock<std::mutex> k(mtx_);
         if (cmds_.empty()) break;
-        if (!L) L = luaL_newstate();
-        if (!L) break;
+        if (!L && !SetUp()) break;
+
         auto cmd = std::move(cmds_.front());
         cmds_.pop_front();
         k.unlock();
+
+        // clear stack and execute the command
+        lua_settop(L, 0);
         cmd(L);
       }
     }
     if (L) lua_close(L);
+  }
+  bool SetUp() noexcept {
+    L = luaL_newstate();
+    if (!L) return false;
+
+    return true;
   }
 };
 LuaJIT dev_;
@@ -317,7 +342,23 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   }
 
  private:
-  struct Sock final {
+  struct SockMeta final {
+    SockMeta(std::string_view n) noexcept {
+      name = n;
+    }
+    ~SockMeta() noexcept {
+      if (reg_handler == LUA_REFNIL) return;
+      auto task = [reg_handler = reg_handler](auto L) {
+        luaL_unref(L, LUA_REGISTRYINDEX, reg_handler);
+      };
+      dev_.Queue(std::move(task));
+    }
+    SockMeta(const SockMeta&) = delete;
+    SockMeta(SockMeta&&) = delete;
+    SockMeta& operator=(const SockMeta&) = delete;
+    SockMeta& operator=(SockMeta&&) = delete;
+
+
     std::string name;
     std::string description = "";
 
@@ -325,20 +366,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
     int reg_handler = LUA_REFNIL;
 
-    Sock(std::string_view n) noexcept {
-      name = n;
-    }
-    ~Sock() noexcept {
-      if (reg_handler == LUA_REFNIL) return;
-      auto task = [reg_handler = reg_handler](auto L) {
-        luaL_unref(L, LUA_REGISTRYINDEX, reg_handler);
-      };
-      dev_.Queue(std::move(task));
-    }
-    Sock(const Sock&) = delete;
-    Sock(Sock&&) = delete;
-    Sock& operator=(const Sock&) = delete;
-    Sock& operator=(Sock&&) = delete;
+    std::optional<Value> pending;
   };
   struct Data final {
     std::recursive_mutex mtx;
@@ -347,11 +375,13 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     Time lastmod;
     std::string msg = "not built";
 
-    std::vector<std::unique_ptr<Sock>> in, out;
+    std::vector<std::shared_ptr<SockMeta>> in, out;
 
-    std::atomic<bool> building = false;
-    std::atomic<bool> setup    = false;
+    std::atomic<bool> building  = false;
+    std::atomic<bool> emittable = false;
   };
+
+
   std::shared_ptr<std::monostate> life_;
   std::shared_ptr<Data>           data_;
 
@@ -362,70 +392,6 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
   // volatile params
   std::string path_editing_;
-
-
-  static void CreateEnvTable(lua_State* L, const std::shared_ptr<Data>& data) {
-    lua_createtable(L, 0, 0);  // G
-      lua_pushlightuserdata(L, data.get());
-      lua_pushlightuserdata(L, &data->in);
-      lua_pushcclosure(L, L_Sock_new, 2);
-      lua_setfield(L, -2, "Input");
-
-      lua_pushlightuserdata(L, data.get());
-      lua_pushlightuserdata(L, &data->out);
-      lua_pushcclosure(L, L_Sock_new, 2);
-      lua_setfield(L, -2, "Output");
-  }
-  static int L_Sock_new(lua_State* L) {
-    auto data = (Data*) lua_touserdata(L, lua_upvalueindex(1));
-    // data is locked while setup phase
-
-    if (!data->setup) {
-      return luaL_error(L, "adding socket can be called while setup phase");
-    }
-
-    const auto name = luaL_checkstring(L, 1);
-    auto       sock = std::make_unique<Sock>(name);
-
-    lua_createtable(L, 0, 0);
-      lua_pushlightuserdata(L, data);
-      lua_pushlightuserdata(L, sock.get());
-      lua_pushcclosure(L, L_Sock_set, 2);
-      lua_setfield(L, -2, "set");
-
-    auto socks = (std::vector<std::unique_ptr<Sock>>*) lua_touserdata(L, lua_upvalueindex(2));
-    socks->push_back(std::move(sock));
-    return 1;
-  }
-  static int L_Sock_set(lua_State* L) {
-    auto data = (Data*) lua_touserdata(L, lua_upvalueindex(1));
-    // data is locked while setup phase
-
-    if (!data->setup) {
-      return luaL_error(L, "adding socket can be called while setup phase");
-    }
-
-    auto        sock = (Sock*) lua_touserdata(L, lua_upvalueindex(2));
-    const char* name = luaL_checkstring(L, 2);
-
-    static constexpr auto kValueIndex = 3;
-    if (0 == std::strcmp(name, "description")) {
-      sock->description = luaL_checkstring(L, kValueIndex);
-
-    } else if (0 == std::strcmp(name, "cache")) {
-      sock->cache = !!luaL_checkint(L, kValueIndex);
-
-    } else if (0 == std::strcmp(name, "handler")) {
-      luaL_checktype(L, kValueIndex, LUA_TFUNCTION);
-      lua_pushvalue(L, kValueIndex);
-      sock->reg_handler = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    } else {
-      return luaL_error(L, "unknown field '%s'", name);
-    }
-    lua_pushvalue(L, 1);
-    return 1;
-  }
 
 
   void Build(RefStack& ref) noexcept {
@@ -461,18 +427,15 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         auto in_bk  = std::move(data->in);
         auto out_bk = std::move(data->out);
 
-        lua_rawgeti(L, LUA_REGISTRYINDEX, index);
-        CreateEnvTable(L, data);
-        lua_setfenv(L, -2);
 
-        data->setup = true;
-        if (lua_pcall(L, 0, 0, 0) == 0) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, index);
+        if (lua_pcall(L, 0, 1, 0) == 0 && ApplyBuildResult(L, data)) {
           auto task = [self, data = data]() mutable {
-            if (data->life.lock()) self->BuildPostproc();
+            if (data->life.lock()) self->PostBuild();
             data->building = false;
             data           = nullptr;
           };
-          Queue::main().Push(std::move(task));
+          Queue::sub().Push(std::move(task));
           data->msg     = "build succeeded";
           data->lastmod = lastmod;
         } else {
@@ -481,22 +444,70 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           data->out      = std::move(out_bk);
           data->building = false;
         }
-        data->setup = false;
       }
       data  = nullptr;
       sdata = nullptr;
     };
     dev_.Queue(std::move(task));
   }
-  void BuildPostproc() noexcept {
-    // TODO: use custom socket to receive events
+  static bool ApplyBuildResult(lua_State* L, const std::shared_ptr<Data>& data) {
+    for (int t = 0; t < 2; ++t) {
+      const char* name;
+      std::vector<std::shared_ptr<SockMeta>>* target;
+      switch (t) {
+      case 0:
+        target = &data->in;
+        name   = "input";
+        break;
+      case 1:
+        target = &data->out;
+        name   = "output";
+        break;
+      default:
+        assert(false);
+      }
+      lua_getfield(L, -1, name);
+      const size_t n = lua_objlen(L, -1);
+      for (size_t i = 1; i <= n; ++i) {
+        lua_rawgeti(L, -1, static_cast<int>(i));
+        if (!lua_istable(L, -1)) return false;
+
+        lua_getfield(L, -1, "name");
+        const char* name = lua_tostring(L, -1);
+        if (!name || !name[0]) return false;
+        for (auto& sock : *target) {
+          if (sock->name == name) return false;
+        }
+        lua_pop(L, 1);
+
+        auto sock = std::make_shared<SockMeta>(name);
+
+        lua_getfield(L, -1, "description");
+        const char* desc = lua_tostring(L, -1);
+        sock->description = desc? desc: "";
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "cache");
+        sock->cache = lua_toboolean(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "handler");
+        sock->reg_handler = luaL_ref(L, LUA_REGISTRYINDEX);
+
+        target->push_back(sock);
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+    return true;
+  }
+  void PostBuild() noexcept {
+    in_.clear();
+    out_.clear();
+
     std::unique_lock<std::recursive_mutex> k(data_->mtx);
     for (auto& src : data_->in) {
-      if (src->cache) {
-        in_.push_back(std::make_shared<CachedInSock>(this, src->name, Value::Pulse()));
-      } else {
-        in_.push_back(std::make_shared<InSock>(this, src->name));
-      }
+      in_.push_back(std::make_shared<LuaInSock>(this, src));
     }
     for (auto& src : data_->out) {
       if (src->cache) {
@@ -506,6 +517,147 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       }
     }
   }
+
+
+  static void L_PushValue(lua_State* L, const Value& v) noexcept {
+    if (v.has<Value::Integer>()) {
+      lua_pushinteger(L, v.get<Value::Integer>());
+    } else if (v.has<Value::Scalar>()) {
+      lua_pushnumber(L, v.get<Value::Scalar>());
+    } else {
+      lua_pushnil(L);
+    }
+  }
+  static Value L_ToValue(lua_State* L, int n) noexcept {
+    if (lua_isnumber(L, n)) {
+      return Value::Scalar { lua_tonumber(L, n) };
+    } else {
+      return Value::Pulse();
+    }
+  }
+  static void L_PushEmitter(lua_State* L, const std::shared_ptr<Data>& data) noexcept {
+    std::weak_ptr<Data> wdata = data;
+    auto lambda = [](auto* L) {
+      auto& wdata = *(std::weak_ptr<Data>*) lua_touserdata(L, lua_upvalueindex(1));
+      auto  data  = wdata.lock();
+      if (!data) return luaL_error(L, "emitter exipired");
+
+      std::unique_lock<std::recursive_mutex> k(data->mtx);
+      if (!data->emittable) {
+        return luaL_error(L, "currently not emittable");
+      }
+
+      const auto name = luaL_checkstring(L, 1);
+      for (auto& sock : data->out) {
+        if (sock->name == name) sock->pending = L_ToValue(L, 2);
+      }
+      return 0;
+    };
+    dev_.New<std::weak_ptr<Data>>(L, data);
+    lua_pushcclosure(L, lambda, 1);
+  }
+
+
+  class LuaContext : public Node::Context::Data {
+   public:
+    ~LuaContext() noexcept {
+      dev_.Queue([reg = reg_](auto L) { luaL_unref(L, LUA_REGISTRYINDEX, reg); });
+    }
+
+    void Push(lua_State* L) {
+      if (reg_ == LUA_REFNIL) {
+        lua_createtable(L, 0, 0);
+        lua_pushvalue(L, -1);
+        reg_ = luaL_ref(L, LUA_REGISTRYINDEX);
+      } else {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, reg_);
+      }
+    }
+
+   private:
+    int reg_ = LUA_REFNIL;
+  };
+
+
+  // InputSocket that calls lua function.
+  class LuaInSock : public InSock {
+   public:
+    LuaInSock(LuaJITNode* o, const std::shared_ptr<SockMeta>& sock) noexcept :
+        InSock(o, sock->name), owner_(o), life_(o->life_), sock_(sock) {
+    }
+
+    void Receive(const std::shared_ptr<Context>& nctx, Value&& v) noexcept {
+      auto sock = sock_.lock();
+      if (!sock || life_.expired()) return;
+
+      if (sock->cache) cache_ = std::move(v);
+
+      auto& lctx = nctx->GetOrNew<LuaContext>(owner_);
+      auto  task = [
+          sock,
+          data = owner_->data_,
+          nctx = nctx,
+          &lctx,
+          v = std::move(v),
+          life = life_,
+          self = this](auto L) mutable {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, sock->reg_handler);
+        // TODO instruction limit
+
+        // push arguments
+        L_PushValue(L, v);
+        L_PushEmitter(L, data);
+        lctx.Push(L);
+
+        // call the handler
+        int ret;
+        data->emittable = true;
+        {
+          std::unique_lock<std::recursive_mutex> k(data->mtx);
+          ret = lua_pcall(L, 3, 0, 0);
+        }
+        data->emittable = false;
+
+        // process the result
+        if (ret == 0) {
+          auto task = [nctx = nctx, life, self]() mutable {
+            if (life.lock()) {
+              self->PostReceive(nctx);
+            }
+            nctx = nullptr;
+          };
+          Queue::sub().Push(std::move(task));
+        } else {
+          data->msg = lua_tolstring(L, -1, nullptr);
+        }
+        nctx = nullptr;
+        sock = nullptr;
+        data = nullptr;
+      };
+      dev_.Queue(std::move(task));
+    }
+    void PostReceive(const std::shared_ptr<Context>& nctx) noexcept {
+      auto data = owner_->data_;
+
+      std::unique_lock<std::recursive_mutex> k(data->mtx);
+      for (auto& out : data->out) {
+        if (!out->pending) continue;
+
+        auto sock = owner_->FindOut(out->name);
+        if (sock) sock->Send(nctx, std::move(*out->pending));
+        out->pending = std::nullopt;
+      }
+    }
+
+   private:
+    LuaJITNode* owner_;
+
+    std::weak_ptr<std::monostate> life_;
+
+    std::weak_ptr<SockMeta> sock_;
+
+    Value cache_;
+  };
 };
 void LuaJITNode::Update(File::RefStack& ref) noexcept {
   if (auto_rebuild_) {
