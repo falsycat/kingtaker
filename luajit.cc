@@ -6,6 +6,7 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 
 #include <lua.hpp>
 
@@ -47,19 +48,32 @@ class LuaJIT final {
   }
 
   template <typename T, typename... Args>
-  static T* New(lua_State* L, Args... args) noexcept {
-    auto ptr = lua_newuserdata(L, sizeof(T));
+  static T* NewObj(lua_State* L, Args&&... args) noexcept {
+    auto ret = std::make_unique<T>(std::forward<Args>(args)...);
+
+    auto ptr = (T**) lua_newuserdata(L, sizeof(T*));
     if (luaL_newmetatable(L, typeid(T).name())) {
       static const auto gc = [](auto L) {
-        auto udata = (T*) lua_touserdata(L, 1);
-        udata->~T();
+        auto udata = *(T**) lua_touserdata(L, 1);
+        delete udata;
         return 0;
       };
       lua_pushcfunction(L, gc);
       lua_setfield(L, -2, "__gc");
     }
     lua_setmetatable(L, -2);
-    return new(ptr) T(args...);
+    return *ptr = ret.release();
+  }
+  template <typename T>
+  static T* GetObj(lua_State* L, int index) noexcept {
+    auto ptr = (T**) lua_touserdata(L, index);
+    return ptr? *ptr: nullptr;
+  }
+  template <typename T>
+  static T& GetObjOrThrow(lua_State* L, int index) noexcept {
+    auto ret = GetObj<T>(L, index);
+    if (!ret) luaL_error(L, "invalid userdata");
+    return *ret;
   }
 
  private:
@@ -452,21 +466,22 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   }
   static bool ApplyBuildResult(lua_State* L, const std::shared_ptr<Data>& data) {
     for (int t = 0; t < 2; ++t) {
-      const char* name;
+      const char* target_name;
       std::vector<std::shared_ptr<SockMeta>>* target;
       switch (t) {
       case 0:
-        target = &data->in;
-        name   = "input";
+        target      = &data->in;
+        target_name = "input";
         break;
       case 1:
-        target = &data->out;
-        name   = "output";
+        target      = &data->out;
+        target_name = "output";
         break;
       default:
         assert(false);
       }
-      lua_getfield(L, -1, name);
+
+      lua_getfield(L, -1, target_name);
       const size_t n = lua_objlen(L, -1);
       for (size_t i = 1; i <= n; ++i) {
         lua_rawgeti(L, -1, static_cast<int>(i));
@@ -538,7 +553,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   static void L_PushEmitter(lua_State* L, const std::shared_ptr<Data>& data) noexcept {
     std::weak_ptr<Data> wdata = data;
     auto lambda = [](auto* L) {
-      auto& wdata = *(std::weak_ptr<Data>*) lua_touserdata(L, lua_upvalueindex(1));
+      auto& wdata = dev_.GetObjOrThrow<std::weak_ptr<Data>>(L, lua_upvalueindex(1));
       auto  data  = wdata.lock();
       if (!data) return luaL_error(L, "emitter exipired");
 
@@ -553,7 +568,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       }
       return 0;
     };
-    dev_.New<std::weak_ptr<Data>>(L, data);
+    dev_.NewObj<std::weak_ptr<Data>>(L, data);
     lua_pushcclosure(L, lambda, 1);
   }
 
