@@ -357,28 +357,59 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       {typeid(iface::GUI), typeid(iface::Node)});
 
   LuaJITNode(std::string_view path = "",
-             bool auto_rebuild = false) noexcept :
+             bool auto_rebuild = false,
+             const std::vector<std::string>& in  = {},
+             const std::vector<std::string>& out = {}) noexcept :
       File(&type_), Node(kMenu),
       path_(path), auto_rebuild_(auto_rebuild) {
     life_ = std::make_shared<std::monostate>();
 
     data_ = std::make_shared<Data>();
     data_->life = life_;
+
+    for (const auto& name : in) {
+      in_.push_back(std::make_shared<LuaInSock>(this, name));
+    }
+    for (const auto& name : out) {
+      out_.push_back(std::make_shared<OutSock>(this, name));
+    }
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+    std::vector<std::string> in, out;
+    try {
+      in  = msgpack::find(msgpack::find(
+              obj, "socks"s), "in"s).as<std::vector<std::string>>();
+      out = msgpack::find(msgpack::find(
+              obj, "socks"s), "out"s).as<std::vector<std::string>>();
+    } catch (msgpack::type_error&) {
+    }
     return std::make_unique<LuaJITNode>(
         msgpack::find(obj, "path"s).as<std::string>(),
-        msgpack::find(obj, "auto_rebuild"s).as<bool>());
+        msgpack::find(obj, "auto_rebuild"s).as<bool>(),
+        in, out);
   }
   void Serialize(Packer& pk) const noexcept override {
-    pk.pack_map(2);
+    pk.pack_map(3);
 
     pk.pack("path"s);
     pk.pack(path_);
 
     pk.pack("auto_rebuild"s);
     pk.pack(auto_rebuild_);
+
+    pk.pack("socks"s);
+    {
+      pk.pack_map(2);
+
+      pk.pack("in"s);
+      pk.pack_array(static_cast<uint32_t>(in_.size()));
+      for (const auto& in : in_) pk.pack(in->name());
+
+      pk.pack("out"s);
+      pk.pack_array(static_cast<uint32_t>(out_.size()));
+      for (const auto& out : out_) pk.pack(out->name());
+    }
   }
   std::unique_ptr<File> Clone() const noexcept override {
     return std::make_unique<LuaJITNode>(path_, auto_rebuild_);
@@ -660,7 +691,10 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   // InputSocket that calls lua function.
   class LuaInSock : public InSock {
    public:
-    LuaInSock(LuaJITNode* o, const std::shared_ptr<SockMeta>& sock = nullptr) noexcept :
+    LuaInSock(LuaJITNode* o, std::string_view name) noexcept :
+        InSock(o, name), owner_(o), life_(o->life_) {
+    }
+    LuaInSock(LuaJITNode* o, const std::shared_ptr<SockMeta>& sock) noexcept :
         InSock(o, sock->name), owner_(o), life_(o->life_), sock_(sock) {
     }
 
