@@ -1,6 +1,7 @@
 #include "kingtaker.hh"
 
 #include <atomic>
+#include <cinttypes>
 #include <condition_variable>
 #include <cstring>
 #include <functional>
@@ -433,6 +434,11 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
     std::atomic<bool> building  = false;
     std::atomic<bool> emittable = false;
+
+    std::atomic<uint8_t> build_try_ = 0;
+    std::atomic<uint8_t> build_cnt_ = 0;
+    std::atomic<uint8_t> handle_try_   = 0;
+    std::atomic<uint8_t> handle_cnt_   = 0;
   };
 
 
@@ -449,6 +455,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
 
   void Build(RefStack& ref) noexcept {
+    ++data_->build_try_;
+
     LuaJITScript* script;
     {
       std::unique_lock<std::recursive_mutex> k(data_->mtx);
@@ -463,41 +471,44 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         data_->msg = e.msg();
         return;
       }
+      data_->building = true;
     }
 
     auto task = [self = this, data = data_, sdata = script->data()](auto L) mutable {
-      data->building = true;
+      Time lastmod;
+      int  index;
       {
-        Time lastmod;
-        int  index;
-        {
-          std::unique_lock<std::mutex> k(sdata->mtx);
-          index   = sdata->reg_func;
-          lastmod = sdata->lastmod;
-        }
+        std::unique_lock<std::mutex> k(sdata->mtx);
+        index   = sdata->reg_func;
+        lastmod = sdata->lastmod;
+      }
 
+      std::vector<std::shared_ptr<SockMeta>> in_bk, out_bk;
+      {
         std::unique_lock<std::recursive_mutex> k(data->mtx);
+        in_bk  = std::move(data->in);
+        out_bk = std::move(data->out);
+      }
 
-        auto in_bk  = std::move(data->in);
-        auto out_bk = std::move(data->out);
-
-
-        lua_rawgeti(L, LUA_REGISTRYINDEX, index);
-        if (dev_.SandboxCall(L, 0, 1) == 0 && ApplyBuildResult(L, data)) {
-          auto task = [self, data = data]() mutable {
-            if (data->life.lock()) self->PostBuild();
-            data->building = false;
-            data           = nullptr;
-          };
-          Queue::sub().Push(std::move(task));
-          data->msg     = "build succeeded";
-          data->lastmod = lastmod;
-        } else {
-          data->msg      = lua_tolstring(L, -1, nullptr);
-          data->in       = std::move(in_bk);
-          data->out      = std::move(out_bk);
+      lua_rawgeti(L, LUA_REGISTRYINDEX, index);
+      const int ret = dev_.SandboxCall(L, 0, 1);
+      if (ret == 0 && ApplyBuildResult(L, data)) {
+        std::unique_lock<std::recursive_mutex> k(data->mtx);
+        auto task = [self, data = data]() mutable {
+          if (data->life.lock()) self->PostBuild();
           data->building = false;
-        }
+          data           = nullptr;
+        };
+        Queue::sub().Push(std::move(task));
+        data->msg     = "build succeeded";
+        data->lastmod = lastmod;
+        ++data->build_cnt_;
+      } else {
+        std::unique_lock<std::recursive_mutex> k(data->mtx);
+        data->msg      = lua_tolstring(L, -1, nullptr);
+        data->in       = std::move(in_bk);
+        data->out      = std::move(out_bk);
+        data->building = false;
       }
       data  = nullptr;
       sdata = nullptr;
@@ -505,6 +516,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     dev_.Queue(std::move(task));
   }
   static bool ApplyBuildResult(lua_State* L, const std::shared_ptr<Data>& data) {
+    std::unique_lock<std::recursive_mutex> k(data->mtx);
+
     struct T {
       const char* name;
       std::vector<std::shared_ptr<SockMeta>>* list;
@@ -550,6 +563,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     return true;
   }
   void PostBuild() noexcept {
+    // TODO sync socks
     in_.clear();
     out_.clear();
 
@@ -606,6 +620,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   }
 
 
+  // lua node context for node execution
   class LuaContext : public Node::Context::Data {
    public:
     ~LuaContext() noexcept {
@@ -635,6 +650,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     }
 
     void Receive(const std::shared_ptr<Context>& nctx, Value&& v) noexcept {
+      ++owner_->data_->handle_try_;
+
       auto sock = sock_.lock();
       if (!sock || life_.expired()) return;
 
@@ -659,10 +676,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         // call the handler
         int ret;
         data->emittable = true;
-        {
-          std::unique_lock<std::recursive_mutex> k(data->mtx);
-          ret = dev_.SandboxCall(L, 3, 0);
-        }
+        ret = dev_.SandboxCall(L, 3, 0);
         data->emittable = false;
 
         // process the result
@@ -674,6 +688,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
             nctx = nullptr;
           };
           Queue::sub().Push(std::move(task));
+          ++data->handle_cnt_;
         } else {
           data->msg = lua_tolstring(L, -1, nullptr);
         }
@@ -716,13 +731,19 @@ void LuaJITNode::Update(File::RefStack& ref) noexcept {
   }
 }
 void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
-  ImGui::TextUnformatted("LuaJIT Node");
-
+  ImGui::TextUnformatted("LuaJIT");
   const auto em = ImGui::GetFontSize();
 
-  const auto top = ImGui::GetCursorPosY();
+  // keep sapce for status text
+  ImGui::SameLine();
+  const auto stat_y = ImGui::GetCursorPosY();
+  ImGui::NewLine();
+
+  // keep space for path text
+  const auto path_y = ImGui::GetCursorPosY();
   ImGui::Dummy({1, ImGui::GetFrameHeight()});
 
+  // display IO pins
   std::unique_lock<std::recursive_mutex> k(data_->mtx);
   ImGui::BeginGroup();
   {
@@ -763,6 +784,7 @@ void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx
   ImGui::EndGroup();
   const auto w = ImGui::GetItemRectSize().x;
 
+  // display msg
   if (data_->msg.size()) {
     const char* msg   = data_->msg.c_str();
     const auto  msg_w = ImGui::CalcTextSize(msg).x;
@@ -776,7 +798,26 @@ void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx
     }
   }
 
-  ImGui::SetCursorPosY(top);
+  // display status
+  ImGui::SetCursorPosY(stat_y);
+  {
+    const uint8_t btry = data_->build_try_;
+    const uint8_t bcnt = data_->build_cnt_;
+    const uint8_t htry = data_->handle_try_;
+    const uint8_t hcnt = data_->handle_cnt_;
+
+    char temp[64];
+    snprintf(temp, sizeof(temp),
+             "%02" PRIX8 "/%02" PRIX8 "-%02" PRIX8 "/%02" PRIX8,
+             bcnt, btry, hcnt, htry);
+
+    const auto stat_w = ImGui::CalcTextSize(temp).x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-stat_w));
+    ImGui::TextDisabled("%s", temp);
+  }
+
+  // display current path
+  ImGui::SetCursorPosY(path_y);
   ImGui::Button(("-> "s+(path_.empty()? "(empty)"s: path_)).c_str(), {w, 0});
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
     UpdateMenu(ref, ctx);
