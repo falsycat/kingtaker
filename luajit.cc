@@ -54,7 +54,7 @@ class LuaJIT final {
 
   // the first arg is not used but necessary
   // to make it ensure to be called from lua thread
-  int SandboxCall(lua_State*, int narg, int nret) noexcept {
+  int SandboxCall(lua_State*, int narg, int nret) const noexcept {
     // set instruction limit
     static const auto hook = [](auto L, auto) {
       luaL_error(L, "reached instruction limit (<=1e8)");
@@ -69,12 +69,13 @@ class LuaJIT final {
     return lua_pcall(L, narg, nret, 0);
   }
 
+  // create and push userdata that holds an instance of T
+  // the destructor is guaranteed to be called by GC
   template <typename T, typename... Args>
-  T* NewObj(lua_State*, Args&&... args) noexcept {
-    auto ret = std::make_unique<T>(std::forward<Args>(args)...);
-    auto ptr = (T**) lua_newuserdata(L, sizeof(T*));
-
+  T* NewObj(lua_State*, Args&&... args) const {
     static const auto kName = "Obj_"s+typeid(T).name();
+
+    auto ret = NewObjWithoutMeta<T>(std::forward<Args>(args)...);
     if (luaL_newmetatable(L, kName.c_str())) {
       static const auto gc = [](auto L) {
         auto udata = *(T**) lua_touserdata(L, 1);
@@ -85,18 +86,73 @@ class LuaJIT final {
       lua_setfield(L, -2, "__gc");
     }
     lua_setmetatable(L, -2);
+    return ret;
+  }
+  template <typename T, typename... Args>
+  T* NewObjWithoutMeta(lua_State*, Args&&... args) const {
+    auto ret = std::make_unique<T>(std::forward<Args>(args)...);
+    auto ptr = (T**) lua_newuserdata(L, sizeof(T*));
     return *ptr = ret.release();
   }
   template <typename T>
-  T* GetObj(lua_State*, int index) noexcept {
-    auto ptr = (T**) lua_touserdata(L, index);
-    return ptr? *ptr: nullptr;
+  T* GetObj(lua_State*, int index, const char* name = nullptr) const {
+    static const auto kName = "Obj_"s+typeid(T).name();
+    if (!name) name = kName.c_str();
+    auto ret = (T**) luaL_checkudata(L, index, name);
+    return ret? *ret: nullptr;
   }
-  template <typename T>
-  T& GetObjOrThrow(lua_State*, int index) noexcept {
-    auto ret = GetObj<T>(L, index);
-    if (!ret) luaL_error(L, "invalid userdata");
-    return *ret;
+
+  // Value type conversion
+  void PushValue(lua_State*, const Value& v) const {
+    if (v.has<Value::Pulse>()) {
+      lua_pushnil(L);
+
+    } else if (v.has<Value::Integer>()) {
+      lua_pushinteger(L, v.get<Value::Integer>());
+
+    } else if (v.has<Value::Scalar>()) {
+      lua_pushnumber(L, v.get<Value::Scalar>());
+
+    } else if (v.has<Value::Boolean>()) {
+      lua_pushboolean(L, v.get<Value::Boolean>());
+
+    } else if (v.has<Value::String>()) {
+      const auto& s = v.get<Value::String>();
+      lua_pushlstring(L, s.data(), s.size());
+
+    } else if (v.has<Value::Vec2>()) {
+      const auto& vec = v.get<Value::Vec2>();
+      lua_createtable(L, 2, 0);
+        lua_pushnumber(L, vec.x);
+        lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, vec.y);
+        lua_rawseti(L, -2, 2);
+
+    } else if (v.has<Value::Vec3>()) {
+      const auto& vec = v.get<Value::Vec3>();
+      lua_createtable(L, 3, 0);
+        lua_pushnumber(L, vec.x);
+        lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, vec.y);
+        lua_rawseti(L, -2, 2);
+        lua_pushnumber(L, vec.z);
+        lua_rawseti(L, -2, 3);
+
+    } else if (v.has<Value::Vec4>()) {
+      const auto& vec = v.get<Value::Vec3>();
+      lua_createtable(L, 3, 0);
+        lua_pushnumber(L, vec[0]);
+        lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, vec[1]);
+        lua_rawseti(L, -2, 2);
+        lua_pushnumber(L, vec[2]);
+        lua_rawseti(L, -2, 3);
+        lua_pushnumber(L, vec[3]);
+        lua_rawseti(L, -2, 4);
+
+    } else {
+      lua_pushnil(L);
+    }
   }
 
  private:
@@ -145,13 +201,13 @@ class LuaJIT final {
 
     // create immutable table for sandboxing
     lua_createtable(L, 0, 0);
-      lua_createtable(L, 0, 0);
+      if (luaL_newmetatable(L, "ImmTable")) {
         lua_createtable(L, 0, 0);
         lua_setfield(L, -2, "__index");
 
         lua_pushcfunction(L, [](auto L) { return luaL_error(L, "global is immutable"); });
         lua_setfield(L, -2, "__newindex");
-
+      }
       lua_setmetatable(L, -2);
     imm_table_ = luaL_ref(L, LUA_REGISTRYINDEX);
 
@@ -462,8 +518,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
     std::vector<std::shared_ptr<SockMeta>> in, out;
 
-    std::atomic<bool> building  = false;
-    std::atomic<bool> emittable = false;
+    std::atomic<bool> building = false;
 
     std::atomic<uint8_t> build_try_ = 0;
     std::atomic<uint8_t> build_cnt_ = 0;
@@ -627,45 +682,6 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   }
 
 
-  static void L_PushValue(lua_State* L, const Value& v) noexcept {
-    if (v.has<Value::Integer>()) {
-      lua_pushinteger(L, v.get<Value::Integer>());
-    } else if (v.has<Value::Scalar>()) {
-      lua_pushnumber(L, v.get<Value::Scalar>());
-    } else {
-      lua_pushnil(L);
-    }
-  }
-  static Value L_ToValue(lua_State* L, int n) noexcept {
-    if (lua_isnumber(L, n)) {
-      return Value::Scalar { lua_tonumber(L, n) };
-    } else {
-      return Value::Pulse();
-    }
-  }
-  static void L_PushEmitter(lua_State* L, const std::shared_ptr<Data>& data) noexcept {
-    std::weak_ptr<Data> wdata = data;
-    auto lambda = [](auto* L) {
-      auto& wdata = dev_.GetObjOrThrow<std::weak_ptr<Data>>(L, lua_upvalueindex(1));
-      auto  data  = wdata.lock();
-      if (!data) return luaL_error(L, "emitter exipired");
-
-      std::unique_lock<std::recursive_mutex> k(data->mtx);
-      if (!data->emittable) {
-        return luaL_error(L, "currently not emittable");
-      }
-
-      const auto name = luaL_checkstring(L, 1);
-      for (auto& sock : data->out) {
-        if (sock->name == name) sock->pending = L_ToValue(L, 2);
-      }
-      return 0;
-    };
-    dev_.NewObj<std::weak_ptr<Data>>(L, data);
-    lua_pushcclosure(L, lambda, 1);
-  }
-
-
   // lua node context for node execution
   class LuaContext : public Node::Context::Data {
    public:
@@ -686,7 +702,6 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
    private:
     int reg_ = LUA_REFNIL;
   };
-
 
   // InputSocket that calls lua function.
   class LuaInSock : public InSock {
@@ -725,20 +740,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           life = life_,
           self = this](auto L) mutable {
         lua_rawgeti(L, LUA_REGISTRYINDEX, sock->reg_handler);
-
-        // push arguments
-        L_PushValue(L, v);
-        L_PushEmitter(L, data);
-        lctx.Push(L);
-
-        // call the handler
-        int ret;
-        data->emittable = true;
-        ret = dev_.SandboxCall(L, 3, 0);
-        data->emittable = false;
-
-        // process the result
-        if (ret == 0) {
+        L_PushEvent(L, v, lctx, data);
+        if (dev_.SandboxCall(L, 1, 0) == 0) {
           auto task = [nctx = nctx, life, self]() mutable {
             if (life.lock()) {
               self->PostReceive(nctx);
@@ -780,6 +783,118 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
     Value cache_;
   };
+
+  static void L_PushEvent(
+      lua_State* L,
+      const Value&                 v,
+      LuaContext&                  ctx,
+      const std::shared_ptr<Data>& data) noexcept {
+    lua_createtable(L, 0, 3);
+      dev_.PushValue(L, v);
+      lua_setfield(L, -2, "value");
+
+      ctx.Push(L);
+      lua_setfield(L, -2, "ctx");
+
+      L_PushEmitter(L, data);
+      lua_setfield(L, -2, "emit");
+  }
+  static void L_PushEmitter(lua_State* L, const std::shared_ptr<Data>& data) noexcept {
+    dev_.NewObjWithoutMeta<std::weak_ptr<Data>>(L, data);
+      if (luaL_newmetatable(L, "Node_Emitter")) {
+        lua_createtable(L, 0, 16);
+          lua_pushcfunction(L, L_Emitter<Value::Pulse>);
+          lua_setfield(L, -2, "pulse");
+
+          lua_pushcfunction(L, L_Emitter<Value::Integer>);
+          lua_setfield(L, -2, "integer");
+
+          lua_pushcfunction(L, L_Emitter<Value::Scalar>);
+          lua_setfield(L, -2, "scalar");
+
+          lua_pushcfunction(L, L_Emitter<Value::Boolean>);
+          lua_setfield(L, -2, "boolean");
+
+          lua_pushcfunction(L, L_Emitter<Value::String>);
+          lua_setfield(L, -2, "string");
+
+          lua_pushcfunction(L, L_Emitter<Value::Vec2>);
+          lua_setfield(L, -2, "vec2");
+
+          lua_pushcfunction(L, L_Emitter<Value::Vec3>);
+          lua_setfield(L, -2, "vec3");
+
+          lua_pushcfunction(L, L_Emitter<Value::Vec4>);
+          lua_setfield(L, -2, "vec4");
+        lua_setfield(L, -2, "__index");
+      }
+      lua_setmetatable(L, -2);
+  }
+  template <typename T>
+  static int L_Emitter(lua_State* L) {
+    auto wdata = dev_.GetObj<std::weak_ptr<Data>>(L, 1, "Node_Emitter");
+    auto data  = wdata? wdata->lock(): nullptr;
+    if (!data) return luaL_error(L, "emitter exipired");
+
+    const char* name = luaL_checkstring(L, 2);
+
+    constexpr int kValIndex = 3;
+    {
+      std::unique_lock<std::recursive_mutex> k(data->mtx);
+
+      std::shared_ptr<SockMeta> meta;
+      for (auto& m : data->out) {
+        if (m->name == name) meta = m;
+      }
+      if (!meta) return luaL_error(L, "unknown output: %s", name);
+
+      auto& ret = meta->pending;
+      if constexpr (std::is_same<T, Value::Pulse>::value) {
+        ret = Value::Pulse {};
+      } else if constexpr (std::is_same<T, Value::Integer>::value) {
+        ret = Value::Integer {lua_tointeger(L, kValIndex)};
+      } else if constexpr (std::is_same<T, Value::Scalar>::value) {
+        ret = Value::Scalar {lua_tonumber(L, kValIndex)};
+      } else if constexpr (std::is_same<T, Value::Boolean>::value) {
+        ret = Value::Boolean {!!lua_toboolean(L, kValIndex)};
+      } else if constexpr (std::is_same<T, Value::String>::value) {
+        ret = Value::String {lua_tostring(L, kValIndex)};
+      } else if constexpr (std::is_same<T, Value::Vec2>::value) {
+        luaL_checktype(L, kValIndex, LUA_TTABLE);
+        lua_rawgeti(L, kValIndex, 1);
+        lua_rawgeti(L, kValIndex, 2);
+        ret = Value::Vec2 {
+          luaL_checknumber(L, -2),
+          luaL_checknumber(L, -1)
+        };
+      } else if constexpr (std::is_same<T, Value::Vec3>::value) {
+        luaL_checktype(L, kValIndex, LUA_TTABLE);
+        lua_rawgeti(L, kValIndex, 1);
+        lua_rawgeti(L, kValIndex, 2);
+        lua_rawgeti(L, kValIndex, 3);
+        ret = Value::Vec3 {
+          luaL_checknumber(L, -3),
+          luaL_checknumber(L, -2),
+          luaL_checknumber(L, -1)
+        };
+      } else if constexpr (std::is_same<T, Value::Vec4>::value) {
+        luaL_checktype(L, kValIndex, LUA_TTABLE);
+        lua_rawgeti(L, kValIndex, 1);
+        lua_rawgeti(L, kValIndex, 2);
+        lua_rawgeti(L, kValIndex, 3);
+        lua_rawgeti(L, kValIndex, 4);
+        ret = Value::Vec4 {
+          luaL_checknumber(L, -4),
+          luaL_checknumber(L, -3),
+          luaL_checknumber(L, -2),
+          luaL_checknumber(L, -1)
+        };
+      } else {
+        luaL_error(L, "unknown type");
+      }
+    }
+    return 0;
+  }
 };
 void LuaJITNode::Update(File::RefStack& ref) noexcept {
   if (auto_rebuild_ || force_build_) {
