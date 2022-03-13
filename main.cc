@@ -30,7 +30,7 @@ using namespace kingtaker;
 
 
 static const char*      kFileName      = "kingtaker.bin";
-static constexpr size_t kTasksPerFrame = 10000;
+static constexpr size_t kTasksPerFrame = 1000;
 
 
 static std::optional<std::string> panic_;

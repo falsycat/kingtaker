@@ -402,7 +402,6 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       name = n;
     }
     ~SockMeta() noexcept {
-      if (reg_handler == LUA_REFNIL) return;
       auto task = [reg_handler = reg_handler](auto L) {
         luaL_unref(L, LUA_REGISTRYINDEX, reg_handler);
       };
@@ -413,7 +412,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     SockMeta& operator=(const SockMeta&) = delete;
     SockMeta& operator=(SockMeta&&) = delete;
 
-
+    // immutable params (never be modified after construction)
     std::string name;
     std::string description = "";
 
@@ -452,6 +451,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
   // volatile params
   std::string path_editing_;
+
+  bool force_build_ = true;
 
 
   void Build(RefStack& ref) noexcept {
@@ -563,20 +564,34 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     return true;
   }
   void PostBuild() noexcept {
-    // TODO sync socks
-    in_.clear();
-    out_.clear();
+    auto in_bk  = std::move(in_);
+    auto out_bk = std::move(out_);
 
+    // sync socks
     std::unique_lock<std::recursive_mutex> k(data_->mtx);
-    for (auto& src : data_->in) {
-      in_.push_back(std::make_shared<LuaInSock>(this, src));
-    }
-    for (auto& src : data_->out) {
-      if (src->cache) {
-        out_.push_back(std::make_shared<CachedOutSock>(this, src->name, Value::Pulse()));
+    for (auto& m : data_->in) {
+      auto itr = std::find_if(in_bk.begin(), in_bk.end(),
+                              [&m](auto& x) { return x->name() == m->name; });
+      std::shared_ptr<InSock> sock;
+      if (itr != in_bk.end()) {
+        auto lsock = std::dynamic_pointer_cast<LuaInSock>(*itr);
+        lsock->SwapMeta(m);
+        sock = std::move(lsock);
       } else {
-        out_.push_back(std::make_shared<OutSock>(this, src->name));
+        sock = std::make_shared<LuaInSock>(this, m);
       }
+      in_.push_back(std::move(sock));
+    }
+    for (auto& m : data_->out) {
+      auto itr = std::find_if(out_bk.begin(), out_bk.end(),
+                              [&m](auto& x) { return x->name() == m->name; });
+      std::shared_ptr<OutSock> sock;
+      if (itr != out_bk.end()) {
+        sock = *itr;
+      } else {
+        sock = std::make_shared<OutSock>(this, m->name);
+      }
+      out_.push_back(std::move(sock));
     }
   }
 
@@ -645,14 +660,23 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   // InputSocket that calls lua function.
   class LuaInSock : public InSock {
    public:
-    LuaInSock(LuaJITNode* o, const std::shared_ptr<SockMeta>& sock) noexcept :
+    LuaInSock(LuaJITNode* o, const std::shared_ptr<SockMeta>& sock = nullptr) noexcept :
         InSock(o, sock->name), owner_(o), life_(o->life_), sock_(sock) {
+    }
+
+    void SwapMeta(const std::shared_ptr<SockMeta>& sock) noexcept {
+      std::unique_lock<std::mutex> k(mtx_);
+      sock_ = sock;
     }
 
     void Receive(const std::shared_ptr<Context>& nctx, Value&& v) noexcept {
       ++owner_->data_->handle_try_;
 
-      auto sock = sock_.lock();
+      std::shared_ptr<SockMeta> sock;
+      {
+        std::unique_lock<std::mutex> k(mtx_);
+        sock = sock_.lock();
+      }
       if (!sock || life_.expired()) return;
 
       if (sock->cache) cache_ = std::move(v);
@@ -716,18 +740,23 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
     std::weak_ptr<std::monostate> life_;
 
+    std::mutex mtx_;
+
     std::weak_ptr<SockMeta> sock_;
 
     Value cache_;
   };
 };
 void LuaJITNode::Update(File::RefStack& ref) noexcept {
-  if (auto_rebuild_) {
+  if (auto_rebuild_ || force_build_) {
     try {
       auto f = &*ref.Resolve(path_);
-      if (f->lastModified() > lastModified()) Build(ref);
+      if (force_build_ || f->lastModified() > lastModified()) {
+        Build(ref);
+      }
     } catch (NotFoundException&) {
     }
+    force_build_ = false;
   }
 }
 void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
