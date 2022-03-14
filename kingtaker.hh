@@ -7,7 +7,6 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <source_location>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -19,6 +18,7 @@
 #include <boost/stacktrace.hpp>
 
 #include <msgpack.hh>
+#include <source_location.hh>
 
 
 namespace kingtaker {
@@ -38,9 +38,9 @@ class Exception {
   Exception() = delete;
   virtual ~Exception() = default;
   Exception(const Exception&) = delete;
-  Exception(Exception&&) = default;
+  Exception(Exception&&) = delete;
   Exception& operator=(const Exception&) = delete;
-  Exception& operator=(Exception&&) = default;
+  Exception& operator=(Exception&&) = delete;
 
   virtual std::string Stringify() const noexcept;
 

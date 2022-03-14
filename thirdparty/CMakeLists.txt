@@ -208,3 +208,20 @@ target_include_directories(nlohmann-json SYSTEM
   INTERFACE
     "${nlohmann-json_SOURCE_DIR}/single_include"
 )
+
+
+# ---- paweldac/source_location ----
+# repository: https://github.com/paweldac/source_location
+# license   : MIT 
+
+FetchContent_Declare(
+  source_location
+  URL "https://github.com/paweldac/source_location/archive/ff0002f92cdde3576ce02048dd9eb7823cabdc7b.zip"
+)
+FetchContent_Populate(source_location)
+
+add_library(source_location INTERFACE)
+target_include_directories(source_location SYSTEM INTERFACE .)
+target_include_directories(source_location
+  INTERFACE "${source_location_SOURCE_DIR}/include"
+)

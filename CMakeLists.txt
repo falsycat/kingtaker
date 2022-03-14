@@ -82,6 +82,7 @@ target_link_libraries(kingtaker
     linalg.h
     luajit
     msgpackc-cxx
+    source_location
 )
 
 
