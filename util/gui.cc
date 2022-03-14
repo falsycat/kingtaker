@@ -107,4 +107,32 @@ bool InputPathMenu(File::RefStack& ref, std::string* editing, std::string* path)
   return false;
 }
 
+
+void TextCenterChopped(std::string_view v, float w) noexcept {
+  auto eol  = v.find('\n');
+  auto line = v.substr(0, eol);
+
+  auto trimmed = eol != std::string::npos;
+
+  auto msg_w  = 0.f;
+  auto dots_w = 0.f;
+  for (;;) {
+    msg_w = ImGui::CalcTextSize(&line.front(), &line.back()+1).x + dots_w;
+    if (msg_w < w) break;
+    if (dots_w == 0) dots_w = ImGui::CalcTextSize("...").x;
+    line.remove_suffix(1);
+  }
+  ImGui::BeginGroup();
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-msg_w)/2);
+  if (trimmed) {
+    ImGui::Text("%.*s...", static_cast<int>(line.size()), line.data());
+  } else {
+    ImGui::TextUnformatted(&line.front(), &line.back()+1);
+  }
+  ImGui::EndGroup();
+  if (trimmed && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%.*s", static_cast<int>(v.size()), v.data());
+  }
+}
+
 }  // namespace kingtaker::gui

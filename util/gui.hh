@@ -32,4 +32,6 @@ void NodeCanvasResetZoom() noexcept;
 
 bool InputPathMenu(File::RefStack&, std::string* editing, std::string* path) noexcept;
 
+void TextCenterChopped(std::string_view, float w) noexcept;
+
 }  // namespace kingtaker::gui

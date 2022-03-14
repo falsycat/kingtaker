@@ -5,13 +5,17 @@
 
 namespace kingtaker {
 
-std::string                   Exception::msg_;
-boost::stacktrace::stacktrace Exception::strace_;
-
-std::string Exception::Stringify() noexcept {
+std::string Exception::Stringify() const noexcept {
   std::stringstream st;
-  st << msg_ << std::endl;
-  st << "==== STACKTRACE ====" << std::endl;
+  st << msg_ << "\n";
+  st << "IN   " << loc_.function_name() << "\n";
+  st << "FROM " << loc_.file_name() << ":" << loc_.line() << ":" << loc_.column() << std::endl;
+  return st.str();
+}
+std::string HeavyException::Stringify() const noexcept {
+  std::stringstream st;
+  st << Exception::Stringify();
+  st << "==== STACKTRACE ====\n";
   st << strace_ << std::endl;
   return st.str();
 }
@@ -125,9 +129,7 @@ std::string File::RefStack::Stringify() const noexcept {
 
 File::RefStack File::RefStack::Resolve(const Path& p) const {
   auto a = *this;
-  if (!a.ResolveInplace(p)) {
-    throw NotFoundException("Resolving failed: "+StringifyPath(p));
-  }
+  if (!a.ResolveInplace(p)) throw NotFoundException(p, a);
   return a;
 }
 

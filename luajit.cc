@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <type_traits>
 
@@ -33,9 +34,15 @@ class LuaJIT final {
  public:
   using Command = std::function<void(lua_State* L)>;
 
-
-  static constexpr size_t kSandboxInstructionLimit = 10000000;
-
+  class RuntimeException : public HeavyException {
+   public:
+    RuntimeException(std::string_view msg, Loc loc = Loc::current()) noexcept :
+        HeavyException(msg, loc) {
+    }
+    std::string Stringify() const noexcept {
+      return "[LuaJIT Exception]\n"s+Exception::Stringify();
+    }
+  };
 
   LuaJIT() noexcept {
     th_ = std::thread([this]() { Main(); });
@@ -55,6 +62,8 @@ class LuaJIT final {
   // the first arg is not used but necessary
   // to make it ensure to be called from lua thread
   int SandboxCall(lua_State*, int narg, int nret) const noexcept {
+    static constexpr size_t kSandboxInstructionLimit = 10000000;
+
     // set instruction limit
     static const auto hook = [](auto L, auto) {
       luaL_error(L, "reached instruction limit (<=1e8)");
@@ -308,7 +317,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
 
     } catch (Exception& e) {
       std::unique_lock<std::mutex> k(data_->mtx);
-      data_->msg = e.msg();
+      data_->msg = "compile failed\n"+e.msg();
     }
   }
   void Compile(File::RefStack& ref) noexcept {
@@ -316,7 +325,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
       Compile_(&*ref.Resolve(path_));
     } catch (Exception& e) {
       std::unique_lock<std::mutex> k(data_->mtx);
-      data_->msg = e.msg();
+      data_->msg = "compile failed\n"+e.msg();
     }
   }
 
@@ -555,7 +564,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         script = LuaJITScript::Cast(script_ref);
         script->CompileIf(script_ref);
       } catch (Exception& e) {
-        data_->msg = e.msg();
+        data_->msg = "build failed\n"+e.msg();
         return;
       }
       data_->building = true;
@@ -578,8 +587,12 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       }
 
       lua_rawgeti(L, LUA_REGISTRYINDEX, index);
-      const int ret = dev_.SandboxCall(L, 0, 1);
-      if (ret == 0 && ApplyBuildResult(L, data)) {
+      try {
+        if (dev_.SandboxCall(L, 0, 1) != 0) {
+          throw LuaJIT::RuntimeException(lua_tolstring(L, -1, nullptr));
+        }
+        ApplyBuildResult(L, data);
+
         std::unique_lock<std::recursive_mutex> k(data->mtx);
         auto task = [self, data = data]() mutable {
           if (data->life.lock()) self->PostBuild();
@@ -590,9 +603,10 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         data->msg     = "build succeeded";
         data->lastmod = lastmod;
         ++data->build_cnt_;
-      } else {
+
+      } catch (LuaJIT::RuntimeException& e) {
         std::unique_lock<std::recursive_mutex> k(data->mtx);
-        data->msg      = lua_tolstring(L, -1, nullptr);
+        data->msg      = "build failed\n"+e.msg();
         data->in       = std::move(in_bk);
         data->out      = std::move(out_bk);
         data->building = false;
@@ -613,16 +627,24 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       T {"input", &data->in},
       T {"output", &data->out},
     };
+    if (!lua_istable(L, -1)) {
+      throw LuaJIT::RuntimeException("expected a Node definition table as a result");
+    }
     for (const auto& target : targets) {
       lua_getfield(L, -1, target.name);
       const size_t n = lua_objlen(L, -1);
       for (size_t i = 1; i <= n; ++i) {
         lua_rawgeti(L, -1, static_cast<int>(i));
-        if (!lua_istable(L, -1)) return false;
+        if (!lua_istable(L, -1)) {
+          throw LuaJIT::RuntimeException("input must be an array of pins");
+        }
 
         lua_getfield(L, -1, "name");
         const char* name = lua_tostring(L, -1);
-        if (!name || !name[0]) return false;
+        if (!name || !name[0]) {
+          throw LuaJIT::RuntimeException(
+              "pin name should be convertible to non-empty string");
+        }
         for (auto& sock : *target.list) {
           if (sock->name == name) return false;
         }
@@ -963,18 +985,7 @@ void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx
   const auto w = ImGui::GetItemRectSize().x;
 
   // display msg
-  if (data_->msg.size()) {
-    const char* msg   = data_->msg.c_str();
-    const auto  msg_w = ImGui::CalcTextSize(msg).x;
-    if (msg_w < w) {
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-msg_w)/2);
-      ImGui::TextUnformatted(msg);
-    } else {
-      ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+w);
-      ImGui::TextWrapped("%s", msg);
-      ImGui::PopTextWrapPos();
-    }
-  }
+  gui::TextCenterChopped(data_->msg, w);
 
   // display status
   ImGui::SetCursorPosY(stat_y);
