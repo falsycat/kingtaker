@@ -33,9 +33,15 @@ class LuaJIT final {
  public:
   using Command = std::function<void(lua_State* L)>;
 
-
-  static constexpr size_t kSandboxInstructionLimit = 10000000;
-
+  class RuntimeException : public HeavyException {
+   public:
+    RuntimeException(std::string_view msg, Loc loc = Loc::current()) noexcept :
+        HeavyException(msg, loc) {
+    }
+    std::string Stringify() const noexcept {
+      return "[LuaJIT Exception]\n"s+Exception::Stringify();
+    }
+  };
 
   LuaJIT() noexcept {
     th_ = std::thread([this]() { Main(); });
@@ -55,6 +61,8 @@ class LuaJIT final {
   // the first arg is not used but necessary
   // to make it ensure to be called from lua thread
   int SandboxCall(lua_State*, int narg, int nret) const noexcept {
+    static constexpr size_t kSandboxInstructionLimit = 10000000;
+
     // set instruction limit
     static const auto hook = [](auto L, auto) {
       luaL_error(L, "reached instruction limit (<=1e8)");
@@ -225,12 +233,16 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
 
 
   struct Data final {
+   public:
+    ~Data() noexcept {
+      dev_.Queue([i = reg_func](auto L) { luaL_unref(L, LUA_REGISTRYINDEX, i); });
+    }
+
     std::mutex  mtx;
     std::string msg = "not compiled yet";
 
     Time lastmod;
 
-    // TODO: unref
     int reg_func = LUA_REFNIL;
 
     std::atomic<bool> compiling;
@@ -308,7 +320,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
 
     } catch (Exception& e) {
       std::unique_lock<std::mutex> k(data_->mtx);
-      data_->msg = e.msg();
+      data_->msg = "compile failed\n"+e.msg();
     }
   }
   void Compile(File::RefStack& ref) noexcept {
@@ -316,7 +328,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
       Compile_(&*ref.Resolve(path_));
     } catch (Exception& e) {
       std::unique_lock<std::mutex> k(data_->mtx);
-      data_->msg = e.msg();
+      data_->msg = "compile failed\n"+e.msg();
     }
   }
 
@@ -421,6 +433,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     life_ = std::make_shared<std::monostate>();
 
     data_ = std::make_shared<Data>();
+    data_->self = this;
     data_->life = life_;
 
     for (const auto& name : in) {
@@ -506,11 +519,11 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     bool cache = true;
 
     int reg_handler = LUA_REFNIL;
-
-    std::optional<Value> pending;
   };
   struct Data final {
     std::recursive_mutex mtx;
+
+    LuaJITNode* self;
     std::weak_ptr<std::monostate> life;
 
     Time lastmod;
@@ -555,7 +568,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         script = LuaJITScript::Cast(script_ref);
         script->CompileIf(script_ref);
       } catch (Exception& e) {
-        data_->msg = e.msg();
+        data_->msg = "build failed\n"+e.msg();
         return;
       }
       data_->building = true;
@@ -578,8 +591,12 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       }
 
       lua_rawgeti(L, LUA_REGISTRYINDEX, index);
-      const int ret = dev_.SandboxCall(L, 0, 1);
-      if (ret == 0 && ApplyBuildResult(L, data)) {
+      try {
+        if (dev_.SandboxCall(L, 0, 1) != 0) {
+          throw LuaJIT::RuntimeException(lua_tolstring(L, -1, nullptr));
+        }
+        ApplyBuildResult(L, data);
+
         std::unique_lock<std::recursive_mutex> k(data->mtx);
         auto task = [self, data = data]() mutable {
           if (data->life.lock()) self->PostBuild();
@@ -590,9 +607,10 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         data->msg     = "build succeeded";
         data->lastmod = lastmod;
         ++data->build_cnt_;
-      } else {
+
+      } catch (LuaJIT::RuntimeException& e) {
         std::unique_lock<std::recursive_mutex> k(data->mtx);
-        data->msg      = lua_tolstring(L, -1, nullptr);
+        data->msg      = "build failed\n"+e.msg();
         data->in       = std::move(in_bk);
         data->out      = std::move(out_bk);
         data->building = false;
@@ -613,16 +631,24 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       T {"input", &data->in},
       T {"output", &data->out},
     };
+    if (!lua_istable(L, -1)) {
+      throw LuaJIT::RuntimeException("expected a Node definition table as a result");
+    }
     for (const auto& target : targets) {
       lua_getfield(L, -1, target.name);
       const size_t n = lua_objlen(L, -1);
       for (size_t i = 1; i <= n; ++i) {
         lua_rawgeti(L, -1, static_cast<int>(i));
-        if (!lua_istable(L, -1)) return false;
+        if (!lua_istable(L, -1)) {
+          throw LuaJIT::RuntimeException("input must be an array of pins");
+        }
 
         lua_getfield(L, -1, "name");
         const char* name = lua_tostring(L, -1);
-        if (!name || !name[0]) return false;
+        if (!name || !name[0]) {
+          throw LuaJIT::RuntimeException(
+              "pin name should be convertible to non-empty string");
+        }
         for (auto& sock : *target.list) {
           if (sock->name == name) return false;
         }
@@ -737,18 +763,10 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           nctx = nctx,
           &lctx,
           v = std::move(v),
-          life = life_,
-          self = this](auto L) mutable {
+          life = life_](auto L) mutable {
         lua_rawgeti(L, LUA_REGISTRYINDEX, sock->reg_handler);
-        L_PushEvent(L, v, lctx, data);
+        L_PushEvent(L, v, lctx, nctx, data);
         if (dev_.SandboxCall(L, 1, 0) == 0) {
-          auto task = [nctx = nctx, life, self]() mutable {
-            if (life.lock()) {
-              self->PostReceive(nctx);
-            }
-            nctx = nullptr;
-          };
-          Queue::sub().Push(std::move(task));
           ++data->handle_cnt_;
         } else {
           data->msg = lua_tolstring(L, -1, nullptr);
@@ -758,18 +776,6 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         data = nullptr;
       };
       dev_.Queue(std::move(task));
-    }
-    void PostReceive(const std::shared_ptr<Context>& nctx) noexcept {
-      auto data = owner_->data_;
-
-      std::unique_lock<std::recursive_mutex> k(data->mtx);
-      for (auto& out : data->out) {
-        if (!out->pending) continue;
-
-        auto sock = owner_->FindOut(out->name);
-        if (sock) sock->Send(nctx, std::move(*out->pending));
-        out->pending = std::nullopt;
-      }
     }
 
    private:
@@ -782,73 +788,78 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     std::weak_ptr<SockMeta> sock_;
 
     Value cache_;
-  };
 
-  static void L_PushEvent(
-      lua_State* L,
-      const Value&                 v,
-      LuaContext&                  ctx,
-      const std::shared_ptr<Data>& data) noexcept {
-    lua_createtable(L, 0, 3);
-      dev_.PushValue(L, v);
-      lua_setfield(L, -2, "value");
 
-      ctx.Push(L);
-      lua_setfield(L, -2, "ctx");
+    // push a table passed to the handler
+    static void L_PushEvent(
+        lua_State* L,
+        const Value&                    v,
+        LuaContext&                     ctx,
+        const std::shared_ptr<Context>& nctx,
+        const std::shared_ptr<Data>&    data) noexcept {
+      lua_createtable(L, 0, 3);
+        dev_.PushValue(L, v);
+        lua_setfield(L, -2, "value");
 
-      L_PushEmitter(L, data);
-      lua_setfield(L, -2, "emit");
-  }
-  static void L_PushEmitter(lua_State* L, const std::shared_ptr<Data>& data) noexcept {
-    dev_.NewObjWithoutMeta<std::weak_ptr<Data>>(L, data);
-      if (luaL_newmetatable(L, "Node_Emitter")) {
-        lua_createtable(L, 0, 16);
-          lua_pushcfunction(L, L_Emitter<Value::Pulse>);
-          lua_setfield(L, -2, "pulse");
+        ctx.Push(L);
+        lua_setfield(L, -2, "ctx");
 
-          lua_pushcfunction(L, L_Emitter<Value::Integer>);
-          lua_setfield(L, -2, "integer");
+        L_PushEmitter(L, data, nctx);
+        lua_setfield(L, -2, "emit");
+    }
 
-          lua_pushcfunction(L, L_Emitter<Value::Scalar>);
-          lua_setfield(L, -2, "scalar");
+    // emit function implementation
+    struct Emitter final {
+      std::weak_ptr<Data>    data;
+      std::weak_ptr<Context> nctx;
+    };
+    static void L_PushEmitter(
+        lua_State* L,
+        const std::shared_ptr<Data>&    data,
+        const std::shared_ptr<Context>& nctx) noexcept {
+      dev_.NewObjWithoutMeta<Emitter>(L, Emitter {data, nctx});
+        if (luaL_newmetatable(L, "Node_Emitter")) {
+          lua_createtable(L, 0, 16);
+            lua_pushcfunction(L, L_Emitter<Value::Pulse>);
+            lua_setfield(L, -2, "pulse");
 
-          lua_pushcfunction(L, L_Emitter<Value::Boolean>);
-          lua_setfield(L, -2, "boolean");
+            lua_pushcfunction(L, L_Emitter<Value::Integer>);
+            lua_setfield(L, -2, "integer");
 
-          lua_pushcfunction(L, L_Emitter<Value::String>);
-          lua_setfield(L, -2, "string");
+            lua_pushcfunction(L, L_Emitter<Value::Scalar>);
+            lua_setfield(L, -2, "scalar");
 
-          lua_pushcfunction(L, L_Emitter<Value::Vec2>);
-          lua_setfield(L, -2, "vec2");
+            lua_pushcfunction(L, L_Emitter<Value::Boolean>);
+            lua_setfield(L, -2, "boolean");
 
-          lua_pushcfunction(L, L_Emitter<Value::Vec3>);
-          lua_setfield(L, -2, "vec3");
+            lua_pushcfunction(L, L_Emitter<Value::String>);
+            lua_setfield(L, -2, "string");
 
-          lua_pushcfunction(L, L_Emitter<Value::Vec4>);
-          lua_setfield(L, -2, "vec4");
-        lua_setfield(L, -2, "__index");
-      }
-      lua_setmetatable(L, -2);
-  }
-  template <typename T>
-  static int L_Emitter(lua_State* L) {
-    auto wdata = dev_.GetObj<std::weak_ptr<Data>>(L, 1, "Node_Emitter");
-    auto data  = wdata? wdata->lock(): nullptr;
-    if (!data) return luaL_error(L, "emitter exipired");
+            lua_pushcfunction(L, L_Emitter<Value::Vec2>);
+            lua_setfield(L, -2, "vec2");
 
-    const char* name = luaL_checkstring(L, 2);
+            lua_pushcfunction(L, L_Emitter<Value::Vec3>);
+            lua_setfield(L, -2, "vec3");
 
-    constexpr int kValIndex = 3;
-    {
-      std::unique_lock<std::recursive_mutex> k(data->mtx);
+            lua_pushcfunction(L, L_Emitter<Value::Vec4>);
+            lua_setfield(L, -2, "vec4");
+          lua_setfield(L, -2, "__index");
+        }
+        lua_setmetatable(L, -2);
+    }
+    template <typename T>
+    static int L_Emitter(lua_State* L) {
+      auto emitter = dev_.GetObj<Emitter>(L, 1, "Node_Emitter");
 
-      std::shared_ptr<SockMeta> meta;
-      for (auto& m : data->out) {
-        if (m->name == name) meta = m;
-      }
-      if (!meta) return luaL_error(L, "unknown output: %s", name);
+      auto data = emitter->data.lock();
+      auto nctx = emitter->nctx.lock();
+      if (!data) return luaL_error(L, "emitter exipired");
+      if (!nctx) return luaL_error(L, "node context exipired");
 
-      auto& ret = meta->pending;
+      const std::string name = luaL_checkstring(L, 2);
+
+      constexpr int kValIndex = 3;
+      Value ret;
       if constexpr (std::is_same<T, Value::Pulse>::value) {
         ret = Value::Pulse {};
       } else if constexpr (std::is_same<T, Value::Integer>::value) {
@@ -892,9 +903,18 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       } else {
         luaL_error(L, "unknown type");
       }
+      auto task = [data, nctx, name, value = std::move(ret)]() mutable {
+        if (data->life.lock()) {
+          auto sock = data->self->FindOut(name);
+          sock->Send(nctx, std::move(value));
+        }
+        data = nullptr;
+        nctx = nullptr;
+      };
+      Queue::sub().Push(std::move(task));
+      return 0;
     }
-    return 0;
-  }
+  };
 };
 void LuaJITNode::Update(File::RefStack& ref) noexcept {
   if (auto_rebuild_ || force_build_) {
@@ -963,18 +983,7 @@ void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx
   const auto w = ImGui::GetItemRectSize().x;
 
   // display msg
-  if (data_->msg.size()) {
-    const char* msg   = data_->msg.c_str();
-    const auto  msg_w = ImGui::CalcTextSize(msg).x;
-    if (msg_w < w) {
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-msg_w)/2);
-      ImGui::TextUnformatted(msg);
-    } else {
-      ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+w);
-      ImGui::TextWrapped("%s", msg);
-      ImGui::PopTextWrapPos();
-    }
-  }
+  gui::TextCenterChopped(data_->msg, w);
 
   // display status
   ImGui::SetCursorPosY(stat_y);

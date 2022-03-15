@@ -18,6 +18,7 @@
 #include <boost/stacktrace.hpp>
 
 #include <msgpack.hh>
+#include <source_location.hh>
 
 
 namespace kingtaker {
@@ -28,29 +29,44 @@ using namespace std::literals;
 // All exceptions thrown by kingtaker must inherit this class.
 class Exception {
  public:
-  // To avoid copying, all fields are static.
-  static const std::string& msg() { return msg_; }
-  static const boost::stacktrace::stacktrace& stacktrace() { return strace_; }
+  using Loc = std::source_location;
 
-  static std::string Stringify() noexcept;
+  Exception(std::string_view msg, Loc loc = Loc::current()) noexcept :
+      msg_(msg), loc_(loc) {
+  }
 
-  Exception(std::string_view msg) noexcept { msg_ = msg; strace_ = {}; }
   Exception() = delete;
   virtual ~Exception() = default;
   Exception(const Exception&) = delete;
-  Exception(Exception&&) = default;
+  Exception(Exception&&) = delete;
   Exception& operator=(const Exception&) = delete;
-  Exception& operator=(Exception&&) = default;
+  Exception& operator=(Exception&&) = delete;
+
+  virtual std::string Stringify() const noexcept;
+
+  const std::string& msg() const noexcept { return msg_; }
+  const Loc& loc() const noexcept { return loc_; }
 
  private:
-  static std::string msg_;
+  std::string msg_;
 
-  static boost::stacktrace::stacktrace strace_;
+  Loc loc_;
 };
-
-class DeserializeException : public Exception {
+// Saves stacktrace but a bit heavy so don't use many times.
+class HeavyException : public Exception {
  public:
-  DeserializeException(std::string_view what) noexcept : Exception(what) { }
+  HeavyException(std::string_view msg, Loc loc = Loc::current()) noexcept :
+      Exception(msg, loc) {
+  }
+  std::string Stringify() const noexcept override;
+ private:
+  boost::stacktrace::stacktrace strace_;
+};
+class DeserializeException : public HeavyException {
+ public:
+  DeserializeException(std::string_view msg, Loc loc = Loc::current()) noexcept :
+      HeavyException(msg, loc) {
+  }
 };
 
 
@@ -90,7 +106,6 @@ class File {
   class RefStack;
 
   class NotFoundException;
-  class UnsupportedException;
 
   static Path ParsePath(std::string_view) noexcept;
   static std::string StringifyPath(const Path&) noexcept;
@@ -335,13 +350,11 @@ class File::RefStack final {
 
 class File::NotFoundException : public Exception {
  public:
-  NotFoundException(std::string_view what) noexcept : Exception(what) { }
-};
-class File::UnsupportedException : public Exception {
- public:
-  UnsupportedException(std::string_view what) noexcept : Exception(what) { }
-  UnsupportedException(const RefStack& p, std::string_view name) noexcept :
-      Exception("'"+p.Stringify()+"' doesn't have '"+std::string(name)+"' interface") { }
+  NotFoundException(const Path& p, const RefStack& st, Loc loc = Loc::current()) noexcept :
+      Exception(
+          "file not found in '"s+st.Stringify()+
+          "' while resolving '"s+StringifyPath(p)+"'"s, loc) {
+  }
 };
 
 }  // namespace kingtaker
