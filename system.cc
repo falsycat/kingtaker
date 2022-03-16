@@ -81,7 +81,7 @@ class SystemLogger : public File, public iface::GUI {
     return true;
   }
 
-  void* iface(const std::type_index& t) noexcept {
+  void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::GUI>(t).Select(this);
   }
 

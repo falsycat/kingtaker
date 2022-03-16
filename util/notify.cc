@@ -49,7 +49,7 @@ static void CopyAll() noexcept {
 static void Select(Item& item) noexcept {
   const auto& io = ImGui::GetIO();
   if (!(io.KeyMods & ImGuiKeyModFlags_Ctrl)) {
-    for (auto& item : logs_) item.select = false;
+    for (auto& i : logs_) i.select = false;
   }
   item.select = true;
 }
@@ -106,14 +106,15 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
 
     if (ImGui::TableSetColumnIndex(0)) {
       const auto dur = item.time.time_since_epoch();
+
       char buf[64];
       snprintf(
           buf, sizeof(buf),
-          "%02ld:%02ld:%02ld.%03ld",
-          std::chrono::duration_cast<std::chrono::hours>(dur).count()%24,
-          std::chrono::duration_cast<std::chrono::minutes>(dur).count()%60,
-          std::chrono::duration_cast<std::chrono::seconds>(dur).count()%60,
-          std::chrono::duration_cast<std::chrono::milliseconds>(dur).count()%1000);
+          "%02" PRIuMAX ":%02" PRIuMAX ":%02" PRIuMAX ".%03" PRIuMAX,
+          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::hours>(dur).count())%24,
+          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::minutes>(dur).count())%60,
+          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::seconds>(dur).count())%60,
+          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::milliseconds>(dur).count())%1000);
 
       constexpr auto kFlags =
           ImGuiSelectableFlags_SpanAllColumns |
@@ -134,10 +135,10 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
         }
         ImGui::Separator();
         if (ImGui::MenuItem("deselect all")) {
-          for (auto& item : logs_) item.select = false;
+          for (auto& i : logs_) i.select = false;
         }
         if (ImGui::MenuItem("select all")) {
-          for (auto& item : logs_) item.select = true;
+          for (auto& i : logs_) i.select = true;
         }
         ImGui::EndPopup();
       }
