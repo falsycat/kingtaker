@@ -21,6 +21,7 @@
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -77,33 +78,77 @@ class LuaJIT final {
     return lua_pcall(L, narg, nret, 0);
   }
 
+  // logger
+  static void PushLogger(
+      lua_State* L, File::Path&& p, File* fptr,
+      std::source_location src = std::source_location::current()) noexcept {
+    struct Instance {
+      std::source_location src;
+      File::Path path;
+      File*      fptr;
+    };
+    static const auto f = [](auto L) {
+      const auto lv = (notify::Level) lua_tointeger(L, lua_upvalueindex(1));
+
+      auto inst = GetObj<Instance>(L, 1, "Logger");
+      auto text = luaL_checkstring(L, 2);
+
+      notify::Push({inst->src, lv, text, File::Path(inst->path), inst->fptr});
+      return 0;
+    };
+    NewObjWithoutMeta<Instance>(L, Instance {src, std::move(p), fptr});
+    if (luaL_newmetatable(L, "Logger")) {
+      lua_createtable(L, 0, 0);
+        lua_pushinteger(L, static_cast<int>(notify::kInfo));
+        lua_pushcclosure(L, f, 1);
+        lua_setfield(L, -2, "info");
+
+        lua_pushinteger(L, static_cast<int>(notify::kWarn));
+        lua_pushcclosure(L, f, 1);
+        lua_setfield(L, -2, "warn");
+
+        lua_pushinteger(L, static_cast<int>(notify::kError));
+        lua_pushcclosure(L, f, 1);
+        lua_setfield(L, -2, "error");
+      lua_setfield(L, -2, "__index");
+
+      PushObjDeleter<Instance>(L);
+      lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, -2);
+  }
+
   // create and push userdata that holds an instance of T
   // the destructor is guaranteed to be called by GC
   template <typename T, typename... Args>
-  T* NewObj(lua_State*, Args&&... args) const {
+  static T* NewObj(lua_State* L, Args&&... args) {
     static const auto kName = "Obj_"s+typeid(T).name();
 
     auto ret = NewObjWithoutMeta<T>(std::forward<Args>(args)...);
     if (luaL_newmetatable(L, kName.c_str())) {
-      static const auto gc = [](auto L) {
-        auto udata = *(T**) lua_touserdata(L, 1);
-        delete udata;
-        return 0;
-      };
-      lua_pushcfunction(L, gc);
+      PushObjDeleter<T>(L);
       lua_setfield(L, -2, "__gc");
     }
     lua_setmetatable(L, -2);
     return ret;
   }
   template <typename T, typename... Args>
-  T* NewObjWithoutMeta(lua_State*, Args&&... args) const {
+  static T* NewObjWithoutMeta(lua_State* L, Args&&... args) {
     auto ret = std::make_unique<T>(std::forward<Args>(args)...);
     auto ptr = (T**) lua_newuserdata(L, sizeof(T*));
     return *ptr = ret.release();
   }
   template <typename T>
-  T* GetObj(lua_State*, int index, const char* name = nullptr) const {
+  static void PushObjDeleter(lua_State* L) {
+    static const auto gc = [](auto L) {
+      auto udata = *(T**) lua_touserdata(L, 1);
+      delete udata;
+      return 0;
+    };
+    lua_pushcfunction(L, gc);
+  }
+  template <typename T>
+  static T* GetObj(lua_State* L, int index, const char* name = nullptr) {
     static const auto kName = "Obj_"s+typeid(T).name();
     if (!name) name = kName.c_str();
     auto ret = (T**) luaL_checkudata(L, index, name);
@@ -111,7 +156,7 @@ class LuaJIT final {
   }
 
   // Value type conversion
-  void PushValue(lua_State*, const Value& v) const {
+  static void PushValue(lua_State* L, const Value& v) {
     if (v.has<Value::Pulse>()) {
       lua_pushnil(L);
 
@@ -553,6 +598,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
   bool force_build_ = true;
 
+  File::Path self_abspath_;
+
 
   void Build(RefStack& ref) noexcept {
     ++data_->build_try_;
@@ -763,9 +810,11 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           nctx = nctx,
           &lctx,
           v = std::move(v),
-          life = life_](auto L) mutable {
+          life = life_,
+          owner = owner_,
+          path = owner_->self_abspath_](auto L) mutable {
         lua_rawgeti(L, LUA_REGISTRYINDEX, sock->reg_handler);
-        L_PushEvent(L, v, lctx, nctx, data);
+        L_PushEvent(L, v, lctx, nctx, data, std::move(path), owner);
         if (dev_.SandboxCall(L, 1, 0) == 0) {
           ++data->handle_cnt_;
         } else {
@@ -796,8 +845,10 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         const Value&                    v,
         LuaContext&                     ctx,
         const std::shared_ptr<Context>& nctx,
-        const std::shared_ptr<Data>&    data) noexcept {
-      lua_createtable(L, 0, 3);
+        const std::shared_ptr<Data>&    data,
+        File::Path&&                    path,
+        File*                           fptr) noexcept {
+      lua_createtable(L, 0, 4);
         dev_.PushValue(L, v);
         lua_setfield(L, -2, "value");
 
@@ -806,6 +857,9 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
         L_PushEmitter(L, data, nctx);
         lua_setfield(L, -2, "emit");
+
+        dev_.PushLogger(L, std::move(path), fptr);
+        lua_setfield(L, -2, "log");
     }
 
     // emit function implementation
@@ -818,34 +872,37 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         const std::shared_ptr<Data>&    data,
         const std::shared_ptr<Context>& nctx) noexcept {
       dev_.NewObjWithoutMeta<Emitter>(L, Emitter {data, nctx});
-        if (luaL_newmetatable(L, "Node_Emitter")) {
-          lua_createtable(L, 0, 16);
-            lua_pushcfunction(L, L_Emitter<Value::Pulse>);
-            lua_setfield(L, -2, "pulse");
+      if (luaL_newmetatable(L, "Node_Emitter")) {
+        lua_createtable(L, 0, 16);
+          lua_pushcfunction(L, L_Emitter<Value::Pulse>);
+          lua_setfield(L, -2, "pulse");
 
-            lua_pushcfunction(L, L_Emitter<Value::Integer>);
-            lua_setfield(L, -2, "integer");
+          lua_pushcfunction(L, L_Emitter<Value::Integer>);
+          lua_setfield(L, -2, "integer");
 
-            lua_pushcfunction(L, L_Emitter<Value::Scalar>);
-            lua_setfield(L, -2, "scalar");
+          lua_pushcfunction(L, L_Emitter<Value::Scalar>);
+          lua_setfield(L, -2, "scalar");
 
-            lua_pushcfunction(L, L_Emitter<Value::Boolean>);
-            lua_setfield(L, -2, "boolean");
+          lua_pushcfunction(L, L_Emitter<Value::Boolean>);
+          lua_setfield(L, -2, "boolean");
 
-            lua_pushcfunction(L, L_Emitter<Value::String>);
-            lua_setfield(L, -2, "string");
+          lua_pushcfunction(L, L_Emitter<Value::String>);
+          lua_setfield(L, -2, "string");
 
-            lua_pushcfunction(L, L_Emitter<Value::Vec2>);
-            lua_setfield(L, -2, "vec2");
+          lua_pushcfunction(L, L_Emitter<Value::Vec2>);
+          lua_setfield(L, -2, "vec2");
 
-            lua_pushcfunction(L, L_Emitter<Value::Vec3>);
-            lua_setfield(L, -2, "vec3");
+          lua_pushcfunction(L, L_Emitter<Value::Vec3>);
+          lua_setfield(L, -2, "vec3");
 
-            lua_pushcfunction(L, L_Emitter<Value::Vec4>);
-            lua_setfield(L, -2, "vec4");
-          lua_setfield(L, -2, "__index");
-        }
-        lua_setmetatable(L, -2);
+          lua_pushcfunction(L, L_Emitter<Value::Vec4>);
+          lua_setfield(L, -2, "vec4");
+        lua_setfield(L, -2, "__index");
+
+        dev_.PushObjDeleter<Emitter>(L);
+        lua_setfield(L, -2, "__gc");
+      }
+      lua_setmetatable(L, -2);
     }
     template <typename T>
     static int L_Emitter(lua_State* L) {
@@ -927,6 +984,7 @@ void LuaJITNode::Update(File::RefStack& ref) noexcept {
     }
     force_build_ = false;
   }
+  self_abspath_ = ref.GetFullPath();
 }
 void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::TextUnformatted("LuaJIT");
