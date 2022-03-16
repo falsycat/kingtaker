@@ -74,7 +74,9 @@ class SystemLogger : public File, public iface::GUI {
     }
     ImGui::End();
   }
-  bool OnFocus(RefStack& ref, size_t) noexcept override {
+  bool OnFocus(const RefStack& ref, size_t depth) noexcept override {
+    if (ref.size() != depth) return false;
+
     const auto id = ref.Stringify() + kIdSuffix;
     ImGui::SetWindowFocus(id.c_str());
     shown_ = true;

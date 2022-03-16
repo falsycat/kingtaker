@@ -21,8 +21,7 @@ class GUI {
 
   // Called when the target file is requested to be focused.
   // Returning true prevents the propagation to the ancestors.
-  virtual bool OnFocus(File::RefStack&, size_t depth) noexcept {
-    (void) depth;
+  virtual bool OnFocus(const File::RefStack&, size_t) noexcept {
     return false;
   }
 

@@ -339,7 +339,7 @@ class File::RefStack final {
   }
 
   const Term& top() const noexcept { return terms_.back(); }
-  const Term& terms(std::size_t i) noexcept { return terms_[i]; }
+  const Term& terms(std::size_t i) const noexcept { return terms_[i]; }
   std::size_t size() const noexcept { return terms_.size(); }
 
  private:

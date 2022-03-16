@@ -82,6 +82,7 @@ class LuaJIT final {
   static void PushLogger(
       lua_State* L, File::Path&& p, File* fptr,
       std::source_location src = std::source_location::current()) noexcept {
+    // TODO: make instance to shared_ptr
     struct Instance {
       std::source_location src;
       File::Path path;
