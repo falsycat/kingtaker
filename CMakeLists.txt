@@ -63,6 +63,8 @@ target_sources(kingtaker
 
     util/gui.hh
     util/gui.cc
+    util/notify.hh
+    util/notify.cc
     util/ptr_selector.hh
     util/queue.hh
     util/value.hh
