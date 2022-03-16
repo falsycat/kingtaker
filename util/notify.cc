@@ -13,6 +13,10 @@
 
 namespace kingtaker::notify {
 
+// FIXME: use ringbuffer to reduce overhead
+
+constexpr size_t kMaxItem = 1000;
+
 static std::mutex       mtx_;
 static std::deque<Item> logs_;
 
@@ -92,6 +96,9 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
   const auto bg      = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBg);
 
   std::unique_lock<std::mutex> k(mtx_);
+  if (logs_.size() > kMaxItem) {
+    logs_.erase(logs_.begin(), logs_.end()-kMaxItem);
+  }
   for (auto& item : logs_) {
     if (!Filter(item, filter)) continue;
 
