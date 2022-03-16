@@ -87,7 +87,8 @@ int main(int, char**) {
   ImPlot::CreateContext();
 
   auto& io = ImGui::GetIO();
-  io.IniFilename = nullptr;
+  io.IniFilename  = nullptr;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
   ImGui::StyleColorsDark();
   ImGui_ImplGlfw_InitForOpenGL(window, true);
