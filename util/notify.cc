@@ -1,5 +1,6 @@
 #include "util/notify.hh"
 
+#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <ctime>
@@ -16,25 +17,28 @@
 
 namespace kingtaker::notify {
 
-// FIXME: use ringbuffer to reduce overhead
+constexpr size_t N = 1000;
 
-constexpr size_t kMaxItem = 1000;
-
-static std::mutex       mtx_;
-static std::deque<Item> logs_;
+static std::mutex          mtx_;
+static std::array<Item, N> logs_;
+static size_t head_ = 0, tail_ = 0;
 
 
 void Push(Item&& item) noexcept {
   std::unique_lock<std::mutex> k(mtx_);
-  logs_.push_back(std::move(item));
+
+  logs_[tail_%N] = std::move(item);
+  tail_ = (tail_+1)%N;
+  if (head_ == tail_) {
+    head_ = (head_+1)%N;
+  }
 }
 
 static void FocusAll() noexcept {
   std::unordered_set<std::string> paths;
-  for (const auto& item : logs_) {
-    if (item.select) {
-      paths.insert(File::StringifyPath(item.path));
-    }
+  for (size_t i = head_; i != tail_; i = (i+1)%N) {
+    const auto& item = logs_[i];
+    if (item.select) paths.insert(File::StringifyPath(item.path));
   }
   for (const auto& p : paths) {
     try {
@@ -52,8 +56,10 @@ static void FocusAll() noexcept {
 }
 static void CopyAll() noexcept {
   std::stringstream ret;
-  for (const auto& item : logs_) {
+  for (size_t i = head_; i != tail_; i = (i+1)%N) {
+    const auto& item = logs_[i];
     if (!item.select) continue;
+
     ret << StringifyTime(item.time)       << "|";
     ret << StringifyLevel(item.lv)        << "|";
     ret << item.text                      << "|";
@@ -92,7 +98,7 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
       ImGuiTableFlags_ContextMenuInBody |
       ImGuiTableFlags_SizingStretchProp |
       ImGuiTableFlags_ScrollY;
-  if (!ImGui::BeginTable("list", 7, kTableFlags, ImGui::GetContentRegionAvail(), 0)) {
+  if (!ImGui::BeginTable("list", 6, kTableFlags, ImGui::GetContentRegionAvail(), 0)) {
     return;
   }
   ImGui::TableSetupColumn("time");
@@ -106,24 +112,30 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
 
   const auto now = File::Clock::now();
 
-  const auto bg_high = ImVec4(1, 0, 0, 1);
   const auto bg      = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBg);
+  const auto fg_high = ImVec4(1, 1, 1, 1);
 
   std::unique_lock<std::mutex> k(mtx_);
-  if (logs_.size() > kMaxItem) {
-    logs_.erase(logs_.begin(), logs_.end()-kMaxItem);
-  }
-  for (auto& item : logs_) {
+  for (size_t i = head_; i != tail_; i = (i+1)%N) {
+    auto& item = logs_[i];
     if (!Filter(item, filter)) continue;
 
     ImGui::PushID(&item);
     ImGui::TableNextRow();
 
-    const auto elap   = std::chrono::duration_cast<std::chrono::milliseconds>(now-item.time).count();
-    const auto appear = std::min(1.f, static_cast<float>(elap)/5000.f);
-    const auto ap4    = ImVec4(appear, appear, appear, appear);
-    const auto col    = ImGui::ColorConvertFloat4ToU32(ap4*(bg-bg_high)+bg_high);
-    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, col);
+    const auto bg_high =
+        item.lv == kWarn?  ImVec4(.94f, .65f, .00f, 1):
+        item.lv == kError? ImVec4(.89f, .35f, .15f, 1): bg;
+    const auto fg =
+        item.lv == kWarn?  ImVec4(.94f, .65f, .00f, 1):
+        item.lv == kError? ImVec4(.89f, .35f, .15f, 1): fg_high;
+
+    const auto elap    = std::chrono::duration_cast<std::chrono::milliseconds>(now-item.time).count();
+    const auto appear  = std::min(1.f, static_cast<float>(elap)/5000.f);
+    const auto appear4 = ImVec4(appear, appear, appear, appear);
+    const auto bg_calc = ImGui::ColorConvertFloat4ToU32((bg-bg_high)*appear4+bg_high);
+    const auto fg_calc = ImGui::ColorConvertFloat4ToU32((fg-fg_high)*appear4+fg_high);
+    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, bg_calc);
 
     if (ImGui::TableSetColumnIndex(0)) {
       constexpr auto kFlags =
@@ -132,7 +144,7 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
       if (ImGui::Selectable(StringifyTime(item.time).c_str(), item.select, kFlags)) {
         Select(item);
       }
-      if (autoscroll && &item == &logs_.back()) {
+      if (autoscroll && (i+1)%N == tail_) {
         ImGui::SetScrollHereY();
       }
       if (ImGui::BeginPopupContextItem()) {
@@ -154,7 +166,9 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
       }
     }
     if (ImGui::TableNextColumn()) {
+      ImGui::PushStyleColor(ImGuiCol_Text, fg_calc);
       ImGui::TextUnformatted(StringifyLevel(item.lv));
+      ImGui::PopStyleColor(1);
     }
     if (ImGui::TableNextColumn()) {
       ImGui::TextUnformatted(item.text.c_str());

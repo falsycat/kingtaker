@@ -22,6 +22,7 @@ struct Item final {
  public:
   using RefStack = File::RefStack;
 
+  Item() = default;
   Item(std::source_location src_,
        Level                lv_,
        std::string_view     text_,
@@ -39,11 +40,11 @@ struct Item final {
 
   std::source_location src;
 
-  Level lv;
+  Level lv = kInfo;
   std::string text;
 
   File::Path path;
-  File* fptr;  // don't refer the entity (use it as ID)
+  File* fptr = nullptr;  // don't refer the entity (use it as ID)
 
   File::Time time;
 
