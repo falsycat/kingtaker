@@ -113,7 +113,9 @@ class NodeNet : public File, public iface::Node {
 
           for (size_t j = 0; j < out_dst.via.array.size; ++j) {
             std::pair<size_t, std::string> conn;
-            out_dst.via.array.ptr[j].convert(conn);
+            if (!out_dst.via.array.ptr[j].convert_if_not_nil(conn)) {
+              continue;
+            }
             if (conn.first >= nmap.size()) throw DeserializeException("missing node");
 
             auto in = nmap[conn.first]->FindIn(conn.second);
@@ -144,15 +146,22 @@ class NodeNet : public File, public iface::Node {
     void SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept {
       pk.pack_map(static_cast<uint32_t>(entity_->out().size()));
       for (auto out : entity_->out()) {
-        pk.pack(out->name());
-        pk.pack_array(static_cast<uint32_t>(out->dst().size()));
-
         out->CleanConns();
+        std::vector<std::shared_ptr<InSock>> socks;
         for (auto& inw : out->dst()) {
-          auto in  = inw.lock();
+          auto in = inw.lock();
+          if (in) socks.push_back(in);
+        }
+
+        pk.pack(out->name());
+        pk.pack_array(static_cast<uint32_t>(socks.size()));
+        for (auto& in : socks) {
           auto itr = idxmap.find(&in->owner());
-          if (itr == idxmap.end()) continue;
-          pk.pack(std::make_tuple(itr->second, in->name()));
+          if (itr != idxmap.end()) {
+            pk.pack(std::make_tuple(itr->second, in->name()));
+          } else {
+            pk.pack_nil();
+          }
         }
       }
     }
