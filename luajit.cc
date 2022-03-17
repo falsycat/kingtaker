@@ -85,6 +85,11 @@ class LuaJIT final {
            std::source_location s = std::source_location::current()) noexcept :
         fptr(f), src(s) {
     }
+    Logger(const Logger&) = delete;
+    Logger(Logger&&) = delete;
+    Logger& operator=(const Logger&) = delete;
+    Logger& operator=(Logger&&) = delete;
+
     std::mutex mtx;
 
     File::Path path;
@@ -507,7 +512,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     data_->self = this;
     data_->life = life_;
 
-    data_->logger = std::make_shared<LuaJIT::Logger>(this);
+    data_->logger = std::make_shared<LuaJIT::Logger>(
+        static_cast<File*>(this), std::source_location::current());
 
     for (const auto& name : in) {
       in_.push_back(std::make_shared<LuaInSock>(this, name));

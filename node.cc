@@ -1067,7 +1067,7 @@ class RefNode : public File, public iface::Node {
       File(&type_), Node(kMenu),
       path_(path),
       life_(std::make_shared<std::monostate>()),
-      ctx_(std::make_shared<Context>(std::make_unique<EditContextWatcher>(this, life_))),
+      ctx_(std::make_shared<Context>()),
       gui_(this) {
     in_.reserve(in.size());
     out_.reserve(out.size());
@@ -1220,19 +1220,6 @@ class RefNode : public File, public iface::Node {
    private:
     RefNode* owner_;
   } gui_;
-
-
-  // A watcher for a context on the editor
-  class EditContextWatcher final : public ContextWatcher {
-   public:
-    EditContextWatcher(RefNode* o, const Life& life) noexcept : owner_(o), life_(life) {
-    }
-
-   private:
-    RefNode* owner_;
-
-    std::weak_ptr<std::monostate> life_;
-  };
 
 
   // A watcher for a context of lambda execution

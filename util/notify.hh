@@ -39,6 +39,10 @@ struct Item final {
        const RefStack&      ref_) noexcept :
     Item(src_, lv_, text_, ref_.GetFullPath(), &*ref_) {
   }
+  Item(const Item&) = delete;
+  Item(Item&&) = default;
+  Item& operator=(const Item&) = delete;
+  Item& operator=(Item&&) = default;
 
   // Clang doesn't have default constructor for source_location :(
   std::source_location src = std::source_location::current();

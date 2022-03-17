@@ -157,10 +157,10 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
         }
         ImGui::Separator();
         if (ImGui::MenuItem("deselect all")) {
-          for (auto& i : logs_) i.select = false;
+          for (auto& it : logs_) it.select = false;
         }
         if (ImGui::MenuItem("select all")) {
-          for (auto& i : logs_) i.select = true;
+          for (auto& it : logs_) it.select = true;
         }
         ImGui::EndPopup();
       }
