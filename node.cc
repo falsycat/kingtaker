@@ -24,6 +24,7 @@
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -1199,7 +1200,7 @@ class RefNode : public File, public iface::Node {
   // volatile params
   std::shared_ptr<std::monostate> life_;
   std::shared_ptr<Context>        ctx_;
-  std::string                     basepath_;
+  File::Path                      basepath_;
 
   bool        synced_ = false;
   std::string path_editing_;
@@ -1212,7 +1213,7 @@ class RefNode : public File, public iface::Node {
     GUI(RefNode* o) : owner_(o) { }
 
     void Update(RefStack& ref) noexcept override {
-      owner_->basepath_ = ref.Stringify();
+      owner_->basepath_ = ref.GetFullPath();
       owner_->Watch(&*ref.Resolve(owner_->path_));
     }
 
@@ -1225,12 +1226,6 @@ class RefNode : public File, public iface::Node {
   class EditContextWatcher final : public ContextWatcher {
    public:
     EditContextWatcher(RefNode* o, const Life& life) noexcept : owner_(o), life_(life) {
-    }
-
-    void Inform(std::string_view msg) noexcept override {
-      (void) msg;
-      (void) owner_;
-      // TODO(falsycat)
     }
 
    private:
@@ -1287,7 +1282,7 @@ class RefNode : public File, public iface::Node {
         dst->Receive(data.ctx(), std::move(v));
 
       } catch (Exception& e) {
-        ctx->Inform(e.msg());
+        notify::Error(owner_->basepath_, owner_, e.msg());
       }
     }
 

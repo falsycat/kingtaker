@@ -81,7 +81,6 @@ class Node::ContextWatcher {
   ContextWatcher& operator=(ContextWatcher&&) = delete;
 
   virtual void Receive(std::string_view, Value&&) noexcept { }
-  virtual void Inform(std::string_view) noexcept { }
 };
 class Node::Context final {
  public:
@@ -122,13 +121,6 @@ class Node::Context final {
     Queue::sub().Push(
         [name = std::string(n), w = w_, v = std::move(v)]() mutable {
           w->Receive(name, std::move(v));
-          w = nullptr;
-        });
-  }
-  void Inform(std::string_view msg) noexcept {
-    Queue::sub().Push(
-        [msg = std::string(msg), w = w_]() mutable {
-          w->Inform(msg);
           w = nullptr;
         });
   }

@@ -38,7 +38,8 @@ struct Item final {
     Item(src_, lv_, text_, ref_.GetFullPath(), &*ref_) {
   }
 
-  std::source_location src;
+  // Clang doesn't have default constructor for source_location :(
+  std::source_location src = std::source_location::current();
 
   Level lv = kInfo;
   std::string text;
@@ -58,12 +59,24 @@ void UpdateLogger(std::string_view filter = "", bool autoscroll = true) noexcept
 
 #define NOTIFY_SRCLOC_ std::source_location src = std::source_location::current()
 static inline void Info(
+    const File::Path& p, File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
+  Push(Item {src, kInfo, text, File::Path(p), fptr});
+}
+static inline void Info(
     const Item::RefStack& r, std::string_view text, NOTIFY_SRCLOC_) noexcept {
   Push(Item {src, kInfo, text, r});
 }
 static inline void Warn(
+    const File::Path& p, File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
+  Push(Item {src, kWarn, text, File::Path(p), fptr});
+}
+static inline void Warn(
     const Item::RefStack& r, std::string_view text, NOTIFY_SRCLOC_) noexcept {
   Push(Item {src, kWarn, text, r});
+}
+static inline void Error(
+    const File::Path& p, File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
+  Push(Item {src, kError, text, File::Path(p), fptr});
 }
 static inline void Error(
     const Item::RefStack& r, std::string_view text, NOTIFY_SRCLOC_) noexcept {
