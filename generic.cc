@@ -28,8 +28,8 @@ class GenericDir : public File {
 
   using ItemList = std::map<std::string, std::unique_ptr<File>>;
 
-  GenericDir(ItemList&& items = {}) :
-      File(&type_),
+  GenericDir(const std::shared_ptr<Env>& env, ItemList&& items = {}) :
+      File(&type_, env),
       last_modified_(Clock::now()), items_(std::move(items)),
       dir_(this), gui_(this) {
   }
@@ -43,13 +43,13 @@ class GenericDir : public File {
     for (auto& p : items_) L(p.first, p.second.get());
   }
 
-  std::unique_ptr<File> Clone() const noexcept override {
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
     ItemList items;
-    for (auto& p : items_) items[p.first] = p.second->Clone();
-    return std::make_unique<GenericDir>(std::move(items));
+    for (auto& p : items_) items[p.first] = p.second->Clone(env);
+    return std::make_unique<GenericDir>(env, std::move(items));
   }
 
-  static std::unique_ptr<GenericDir> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<GenericDir> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     try {
       ItemList items;
 
@@ -64,13 +64,13 @@ class GenericDir : public File {
           throw DeserializeException("invalid name");
         }
 
-        auto [itr, uniq] = items.insert({key, File::Deserialize(kv.val)});
+        auto [itr, uniq] = items.insert({key, File::Deserialize(kv.val, env)});
         if (!uniq) {
           throw DeserializeException("item name duplication in GenericDir");
         }
         assert(itr->second);
       }
-      auto ret = std::make_unique<GenericDir>(std::move(items));
+      auto ret = std::make_unique<GenericDir>(env, std::move(items));
       ret->gui_.Deserialize(msgpack::find(obj, "gui"s));
       return ret;
 
@@ -248,8 +248,8 @@ void GenericDir::GUI::UpdateMenu(File::RefStack&) noexcept {
 
         if (enter && !dup && valid) {
           Queue::main().Push(
-              [&dir = owner_->dir_, name = name_for_new_, &type]() {
-                dir.Add(name, type.Create());
+              [owner = owner_, &dir = owner_->dir_, name = name_for_new_, &type]() {
+                dir.Add(name, type.Create(owner->env()));
               });
         }
         ImGui::EndMenu();

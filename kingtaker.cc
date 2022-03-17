@@ -53,21 +53,21 @@ const File::TypeInfo* File::Lookup(const std::string& name) noexcept {
   if (itr == reg.end()) return nullptr;
   return itr->second;
 }
-std::unique_ptr<File> File::Deserialize(const msgpack::object& v) {
+std::unique_ptr<File> File::Deserialize(const msgpack::object& v, const std::shared_ptr<Env>& env) {
   try {
     const auto name = msgpack::find(v, "type"s).as<std::string>();
     const auto type = Lookup(name);
     if (!type) throw DeserializeException(std::string("unknown file type: ")+name);
-    return type->Deserialize(msgpack::find(v, "param"s));
+    return type->Deserialize(msgpack::find(v, "param"s), env);
   } catch (msgpack::type_error&) {
     throw DeserializeException("invalid File data");
   }
 }
-std::unique_ptr<File> File::Deserialize(std::istream& st) {
+std::unique_ptr<File> File::Deserialize(std::istream& st, const std::shared_ptr<Env>& env) {
   const std::string buf(std::istreambuf_iterator<char>(st), {});
   msgpack::object_handle obj;
   msgpack::unpack(obj, buf.data(), buf.size());
-  return Deserialize(obj.get());
+  return Deserialize(obj.get(), env);
 }
 
 void File::SerializeWithTypeInfo(Packer& pk) const noexcept {

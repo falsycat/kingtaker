@@ -31,18 +31,19 @@ class PulseValue : public File, public iface::Node {
       "PulseValue", "pulse emitter",
       {typeid(iface::Node)});
 
-  PulseValue() : File(&type_), Node(kNone) {
+  PulseValue(const std::shared_ptr<Env>& env) noexcept :
+      File(&type_, env), Node(kNone) {
     out_.emplace_back(new PulseEmitter(this));
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object&) {
-    return std::make_unique<PulseValue>();
+  static std::unique_ptr<File> Deserialize(const msgpack::object&, const std::shared_ptr<Env>& env) {
+    return std::make_unique<PulseValue>(env);
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<PulseValue>();
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<PulseValue>(env);
   }
 
   void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override {
@@ -77,15 +78,15 @@ class ImmValue : public File, public iface::Node {
       "ImmValue", "immediate value",
       {typeid(iface::Node)});
 
-  ImmValue(Value&& v = Value::Integer{0}, ImVec2 size = {0, 0}) noexcept :
-      File(&type_), Node(kNone), value_(std::move(v)), size_(size) {
+  ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Integer{0}, ImVec2 size = {0, 0}) noexcept :
+      File(&type_, env), Node(kNone), value_(std::move(v)), size_(size) {
     out_.emplace_back(new Emitter(this));
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     const auto value = Value::Deserialize(msgpack::find(obj, "value"s));
     const auto size  = msgpack::find(obj, "size"s).as<std::pair<float, float>>();
-    return std::make_unique<ImmValue>(Value(value), ImVec2 {size.first, size.second});
+    return std::make_unique<ImmValue>(env, Value(value), ImVec2 {size.first, size.second});
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);
@@ -96,8 +97,8 @@ class ImmValue : public File, public iface::Node {
     pk.pack("value"s);
     value_.Serialize(pk);
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<ImmValue>(Value(value_), size_);
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<ImmValue>(env, Value(value_), size_);
   }
 
   void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override {
@@ -240,8 +241,8 @@ class Oscilloscope : public File, public iface::Node {
       "Oscilloscope", "value inspector",
       {typeid(iface::Node)});
 
-  Oscilloscope(size_t n = 1, ImVec2 size = {0, 0}) noexcept :
-      File(&type_), Node(kMenu),
+  Oscilloscope(const std::shared_ptr<Env>& env, size_t n = 1, ImVec2 size = {0, 0}) noexcept :
+      File(&type_, env), Node(kMenu),
       data_(std::make_shared<Data>()), size_(size) {
     assert(n > 0);
 
@@ -249,9 +250,10 @@ class Oscilloscope : public File, public iface::Node {
     for (size_t i = 0; i < n; ++i) AddSock();
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     auto size = msgpack::find(obj, "size"s).as<std::pair<float, float>>();
     return std::make_unique<Oscilloscope>(
+        env,
         msgpack::find(obj, "count"s).as<size_t>(),
         ImVec2 {size.first, size.second});
   }
@@ -264,8 +266,8 @@ class Oscilloscope : public File, public iface::Node {
     pk.pack("size");
     pk.pack(std::make_tuple(size_.x, size_.y));
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<Oscilloscope>(data_->streams.size(), size_);
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<Oscilloscope>(env, data_->streams.size(), size_);
   }
 
   bool AddSock() noexcept {
@@ -455,15 +457,16 @@ class ExternalText final : public File,
       "ExternalText", "text data from a native file",
       {typeid(iface::DirItem), typeid(iface::GUI), typeid(iface::Factory<Value>)});
 
-  ExternalText(const std::string& path = "", bool editor_shown = false) noexcept :
-      File(&type_), DirItem(kMenu),
+  ExternalText(const std::shared_ptr<Env>& env, const std::string& path = "", bool editor_shown = false) noexcept :
+      File(&type_, env), DirItem(kMenu),
       path_(path), editor_shown_(editor_shown),
       str_(std::make_shared<std::string>()) {
     Load();
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     return std::make_unique<ExternalText>(
+        env,
         msgpack::find(obj, "path"s).as<std::string>(),
         msgpack::find(obj, "editor_shown"s).as<bool>());
   }
@@ -476,8 +479,8 @@ class ExternalText final : public File,
     pk.pack("editor_shown");
     pk.pack(editor_shown_);
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<ExternalText>(path_);
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<ExternalText>(env, path_);
   }
 
   Value Create() noexcept override {
