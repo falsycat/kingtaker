@@ -11,6 +11,12 @@ enum Level {
   kWarn,
   kError,
 };
+static inline const char* StringifyLevel(Level lv) noexcept {
+  return
+      lv == kInfo?  "INFO":
+      lv == kWarn?  "WARN":
+      lv == kError? "ERRR": "?";
+}
 
 struct Item final {
  public:

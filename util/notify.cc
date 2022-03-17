@@ -4,11 +4,14 @@
 #include <cmath>
 #include <ctime>
 #include <mutex>
+#include <sstream>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
 #include "iface/gui.hh"
+
+#include "util/format.hh"
 
 
 namespace kingtaker::notify {
@@ -48,7 +51,19 @@ static void FocusAll() noexcept {
   }
 }
 static void CopyAll() noexcept {
-  // TODO
+  std::stringstream ret;
+  for (const auto& item : logs_) {
+    if (!item.select) continue;
+    ret << StringifyTime(item.time)       << "|";
+    ret << StringifyLevel(item.lv)        << "|";
+    ret << item.text                      << "|";
+    ret << File::StringifyPath(item.path) << "|";
+    ret << item.src.file_name()           << ":";
+    ret << item.src.line()                << ":";
+    ret << item.src.column()              << "|";
+    ret << item.src.function_name()       << "\n";
+  }
+  ImGui::SetClipboardText(ret.str().c_str());
 }
 static void Select(Item& item) noexcept {
   const auto& io = ImGui::GetIO();
@@ -84,7 +99,6 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
   ImGui::TableSetupColumn("level");
   ImGui::TableSetupColumn("text");
   ImGui::TableSetupColumn("file");
-  ImGui::TableSetupColumn("src");
   ImGui::TableSetupColumn("location");
   ImGui::TableSetupColumn("function");
   ImGui::TableSetupScrollFreeze(0, 1);
@@ -112,21 +126,10 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, col);
 
     if (ImGui::TableSetColumnIndex(0)) {
-      const auto dur = item.time.time_since_epoch();
-
-      char buf[64];
-      snprintf(
-          buf, sizeof(buf),
-          "%02" PRIuMAX ":%02" PRIuMAX ":%02" PRIuMAX ".%03" PRIuMAX,
-          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::hours>(dur).count())%24,
-          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::minutes>(dur).count())%60,
-          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::seconds>(dur).count())%60,
-          static_cast<uintmax_t>(std::chrono::duration_cast<std::chrono::milliseconds>(dur).count())%1000);
-
       constexpr auto kFlags =
           ImGuiSelectableFlags_SpanAllColumns |
           ImGuiSelectableFlags_AllowItemOverlap;
-      if (ImGui::Selectable(buf, item.select, kFlags)) {
+      if (ImGui::Selectable(StringifyTime(item.time).c_str(), item.select, kFlags)) {
         Select(item);
       }
       if (autoscroll && &item == &logs_.back()) {
@@ -151,11 +154,7 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
       }
     }
     if (ImGui::TableNextColumn()) {
-      const char* lvstr =
-          item.lv == kInfo? "INFO":
-          item.lv == kWarn? "WARN":
-          item.lv == kWarn? "ERRR": "?";
-      ImGui::TextUnformatted(lvstr);
+      ImGui::TextUnformatted(StringifyLevel(item.lv));
     }
     if (ImGui::TableNextColumn()) {
       ImGui::TextUnformatted(item.text.c_str());
@@ -171,15 +170,16 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
       }
     }
     if (ImGui::TableNextColumn()) {
-      ImGui::TextUnformatted(item.src.file_name());
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", item.src.file_name());
-      }
-    }
-    if (ImGui::TableNextColumn()) {
-      ImGui::Text("%" PRIuMAX ":%" PRIuMAX,
+      ImGui::Text("%s:%" PRIuMAX ":%" PRIuMAX,
+                  item.src.file_name(),
                   static_cast<uintmax_t>(item.src.line()),
                   static_cast<uintmax_t>(item.src.column()));
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s:%" PRIuMAX ":%" PRIuMAX,
+                          item.src.file_name(),
+                          static_cast<uintmax_t>(item.src.line()),
+                          static_cast<uintmax_t>(item.src.column()));
+      }
     }
     if (ImGui::TableNextColumn()) {
       ImGui::Text("%s", item.src.function_name());

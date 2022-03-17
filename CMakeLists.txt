@@ -61,6 +61,7 @@ target_sources(kingtaker
     iface/history.hh
     iface/node.hh
 
+    util/format.hh
     util/gui.hh
     util/gui.cc
     util/notify.hh
