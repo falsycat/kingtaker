@@ -78,26 +78,36 @@ class LuaJIT final {
     return lua_pcall(L, narg, nret, 0);
   }
 
-  // logger
+  // Logger object implementation
+  struct Logger final {
+   public:
+    Logger(File*                f = nullptr,
+           std::source_location s = std::source_location::current()) noexcept :
+        fptr(f), src(s) {
+    }
+    std::mutex mtx;
+
+    File::Path path;
+    File*      fptr;
+
+    std::source_location src;
+  };
   static void PushLogger(
-      lua_State* L, File::Path&& p, File* fptr,
-      std::source_location src = std::source_location::current()) noexcept {
-    // TODO: make instance to shared_ptr
-    struct Instance {
-      std::source_location src;
-      File::Path path;
-      File*      fptr;
-    };
+      lua_State* L, const std::shared_ptr<Logger>& logger) noexcept {
     static const auto f = [](auto L) {
       const auto lv = (notify::Level) lua_tointeger(L, lua_upvalueindex(1));
 
-      auto inst = GetObj<Instance>(L, 1, "Logger");
+      auto wlogger = GetObj<std::weak_ptr<Logger>>(L, 1, "Logger");
+      auto logger  = wlogger->lock();
+      if (!logger) return luaL_error(L, "logger expired");
+
       auto text = luaL_checkstring(L, 2);
 
-      notify::Push({inst->src, lv, text, File::Path(inst->path), inst->fptr});
+      std::unique_lock<std::mutex> k(logger->mtx);
+      notify::Push({logger->src, lv, text, File::Path(logger->path), logger->fptr});
       return 0;
     };
-    NewObjWithoutMeta<Instance>(L, Instance {src, std::move(p), fptr});
+    NewObjWithoutMeta<std::weak_ptr<Logger>>(L, logger);
     if (luaL_newmetatable(L, "Logger")) {
       lua_createtable(L, 0, 0);
         lua_pushinteger(L, static_cast<int>(notify::kInfo));
@@ -113,7 +123,7 @@ class LuaJIT final {
         lua_setfield(L, -2, "error");
       lua_setfield(L, -2, "__index");
 
-      PushObjDeleter<Instance>(L);
+      PushObjDeleter<std::weak_ptr<Logger>>(L);
       lua_setfield(L, -2, "__gc");
     }
     lua_setmetatable(L, -2);
@@ -482,6 +492,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     data_->self = this;
     data_->life = life_;
 
+    data_->logger = std::make_shared<LuaJIT::Logger>(this);
+
     for (const auto& name : in) {
       in_.push_back(std::make_shared<LuaInSock>(this, name));
     }
@@ -572,6 +584,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     LuaJITNode* self;
     std::weak_ptr<std::monostate> life;
 
+    std::shared_ptr<LuaJIT::Logger> logger;
+
     Time lastmod;
     std::string msg = "not built";
 
@@ -598,8 +612,6 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   std::string path_editing_;
 
   bool force_build_ = true;
-
-  File::Path self_abspath_;
 
 
   void Build(RefStack& ref) noexcept {
@@ -811,11 +823,9 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           nctx = nctx,
           &lctx,
           v = std::move(v),
-          life = life_,
-          owner = owner_,
-          path = owner_->self_abspath_](auto L) mutable {
+          life = life_](auto L) mutable {
         lua_rawgeti(L, LUA_REGISTRYINDEX, sock->reg_handler);
-        L_PushEvent(L, v, lctx, nctx, data, std::move(path), owner);
+        L_PushEvent(L, v, lctx, nctx, data);
         if (dev_.SandboxCall(L, 1, 0) == 0) {
           ++data->handle_cnt_;
         } else {
@@ -846,9 +856,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         const Value&                    v,
         LuaContext&                     ctx,
         const std::shared_ptr<Context>& nctx,
-        const std::shared_ptr<Data>&    data,
-        File::Path&&                    path,
-        File*                           fptr) noexcept {
+        const std::shared_ptr<Data>&    data) noexcept {
       lua_createtable(L, 0, 4);
         dev_.PushValue(L, v);
         lua_setfield(L, -2, "value");
@@ -859,7 +867,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         L_PushEmitter(L, data, nctx);
         lua_setfield(L, -2, "emit");
 
-        dev_.PushLogger(L, std::move(path), fptr);
+        dev_.PushLogger(L, data->logger);
         lua_setfield(L, -2, "log");
     }
 
@@ -985,7 +993,10 @@ void LuaJITNode::Update(File::RefStack& ref) noexcept {
     }
     force_build_ = false;
   }
-  self_abspath_ = ref.GetFullPath();
+
+  auto& logger = *data_->logger;
+  std::unique_lock<std::mutex> k(logger.mtx);
+  logger.path = ref.GetFullPath();
 }
 void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::TextUnformatted("LuaJIT");
