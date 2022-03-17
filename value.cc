@@ -25,53 +25,6 @@
 namespace kingtaker {
 namespace {
 
-class PulseValue : public File, public iface::Node {
- public:
-  static inline TypeInfo type_ = TypeInfo::New<PulseValue>(
-      "PulseValue", "pulse emitter",
-      {typeid(iface::Node)});
-
-  PulseValue(const std::shared_ptr<Env>& env) noexcept :
-      File(&type_, env), Node(kNone) {
-    out_.emplace_back(new PulseEmitter(this));
-  }
-
-  static std::unique_ptr<File> Deserialize(const msgpack::object&, const std::shared_ptr<Env>& env) {
-    return std::make_unique<PulseValue>(env);
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack_nil();
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<PulseValue>(env);
-  }
-
-  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override {
-    ImGui::TextUnformatted("PULSE");
-
-    if (ImGui::Button("Z")) {
-      out_[0]->Send(ctx, Value::Pulse());
-    }
-
-    ImGui::SameLine();
-    if (ImNodes::BeginOutputSlot("out", 1)) {
-      gui::NodeSocket();
-      ImNodes::EndSlot();
-    }
-  }
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
-  }
-
- private:
-  class PulseEmitter : public OutSock {
-   public:
-    PulseEmitter(PulseValue* o) : OutSock(o, "out") {
-    }
-  };
-};
-
 class ImmValue : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ImmValue>(
@@ -111,6 +64,7 @@ class ImmValue : public File, public iface::Node {
 
     bool mod = false;
     const char* type =
+        v.has<Value::Pulse>()?   "Pul":
         v.has<Value::Integer>()? "Int":
         v.has<Value::Scalar>()?  "Sca":
         v.has<Value::Boolean>()? "Boo":
@@ -122,6 +76,10 @@ class ImmValue : public File, public iface::Node {
 
     gui::NodeCanvasResetZoom();
     if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+      if (ImGui::MenuItem("pulse", nullptr, v.has<Value::Pulse>())) {
+        v   = Value::Pulse();
+        mod = true;
+      }
       if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
         v   = Value::Integer {0};
         mod = true;
@@ -155,7 +113,10 @@ class ImmValue : public File, public iface::Node {
     gui::NodeCanvasSetZoom();
 
     ImGui::SameLine();
-    if (v.has<Value::Integer>()) {
+    if (v.has<Value::Pulse>()) {
+      mod = ImGui::Button("Z");
+
+    } else if (v.has<Value::Integer>()) {
       gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
       ImGui::SetNextItemWidth(size_.x*em);
       mod = ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
