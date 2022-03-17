@@ -68,9 +68,6 @@ class SystemLogger : public File, public iface::GUI {
       ImGui::Checkbox("auto-scroll", &autoscroll_);
 
       notify::UpdateLogger(filter_, autoscroll_);
-      if (ImGui::IsItemClicked()) {
-        notify::Info(ref, "hello");
-      }
     }
     ImGui::End();
   }

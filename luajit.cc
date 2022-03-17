@@ -372,19 +372,25 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
           return;
         }
       }
-      Compile_(f);
+      Compile_(ref.GetFullPath(), f);
 
     } catch (Exception& e) {
+      const auto str = "compile failed\n"+e.msg();
+      notify::Error(ref, str);
+
       std::unique_lock<std::mutex> k(data_->mtx);
-      data_->msg = "compile failed\n"+e.msg();
+      data_->msg = std::move(str);
     }
   }
-  void Compile(File::RefStack& ref) noexcept {
+  void Compile(const File::RefStack& ref) noexcept {
     try {
-      Compile_(&*ref.Resolve(path_));
+      Compile_(ref.GetFullPath(), &*ref.Resolve(path_));
     } catch (Exception& e) {
+      const auto str = "compile failed\n"+e.msg();
+      notify::Error(ref, str);
+
       std::unique_lock<std::mutex> k(data_->mtx);
-      data_->msg = "compile failed\n"+e.msg();
+      data_->msg = std::move(str);
     }
   }
 
@@ -401,7 +407,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
   std::string path_editing_;
 
 
-  void Compile_(File* f) {
+  void Compile_(File::Path&& selfpath, File* f) {
     // fetch script
     auto factory = File::iface<iface::Factory<Value>>(f);
     if (!factory) throw Exception("no factory interface for Value");
@@ -410,7 +416,12 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
     const auto lastmod = f->lastModified();
 
     // compile the script
-    auto task = [data = data_, scr = script, lastmod](auto L) mutable {
+    auto task = [
+        self = this,
+        path = std::move(selfpath),
+        data = data_,
+        scr = script,
+        lastmod](auto L) mutable {
       data->compiling = true;
       if (luaL_loadstring(L, scr->c_str()) == 0) {
         std::unique_lock<std::mutex> k(data->mtx);
@@ -419,9 +430,13 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
         data->reg_func = luaL_ref(L, LUA_REGISTRYINDEX);
         data->lastmod  = lastmod;
         data->msg      = "ok";
+        notify::Trace(path, self, "compile succeeded");
       } else {
+        auto str = "compile failed\n"s+luaL_checkstring(L, 1);
+        notify::Error(path, self, str);
+
         std::unique_lock<std::mutex> k(data->mtx);
-        data->msg = luaL_checkstring(L, 1);
+        data->msg = std::move(str);
       }
       data->compiling = false;
       data = nullptr;
@@ -628,13 +643,19 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         script = LuaJITScript::Cast(script_ref);
         script->CompileIf(script_ref);
       } catch (Exception& e) {
-        data_->msg = "build failed\n"+e.msg();
+        auto str = "build failed\n"+e.msg();
+        notify::Error(ref, str);
+        data_->msg = std::move(str);
         return;
       }
       data_->building = true;
     }
 
-    auto task = [self = this, data = data_, sdata = script->data()](auto L) mutable {
+    auto task = [
+        self = this,
+        path = ref.GetFullPath(),
+        data = data_,
+        sdata = script->data()](auto L) mutable {
       Time lastmod;
       int  index;
       {
@@ -663,14 +684,19 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           data->building = false;
           data           = nullptr;
         };
-        Queue::sub().Push(std::move(task));
-        data->msg     = "build succeeded";
-        data->lastmod = lastmod;
         ++data->build_cnt_;
 
+        Queue::sub().Push(std::move(task));
+        data->lastmod = lastmod;
+        data->msg     = "build succeeded";
+        notify::Trace(path, self, "build succeeded");
+
       } catch (LuaJIT::RuntimeException& e) {
+        auto str = "build failed\n"+e.msg();
+        notify::Error(path, self, str);
+
         std::unique_lock<std::recursive_mutex> k(data->mtx);
-        data->msg      = "build failed\n"+e.msg();
+        data->msg      = std::move(str);
         data->in       = std::move(in_bk);
         data->out      = std::move(out_bk);
         data->building = false;
@@ -818,6 +844,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
       auto& lctx = nctx->GetOrNew<LuaContext>(owner_);
       auto  task = [
+          owner = owner_,
           sock,
           data = owner_->data_,
           nctx = nctx,
@@ -829,7 +856,15 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
         if (dev_.SandboxCall(L, 1, 0) == 0) {
           ++data->handle_cnt_;
         } else {
-          data->msg = lua_tolstring(L, -1, nullptr);
+          auto str = "execution failed\n"s+lua_tolstring(L, -1, nullptr);
+          {
+            std::unique_lock<std::mutex> k(data->logger->mtx);
+            notify::Error(data->logger->path, owner, str);
+          }
+          {
+            std::unique_lock<std::recursive_mutex> k(data->mtx);
+            data->msg = std::move(str);
+          }
         }
         nctx = nullptr;
         sock = nullptr;
