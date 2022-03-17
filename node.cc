@@ -24,6 +24,7 @@
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -171,9 +172,14 @@ class NodeNet : public File, public iface::Node {
     void UpdateNode(NodeNet* owner, RefStack& ref) noexcept;
     void UpdateWindow(RefStack& ref) noexcept;
 
+    void Select() noexcept { select_ = true; }
+    void Unselect() noexcept { select_ = false; }
+
     size_t id() const noexcept { return id_; }
     File& file() const noexcept { return *file_; }
     Node& entity() const noexcept { return *entity_; }
+
+    const ImVec2& pos() const noexcept { return pos_; }
 
    private:
     // permanentized
@@ -332,12 +338,23 @@ class NodeNet : public File, public iface::Node {
   auto& node_in_() noexcept { return in_; }
   auto& node_out_() noexcept { return out_; }
 
-  NodeHolder& FindHolder(const Node& n) noexcept {
+  NodeHolder& FindHolder(const Node& n) const noexcept {
     for (auto& h: nodes_) {
       if (&h->entity() == &n) return *h;
     }
     assert(false);
     std::abort();
+  }
+  NodeHolder* FindHolder(size_t id) const noexcept {
+    for (auto& h: nodes_) {
+      if (h->id() == id) return h.get();
+    }
+    return nullptr;
+  }
+  NodeHolder* FindHolder(const std::string& name) const noexcept {
+    size_t pos;
+    const auto id = static_cast<size_t>(std::stoll(std::string(name), &pos));
+    return name.size() == pos? FindHolder(id): nullptr;
   }
 
 
@@ -351,6 +368,7 @@ class NodeNet : public File, public iface::Node {
 
   class GUI final : public iface::GUI, public iface::DirItem {
    public:
+    static inline const std::string kIdSuffix = ": NodeNet Editor";
     GUI(NodeNet* o) : DirItem(kMenu), owner_(o) {
       canvas_.Style.NodeRounding = 0.f;
     }
@@ -384,6 +402,29 @@ class NodeNet : public File, public iface::Node {
       }
     }
 
+    bool OnFocus(const RefStack& ref, size_t depth) noexcept override {
+      if (depth+1 != ref.size()) return false;
+
+      auto target = owner_->FindHolder(ref.terms(depth).name());
+      if (!target) return false;
+
+      for (auto& h : owner_->nodes_) h->Unselect();
+      target->Select();
+
+      // adjust offset to make the node displayed in center
+      canvas_.Offset = (target->pos()*canvas_.Zoom - canvas_size_/2.f)*-1.f;
+
+      // get self path
+      auto path = ref.GetFullPath();
+      path.resize(depth);
+
+      // focus the editor
+      const auto id = StringifyPath(path) + kIdSuffix;
+      ImGui::SetWindowFocus(id.c_str());
+      shown_ = true;
+      return true;
+    }
+
     void Update(RefStack&) noexcept override;
     void UpdateMenu(RefStack&) noexcept override;
     void UpdateCanvas(RefStack&) noexcept;
@@ -401,6 +442,8 @@ class NodeNet : public File, public iface::Node {
 
     // volatile params
     std::string io_name_;
+
+    ImVec2 canvas_size_;
   } gui_;
 
 
@@ -836,18 +879,17 @@ void NodeNet::GUI::Update(RefStack& ref) noexcept {
     h->UpdateWindow(ref);
   }
 
-  if (shown_) {
-    constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+  constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
-    ImGui::SetNextWindowSize(ImVec2 {24.f, 24.f}*ImGui::GetFontSize(),
-                             ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2 {24.f, 24.f}*ImGui::GetFontSize(),
+                           ImGuiCond_FirstUseEver);
 
-    const auto id = ref.Stringify() + ": NodeNet Editor";
-    if (ImGui::Begin(id.c_str(), nullptr, kFlags)) {
-      UpdateCanvas(ref);
-    }
-    ImGui::End();
+  const auto id = ref.Stringify() + kIdSuffix;
+  if (ImGui::Begin(id.c_str(), &shown_, kFlags)) {
+    canvas_size_ = ImGui::GetWindowSize();
+    UpdateCanvas(ref);
   }
+  ImGui::End();
 }
 void NodeNet::GUI::UpdateMenu(RefStack&) noexcept {
   ImGui::MenuItem("NodeNet Editor", nullptr, &shown_);
@@ -1025,7 +1067,7 @@ class RefNode : public File, public iface::Node {
       File(&type_), Node(kMenu),
       path_(path),
       life_(std::make_shared<std::monostate>()),
-      ctx_(std::make_shared<Context>(std::make_unique<EditContextWatcher>(this, life_))),
+      ctx_(std::make_shared<Context>()),
       gui_(this) {
     in_.reserve(in.size());
     out_.reserve(out.size());
@@ -1158,7 +1200,7 @@ class RefNode : public File, public iface::Node {
   // volatile params
   std::shared_ptr<std::monostate> life_;
   std::shared_ptr<Context>        ctx_;
-  std::string                     basepath_;
+  File::Path                      basepath_;
 
   bool        synced_ = false;
   std::string path_editing_;
@@ -1171,32 +1213,13 @@ class RefNode : public File, public iface::Node {
     GUI(RefNode* o) : owner_(o) { }
 
     void Update(RefStack& ref) noexcept override {
-      owner_->basepath_ = ref.Stringify();
+      owner_->basepath_ = ref.GetFullPath();
       owner_->Watch(&*ref.Resolve(owner_->path_));
     }
 
    private:
     RefNode* owner_;
   } gui_;
-
-
-  // A watcher for a context on the editor
-  class EditContextWatcher final : public ContextWatcher {
-   public:
-    EditContextWatcher(RefNode* o, const Life& life) noexcept : owner_(o), life_(life) {
-    }
-
-    void Inform(std::string_view msg) noexcept override {
-      (void) msg;
-      (void) owner_;
-      // TODO(falsycat)
-    }
-
-   private:
-    RefNode* owner_;
-
-    std::weak_ptr<std::monostate> life_;
-  };
 
 
   // A watcher for a context of lambda execution
@@ -1246,7 +1269,7 @@ class RefNode : public File, public iface::Node {
         dst->Receive(data.ctx(), std::move(v));
 
       } catch (Exception& e) {
-        ctx->Inform(e.msg());
+        notify::Error(owner_->basepath_, owner_, e.msg());
       }
     }
 

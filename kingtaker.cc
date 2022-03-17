@@ -39,7 +39,7 @@ File::Path File::ParsePath(std::string_view path) noexcept {
   return ret;
 }
 std::string File::StringifyPath(const Path& p) noexcept {
-  std::string ret = ":";
+  std::string ret;
   for (const auto& name : p) {
     ret.push_back('/');
     ret += name;

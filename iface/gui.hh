@@ -18,6 +18,13 @@ class GUI {
 
   virtual void Update(File::RefStack&) noexcept { }
 
+
+  // Called when the target file is requested to be focused.
+  // Returning true prevents the propagation to the ancestors.
+  virtual bool OnFocus(const File::RefStack&, size_t) noexcept {
+    return false;
+  }
+
   // Called when the user saves the project.
   virtual void OnSaved(File::RefStack&) noexcept { }
 
