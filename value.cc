@@ -26,15 +26,16 @@
 namespace kingtaker {
 namespace {
 
-class ImmValue : public File, public iface::Node {
+class ImmValue : public File, public iface::Factory<Value>, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ImmValue>(
       "ImmValue", "immediate value",
-      {typeid(iface::Node)});
+      {typeid(iface::Node), typeid(iface::DirItem), typeid(iface::Node)});
 
-  ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Integer{0}, ImVec2 size = {0, 0}) noexcept :
-      File(&type_, env), Node(kNone), value_(std::move(v)), size_(size) {
-    out_.emplace_back(new CachedOutSock(this, "out", Value::Pulse()));
+  ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Pulse(), ImVec2 size = {0, 0}) noexcept :
+      File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
+      value_(std::move(v)), size_(size) {
+    out_.emplace_back(new CachedOutSock(this, "out", Value(value_)));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -55,142 +56,165 @@ class ImmValue : public File, public iface::Node {
     return std::make_unique<ImmValue>(env, Value(value_), size_);
   }
 
-  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override {
-    const auto em = ImGui::GetFontSize();
-    const auto fh = ImGui::GetFrameHeight();
-    const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
-
-    ImGui::TextUnformatted("IMM");
-    auto& v = value_;
-
-    bool mod = false;
-    const char* type =
-        v.has<Value::Pulse>()?   "Pul":
-        v.has<Value::Integer>()? "Int":
-        v.has<Value::Scalar>()?  "Sca":
-        v.has<Value::Boolean>()? "Boo":
-        v.has<Value::Vec2>()?    "Ve2":
-        v.has<Value::Vec3>()?    "Ve3":
-        v.has<Value::Vec4>()?    "Ve4":
-        v.has<Value::String>()?  "Str": "XXX";
-    ImGui::Button(type);
-
-    gui::NodeCanvasResetZoom();
-    if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-      if (ImGui::MenuItem("pulse", nullptr, v.has<Value::Pulse>())) {
-        v   = Value::Pulse();
-        mod = true;
-      }
-      if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
-        v   = Value::Integer {0};
-        mod = true;
-      }
-      if (ImGui::MenuItem("scalar", nullptr, v.has<Value::Scalar>())) {
-        v   = Value::Scalar {0};
-        mod = true;
-      }
-      if (ImGui::MenuItem("boolean", nullptr, v.has<Value::Boolean>())) {
-        v   = Value::Boolean {false};
-        mod = true;
-      }
-      if (ImGui::MenuItem("vec2", nullptr, v.has<Value::Vec2>())) {
-        v   = Value::Vec2 {0., 0.};
-        mod = true;
-      }
-      if (ImGui::MenuItem("vec3", nullptr, v.has<Value::Vec3>())) {
-        v   = Value::Vec3 {0., 0., 0.};
-        mod = true;
-      }
-      if (ImGui::MenuItem("vec4", nullptr, v.has<Value::Vec4>())) {
-        v   = Value::Vec4 {0., 0., 0., 0.};
-        mod = true;
-      }
-      if (ImGui::MenuItem("string", nullptr, v.has<Value::String>())) {
-        v   = ""s;
-        mod = true;
-      }
-      ImGui::EndPopup();
-    }
-    gui::NodeCanvasSetZoom();
-
-    ImGui::SameLine();
-    if (v.has<Value::Pulse>()) {
-      mod = ImGui::Button("Z");
-
-    } else if (v.has<Value::Integer>()) {
-      gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
-      ImGui::SetNextItemWidth(size_.x*em);
-      mod = ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
-
-    } else if (v.has<Value::Scalar>()) {
-      gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
-      ImGui::SetNextItemWidth(size_.x*em);
-      mod = ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &v.getUniq<Value::Scalar>());
-
-    } else if (v.has<Value::Boolean>()) {
-      mod = ImGui::Checkbox("##InputValue", &v.getUniq<Value::Boolean>());
-
-    } else if (v.has<Value::Vec2>()) {
-      const auto h = (2*fh + sp)/em;
-      gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
-      mod = UpdateVec(v.getUniq<Value::Vec2>());
-
-    } else if (v.has<Value::Vec3>()) {
-      const auto h = (3*fh + 2*sp)/em;
-      gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
-      mod = UpdateVec(v.getUniq<Value::Vec3>());
-
-    } else if (v.has<Value::Vec4>()) {
-      const auto h = (4*fh + 3*sp)/em;
-      gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
-      mod = UpdateVec(v.getUniq<Value::Vec4>());
-
-    } else if (v.has<Value::String>()) {
-      gui::ResizeGroup _("##ResizeGroup", &size_, {4, 4}, {24, 24}, em);
-      mod = ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), size_*em);
-
-    } else {
-      assert(false);
-    }
-    if (mod) {
-      out_[0]->Send(ctx, Value(v));
-      lastmod_ = Clock::now();
-    }
-
-    ImGui::SameLine();
-    if (ImNodes::BeginOutputSlot("out", 1)) {
-      gui::NodeSocket();
-      ImNodes::EndSlot();
-    }
+  Value Create() noexcept override {
+    return value_;
   }
-  template <int D>
-  bool UpdateVec(linalg::vec<double, D>& vec) {
-    bool mod = false;
-    for (int i = 0; i < D; ++i) {
-      ImGui::PushID(&vec[i]);
-      ImGui::SetNextItemWidth(size_.x*ImGui::GetFontSize());
-      if (ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &vec[i])) {
-        mod = true;
-      }
-      ImGui::PopID();
-    }
-    return mod;
-  }
+
+  void UpdateTree(RefStack&) noexcept override;
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateEditor() noexcept;
+  template <int D> bool UpdateVec(linalg::vec<double, D>& vec) noexcept;
 
   Time lastModified() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node, iface::DirItem, iface::Node>(t).Select(this);
   }
 
  private:
+  // permanentized value
   Time lastmod_;
 
   Value value_;
 
   ImVec2 size_;
+
+  // volatile params
+  bool updated_ = false;
 };
+void ImmValue::UpdateTree(RefStack&) noexcept {
+  UpdateEditor();
+}
+void ImmValue::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  ImGui::TextUnformatted("IMM");
+
+  UpdateEditor();
+
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+  if (updated_) {
+    out_[0]->Send(ctx, Value(value_));
+    updated_ = false;
+  }
+}
+void ImmValue::UpdateEditor() noexcept {
+  const auto em = ImGui::GetFontSize();
+  const auto fh = ImGui::GetFrameHeight();
+  const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
+
+  auto& v = value_;
+
+  bool mod = false;
+  const char* type =
+      v.has<Value::Pulse>()?   "Pul":
+      v.has<Value::Integer>()? "Int":
+      v.has<Value::Scalar>()?  "Sca":
+      v.has<Value::Boolean>()? "Boo":
+      v.has<Value::Vec2>()?    "Ve2":
+      v.has<Value::Vec3>()?    "Ve3":
+      v.has<Value::Vec4>()?    "Ve4":
+      v.has<Value::String>()?  "Str": "XXX";
+  ImGui::Button(type);
+
+  gui::NodeCanvasResetZoom();
+  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+    if (ImGui::MenuItem("pulse", nullptr, v.has<Value::Pulse>())) {
+      v   = Value::Pulse();
+      mod = true;
+    }
+    if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
+      v   = Value::Integer {0};
+      mod = true;
+    }
+    if (ImGui::MenuItem("scalar", nullptr, v.has<Value::Scalar>())) {
+      v   = Value::Scalar {0};
+      mod = true;
+    }
+    if (ImGui::MenuItem("boolean", nullptr, v.has<Value::Boolean>())) {
+      v   = Value::Boolean {false};
+      mod = true;
+    }
+    if (ImGui::MenuItem("vec2", nullptr, v.has<Value::Vec2>())) {
+      v   = Value::Vec2 {0., 0.};
+      mod = true;
+    }
+    if (ImGui::MenuItem("vec3", nullptr, v.has<Value::Vec3>())) {
+      v   = Value::Vec3 {0., 0., 0.};
+      mod = true;
+    }
+    if (ImGui::MenuItem("vec4", nullptr, v.has<Value::Vec4>())) {
+      v   = Value::Vec4 {0., 0., 0., 0.};
+      mod = true;
+    }
+    if (ImGui::MenuItem("string", nullptr, v.has<Value::String>())) {
+      v   = ""s;
+      mod = true;
+    }
+    ImGui::EndPopup();
+  }
+  gui::NodeCanvasSetZoom();
+
+  ImGui::SameLine();
+  if (v.has<Value::Pulse>()) {
+    mod |= ImGui::Button("Z");
+
+  } else if (v.has<Value::Integer>()) {
+    gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
+    ImGui::SetNextItemWidth(size_.x*em);
+    mod |= ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
+
+  } else if (v.has<Value::Scalar>()) {
+    gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
+    ImGui::SetNextItemWidth(size_.x*em);
+    mod |= ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &v.getUniq<Value::Scalar>());
+
+  } else if (v.has<Value::Boolean>()) {
+    mod |= ImGui::Checkbox("##InputValue", &v.getUniq<Value::Boolean>());
+
+  } else if (v.has<Value::Vec2>()) {
+    const auto h = (2*fh + sp)/em;
+    gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
+    mod |= UpdateVec(v.getUniq<Value::Vec2>());
+
+  } else if (v.has<Value::Vec3>()) {
+    const auto h = (3*fh + 2*sp)/em;
+    gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
+    mod |= UpdateVec(v.getUniq<Value::Vec3>());
+
+  } else if (v.has<Value::Vec4>()) {
+    const auto h = (4*fh + 3*sp)/em;
+    gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
+    mod |= UpdateVec(v.getUniq<Value::Vec4>());
+
+  } else if (v.has<Value::String>()) {
+    gui::ResizeGroup _("##ResizeGroup", &size_, {4, 4}, {24, 24}, em);
+    mod |= ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), size_*em);
+
+  } else {
+    assert(false);
+  }
+  if (mod) {
+    updated_ = true;
+    lastmod_ = Clock::now();
+  }
+}
+template <int D>
+bool ImmValue::UpdateVec(linalg::vec<double, D>& vec) noexcept {
+  bool mod = false;
+  for (int i = 0; i < D; ++i) {
+    ImGui::PushID(&vec[i]);
+    ImGui::SetNextItemWidth(size_.x*ImGui::GetFontSize());
+    if (ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &vec[i])) {
+      mod = true;
+    }
+    ImGui::PopID();
+  }
+  return mod;
+}
 
 
 class ExternalText final : public File,

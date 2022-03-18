@@ -64,7 +64,7 @@ void NodeSocket() noexcept {
 
 void NodeCanvasSetZoom() noexcept {
   auto ctx = ImNodes::GetCurrentCanvas();
-  assert(ctx);
+  if (!ctx) return;
 
   const auto z = ctx->Zoom;
   ImGui::SetWindowFontScale(z);
@@ -78,6 +78,9 @@ void NodeCanvasSetZoom() noexcept {
   ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing,    s.IndentSpacing*z);
 }
 void NodeCanvasResetZoom() noexcept {
+  auto ctx = ImNodes::GetCurrentCanvas();
+  if (!ctx) return;
+
   ImGui::SetWindowFontScale(1.f);
   ImGui::PopStyleVar(6);
 }
