@@ -473,7 +473,7 @@ class ValueLogger final : public File, public iface::Node {
     pk.pack("show_elapse");
     pk.pack(show_elapse_);
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept {
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
     return std::make_unique<ValueLogger>(
         env, size_, auto_scroll_, show_elapse_);
   }
@@ -670,7 +670,7 @@ void ValueLogger::Update(
         if (ImGui::TableNextColumn()) {
           ImGui::TextUnformatted(item.value.c_str());
           if (item.tooltip.size() && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(item.tooltip.c_str());
+            ImGui::SetTooltip("%s", item.tooltip.c_str());
           }
         }
         if (ImGui::TableNextColumn()) {
