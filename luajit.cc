@@ -317,17 +317,19 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
   }
 
 
-  LuaJITScript(const std::string& path = "",
+  LuaJITScript(const std::shared_ptr<Env>& env,
+               const std::string& path = "",
                bool shown          = false,
                bool auto_recompile = false) noexcept :
-      File(&type_), DirItem(kMenu),
+      File(&type_, env), DirItem(kMenu),
       path_(path), shown_(shown), auto_recompile_(auto_recompile) {
     data_ = std::make_shared<Data>();
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     try {
       return std::make_unique<LuaJITScript>(
+          env,
           msgpack::find(obj, "path"s).as<std::string>(),
           msgpack::find(obj, "shown"s).as<bool>(),
           msgpack::find(obj, "auto_recompile"s).as<bool>());
@@ -347,8 +349,8 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
     pk.pack("auto_recompile"s);
     pk.pack(auto_recompile_);
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<LuaJITScript>(path_, shown_, auto_recompile_);
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<LuaJITScript>(env, path_, shown_, auto_recompile_);
   }
 
   void Update(File::RefStack&) noexcept override;
@@ -500,11 +502,12 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       "LuaJIT Node", "Node driven by LuaJIT",
       {typeid(iface::GUI), typeid(iface::Node)});
 
-  LuaJITNode(std::string_view path = "",
+  LuaJITNode(const std::shared_ptr<Env>& env,
+             std::string_view path = "",
              bool auto_rebuild = false,
              const std::vector<std::string>& in  = {},
              const std::vector<std::string>& out = {}) noexcept :
-      File(&type_), Node(kMenu),
+      File(&type_, env), Node(kMenu),
       path_(path), auto_rebuild_(auto_rebuild) {
     life_ = std::make_shared<std::monostate>();
 
@@ -523,7 +526,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     }
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     std::vector<std::string> in, out;
     try {
       in  = msgpack::find(msgpack::find(
@@ -533,6 +536,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     } catch (msgpack::type_error&) {
     }
     return std::make_unique<LuaJITNode>(
+        env,
         msgpack::find(obj, "path"s).as<std::string>(),
         msgpack::find(obj, "auto_rebuild"s).as<bool>(),
         in, out);
@@ -559,8 +563,8 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       for (const auto& out : out_) pk.pack(out->name());
     }
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<LuaJITNode>(path_, auto_rebuild_);
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<LuaJITNode>(env, path_, auto_rebuild_);
   }
 
   void Update(File::RefStack&) noexcept override;

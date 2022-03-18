@@ -20,24 +20,25 @@ class SystemImGuiConfig : public File {
   static inline TypeInfo type_ = TypeInfo::New<SystemImGuiConfig>(
       "SystemImGuiConfig", "save/restore ImGui config", {});
 
-  SystemImGuiConfig() : File(&type_) { }
-
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<SystemImGuiConfig>();
+  SystemImGuiConfig(const std::shared_ptr<Env>& env) noexcept :
+      File(&type_, env) {
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     if (obj.type == msgpack::type::STR) {
       const auto& str = obj.via.str;
       ImGui::LoadIniSettingsFromMemory(str.ptr, str.size);
     }
-    return std::make_unique<SystemImGuiConfig>();
+    return std::make_unique<SystemImGuiConfig>(env);
   }
   void Serialize(Packer& pk) const noexcept override {
     size_t n;
     const char* ini = ImGui::SaveIniSettingsToMemory(&n);
     pk.pack_str(static_cast<uint32_t>(n));
     pk.pack_str_body(ini, static_cast<uint32_t>(n));
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<SystemImGuiConfig>(env);
   }
 };
 
@@ -48,16 +49,18 @@ class SystemLogger : public File, public iface::GUI {
 
   static inline const auto kIdSuffix = ": SystemLogger";
 
-  SystemLogger(bool shown = true) : File(&type_), shown_(shown) { }
+  SystemLogger(const std::shared_ptr<Env>& env, bool shown = true) noexcept :
+      File(&type_, env), shown_(shown) {
+  }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
-    return std::make_unique<SystemLogger>(obj.as<bool>());
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    return std::make_unique<SystemLogger>(env, obj.as<bool>());
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack(shown_);
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<SystemLogger>(shown_);
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<SystemLogger>(env, shown_);
   }
 
   void Update(RefStack& ref) noexcept override {

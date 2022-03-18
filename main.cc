@@ -28,9 +28,8 @@
 using namespace std::literals;
 using namespace kingtaker;
 
-
-static const char*      kFileName      = "kingtaker.bin";
-static constexpr size_t kTasksPerFrame = 1000;
+static constexpr const char* kFileName      = "kingtaker.bin";
+static constexpr size_t      kTasksPerFrame = 1000;
 
 
 static std::optional<std::string> panic_;
@@ -145,6 +144,9 @@ int main(int, char**) {
 
 
 void InitKingtaker() noexcept {
+  const auto config = std::filesystem::current_path() / kFileName;
+
+  auto env = std::make_shared<File::Env>(config, File::Env::kRoot);
   if (!std::filesystem::exists(kFileName)) {
     static const uint8_t kInitialRoot[] = {
 #     include "generated/kingtaker.inc"
@@ -152,7 +154,7 @@ void InitKingtaker() noexcept {
     msgpack::object_handle obj =
         msgpack::unpack(reinterpret_cast<const char*>(kInitialRoot),
                         sizeof(kInitialRoot));
-    root_ = File::Deserialize(obj.get());
+    root_ = File::Deserialize(obj.get(), env);
     assert(root_);
     return;
   }
@@ -161,9 +163,9 @@ void InitKingtaker() noexcept {
     // open the file
     std::ifstream st(kFileName, std::ios::binary);
     if (!st) {
-      throw DeserializeException("failed to open: "s+kFileName);
+      throw DeserializeException("failed to open: "s+config.string());
     }
-    root_ = File::Deserialize(st);
+    root_ = File::Deserialize(st, env);
 
   } catch (msgpack::unpack_error& e) {
     panic_ = "MessagePack unpack error: "s+e.what();

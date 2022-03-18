@@ -103,6 +103,7 @@ class File {
   using Packer = msgpack::packer<std::ostream>;
 
   class TypeInfo;
+  class Env;
   class RefStack;
 
   class NotFoundException;
@@ -111,8 +112,8 @@ class File {
   static std::string StringifyPath(const Path&) noexcept;
 
   static const TypeInfo* Lookup(const std::string&) noexcept;
-  static std::unique_ptr<File> Deserialize(const msgpack::object&);
-  static std::unique_ptr<File> Deserialize(std::istream&);
+  static std::unique_ptr<File> Deserialize(const msgpack::object&, const std::shared_ptr<Env>&);
+  static std::unique_ptr<File> Deserialize(std::istream&, const std::shared_ptr<Env>&);
 
   // An entrypoint must set root file by calling root(File*) before entering main loop.
   static File& root() noexcept;
@@ -130,7 +131,9 @@ class File {
   template <typename T>
   static T& iface(File& f, T& def) noexcept { return f.iface<T>(def); }
 
-  File(const TypeInfo* type) noexcept : type_(type) { }
+  File(const TypeInfo* type, const std::shared_ptr<Env>& env) noexcept :
+      type_(type), env_(env) {
+  }
   File() = delete;
   virtual ~File() = default;
   File(const File&) = delete;
@@ -144,7 +147,7 @@ class File {
   virtual void Scan(std::function<void(std::string_view, File*)>) const noexcept { }
 
   virtual void Serialize(Packer&) const noexcept = 0;
-  virtual std::unique_ptr<File> Clone() const noexcept = 0;
+  virtual std::unique_ptr<File> Clone(const std::shared_ptr<Env>&) const noexcept = 0;
 
   // Some features may use this field to detect changes.
   virtual Time lastModified() const noexcept { return {}; }
@@ -170,6 +173,7 @@ class File {
   T& iface(T& def) noexcept { return *iface<T>(&def); }
 
   const TypeInfo& type() const noexcept { return *type_; }
+  const std::shared_ptr<Env>& env() const noexcept { return env_; }
 
  private:
   static std::map<std::string, TypeInfo*>& registry_() noexcept {
@@ -178,14 +182,16 @@ class File {
   }
 
   const TypeInfo* type_;
+
+  std::shared_ptr<Env> env_;
 };
 
 class File::TypeInfo final {
  public:
-  using Factory      = std::function<std::unique_ptr<File>()>;
-  using AssocFactory = std::function<std::unique_ptr<File>(const std::filesystem::path&)>;
+  using Factory      = std::function<std::unique_ptr<File>(const std::shared_ptr<Env>&)>;
+  using AssocFactory = std::function<std::unique_ptr<File>(const std::filesystem::path&, const std::shared_ptr<Env>&)>;
   using AssocChecker = std::function<bool(const std::filesystem::path&)>;
-  using Deserializer = std::function<std::unique_ptr<File>(const msgpack::object&)>;
+  using Deserializer = std::function<std::unique_ptr<File>(const msgpack::object&, const std::shared_ptr<Env>&)>;
   using GUI          = std::function<void()>;
 
   template <typename T>
@@ -193,12 +199,12 @@ class File::TypeInfo final {
                       std::string_view desc,
                       std::vector<std::type_index>&& iface) noexcept {
     Factory f;
-    if constexpr (std::is_default_constructible<T>::value) {
-      f = []() { return std::make_unique<T>(); };
+    if constexpr (std::is_constructible<T, std::shared_ptr<Env>>::value) {
+      f = [](auto& env) { return std::make_unique<T>(env); };
     }
     AssocFactory af;
     if constexpr (std::is_constructible<T, const std::filesystem::path&>::value) {
-      af = [](auto& p) { return std::make_unique<T>(p); };
+      af = [](auto& p, auto& env) { return std::make_unique<T>(p, env); };
     }
     return TypeInfo(name, desc, std::move(iface),
                     std::move(f),
@@ -223,17 +229,17 @@ class File::TypeInfo final {
   TypeInfo& operator=(const TypeInfo&) = delete;
   TypeInfo& operator=(TypeInfo&&) = delete;
 
-  std::unique_ptr<File> Create() const noexcept {
-    return factory_();
+  std::unique_ptr<File> Create(const std::shared_ptr<Env>& env) const noexcept {
+    return factory_(env);
   }
-  std::unique_ptr<File> CreateFromFile(const std::filesystem::path& p) const noexcept {
-    return assoc_factory_(p);
+  std::unique_ptr<File> CreateFromFile(const std::filesystem::path& p, const std::shared_ptr<Env>& env) const noexcept {
+    return assoc_factory_(p, env);
   }
   bool CheckAssoc(const std::filesystem::path& p) const noexcept {
     return assoc_checker_? assoc_checker_(p): false;
   }
-  std::unique_ptr<File> Deserialize(const msgpack::object& v) const {
-    return deserializer_(v);
+  std::unique_ptr<File> Deserialize(const msgpack::object& v, const std::shared_ptr<Env>& env) const {
+    return deserializer_(v, env);
   }
 
   void UpdateGUI() const noexcept {
@@ -262,7 +268,7 @@ class File::TypeInfo final {
 
   template <typename T>
   static auto GetDeserializer(int) noexcept -> decltype(T::Deserialize, Deserializer()) {
-    return [](auto& v) { return T::Deserialize(v); };
+    return [](auto& v, auto& env) { return T::Deserialize(v, env); };
   }
   template <typename T>
   static auto GetDeserializer(...) noexcept -> Deserializer { return {}; }
@@ -289,6 +295,34 @@ class File::TypeInfo final {
   Deserializer deserializer_;
 
   GUI gui_;
+};
+
+class File::Env {
+ public:
+  enum Flag : uint8_t {
+    kNone     = 0,
+    kRoot     = 1 << 1,
+    kReadOnly = 1 << 2,  // permanentize is disabled
+  };
+  using Flags = uint8_t;
+
+  Env() = delete;
+  Env(const std::filesystem::path& path, Flags flags) noexcept :
+      path_(path), flags_(flags) {
+  }
+  virtual ~Env() = default;
+  Env(const Env&) = delete;
+  Env(Env&&) = delete;
+  Env& operator=(const Env&) = delete;
+  Env& operator=(Env&&) = delete;
+
+  const std::filesystem::path& path() const noexcept { return path_; }
+  Flags flags() const noexcept { return flags_; }
+
+ private:
+  std::filesystem::path path_;
+
+  Flags flags_;
 };
 
 class File::RefStack final {

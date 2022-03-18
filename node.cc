@@ -78,11 +78,11 @@ class NodeNet : public File, public iface::Node {
     NodeHolder& operator=(const NodeHolder&) = delete;
     NodeHolder& operator=(NodeHolder&&) = delete;
 
-    static std::unique_ptr<NodeHolder> Deserialize(const msgpack::object& obj) {
+    static std::unique_ptr<NodeHolder> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
       try {
         const size_t id = msgpack::find(obj, "id"s).as<size_t>();
 
-        auto f = File::Deserialize(msgpack::find(obj, "file"s));
+        auto f = File::Deserialize(msgpack::find(obj, "file"s), env);
         auto n = f->iface<Node>();
         if (!n) throw DeserializeException("it's not node");
 
@@ -113,7 +113,9 @@ class NodeNet : public File, public iface::Node {
 
           for (size_t j = 0; j < out_dst.via.array.size; ++j) {
             std::pair<size_t, std::string> conn;
-            out_dst.via.array.ptr[j].convert(conn);
+            if (!out_dst.via.array.ptr[j].convert_if_not_nil(conn)) {
+              continue;
+            }
             if (conn.first >= nmap.size()) throw DeserializeException("missing node");
 
             auto in = nmap[conn.first]->FindIn(conn.second);
@@ -144,20 +146,27 @@ class NodeNet : public File, public iface::Node {
     void SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept {
       pk.pack_map(static_cast<uint32_t>(entity_->out().size()));
       for (auto out : entity_->out()) {
-        pk.pack(out->name());
-        pk.pack_array(static_cast<uint32_t>(out->dst().size()));
-
         out->CleanConns();
+        std::vector<std::shared_ptr<InSock>> socks;
         for (auto& inw : out->dst()) {
-          auto in  = inw.lock();
+          auto in = inw.lock();
+          if (in) socks.push_back(in);
+        }
+
+        pk.pack(out->name());
+        pk.pack_array(static_cast<uint32_t>(socks.size()));
+        for (auto& in : socks) {
           auto itr = idxmap.find(&in->owner());
-          if (itr == idxmap.end()) continue;
-          pk.pack(std::make_tuple(itr->second, in->name()));
+          if (itr != idxmap.end()) {
+            pk.pack(std::make_tuple(itr->second, in->name()));
+          } else {
+            pk.pack_nil();
+          }
         }
       }
     }
-    std::unique_ptr<NodeHolder> Clone(size_t id) const noexcept {
-      return NodeHolder::Create(id, file_->Clone());
+    std::unique_ptr<NodeHolder> Clone(size_t id, const std::shared_ptr<Env>& env) const noexcept {
+      return NodeHolder::Create(id, file_->Clone(env));
     }
 
     void Setup(NodeNet* owner) noexcept {
@@ -198,17 +207,17 @@ class NodeNet : public File, public iface::Node {
   using NodeHolderRefList = std::vector<NodeHolder*>;
 
 
-  NodeNet() noexcept : NodeNet(Clock::now()) { }
-  NodeNet(Time lastmod,
+  NodeNet(const std::shared_ptr<Env>& env,
+          Time lastmod = Clock::now(),
           NodeHolderList&& nodes = {},
           size_t next = 0) noexcept :
-      File(&type_), Node(kNone),
+      File(&type_, env), Node(kNone),
       ctx_(std::make_shared<Context>()),
       lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
       gui_(this), history_(this) {
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     try {
       const auto lastmod = Clock::from_time_t(msgpack::find(obj, "lastMod"s).as<time_t>());
 
@@ -221,7 +230,7 @@ class NodeNet : public File, public iface::Node {
       NodeHolderList nodes(obj_nodes.via.array.size);
 
       for (size_t i = 0; i < obj_nodes.via.array.size; ++i) {
-        nodes[i] = NodeHolder::Deserialize(obj_nodes.via.array.ptr[i]);
+        nodes[i] = NodeHolder::Deserialize(obj_nodes.via.array.ptr[i], env);
         nmap[i]  = &nodes[i]->entity();
 
         if (nodes[i]->id() == next) {
@@ -238,7 +247,7 @@ class NodeNet : public File, public iface::Node {
         nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
       }
 
-      auto ret = std::make_unique<NodeNet>(lastmod, std::move(nodes), next);
+      auto ret = std::make_unique<NodeNet>(env, lastmod, std::move(nodes), next);
       ret->gui_.Deserialize(msgpack::find(obj, "gui"s));
       for (auto& h : ret->nodes_) h->Setup(ret.get());
       return ret;
@@ -275,7 +284,7 @@ class NodeNet : public File, public iface::Node {
     pk.pack("gui"s);
     gui_.Serialize(pk);
   }
-  std::unique_ptr<File> Clone() const noexcept override {
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
     std::unordered_map<Node*, Node*> nmap;
 
     size_t id = 0;
@@ -283,7 +292,7 @@ class NodeNet : public File, public iface::Node {
     NodeHolderList nodes;
     nodes.reserve(nodes_.size());
     for (auto& h : nodes_) {
-      nodes.push_back(h->Clone(id++));
+      nodes.push_back(h->Clone(id++, env));
       nmap[&h->entity()] = &nodes.back()->entity();
     }
     for (auto& h : nodes) {
@@ -303,7 +312,7 @@ class NodeNet : public File, public iface::Node {
         }
       }
     }
-    return std::make_unique<NodeNet>(Clock::now(), std::move(nodes));
+    return std::make_unique<NodeNet>(env, Clock::now(), std::move(nodes));
   }
 
   File* Find(std::string_view name) const noexcept override {
@@ -639,8 +648,8 @@ class NodeNet : public File, public iface::Node {
       std::shared_ptr<CtxSock> sock;
     };
 
-    AbstractIONode(TypeInfo* t, std::string_view name) :
-        File(t), Node(kNone), name_(name), data_(std::make_shared<Data>()) {
+    AbstractIONode(TypeInfo* t, const std::shared_ptr<Env>& env, std::string_view name) :
+        File(t, env), Node(kNone), name_(name), data_(std::make_shared<Data>()) {
     }
 
     void Serialize(Packer& pk) const noexcept override {
@@ -698,15 +707,16 @@ class NodeNet : public File, public iface::Node {
     static inline TypeInfo type_ = TypeInfo::New<InputNode>(
         "NodeNet_InputNode", "input emitter in NodeNet", {});
 
-    InputNode(std::string_view name) noexcept : AbstractIONode(&type_, name) {
+    InputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
+        AbstractIONode(&type_, env, name) {
       out_.emplace_back(new OutSock(this, "out"));
     }
 
-    static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
-      return std::make_unique<InputNode>(obj.as<std::string>());
+    static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+      return std::make_unique<InputNode>(env, obj.as<std::string>());
     }
-    std::unique_ptr<File> Clone() const noexcept override {
-      return std::make_unique<InputNode>(name_);
+    std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+      return std::make_unique<InputNode>(env, name_);
     }
 
     void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
@@ -745,15 +755,16 @@ class NodeNet : public File, public iface::Node {
       std::shared_ptr<Data> data_;
     };
 
-    OutputNode(std::string_view name) noexcept : AbstractIONode(&type_, name) {
+    OutputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
+        AbstractIONode(&type_, env, name) {
       in_.emplace_back(new Receiver(this));
     }
 
-    static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
-      return std::make_unique<OutputNode>(obj.as<std::string>());
+    static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+      return std::make_unique<OutputNode>(env, obj.as<std::string>());
     }
-    std::unique_ptr<File> Clone() const noexcept override {
-      return std::make_unique<OutputNode>(name_);
+    std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+      return std::make_unique<OutputNode>(env, name_);
     }
 
     void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
@@ -858,7 +869,7 @@ void NodeNet::NodeHolder::UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem()) {
     if (ImGui::MenuItem("Clone")) {
-      owner->history_.AddNodeIf(Clone(owner->next_id_++));
+      owner->history_.AddNodeIf(Clone(owner->next_id_++, owner->env()));
     }
     if (ImGui::MenuItem("Remove")) {
       owner->history_.RemoveNodes({this});
@@ -906,7 +917,7 @@ void NodeNet::GUI::UpdateCanvas(RefStack& ref) noexcept {
         if (!t.factory() || !t.CheckImplemented<Node>()) continue;
         if (ImGui::MenuItem(t.name().c_str())) {
           owner_->history_.AddNodeIf(
-              NodeHolder::Create(owner_->next_id_++, t.Create()));
+              NodeHolder::Create(owner_->next_id_++, t.Create(owner_->env())));
         }
         if (ImGui::IsItemHovered()) {
           ImGui::SetTooltip("%s", t.desc().c_str());
@@ -1011,7 +1022,7 @@ void NodeNet::GUI::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
   }
   if (submit && !empty && !dup) {
     owner_->history_.AddNodeIf(
-        NodeHolder::Create(owner_->next_id_++, std::make_unique<T>(io_name_)));
+        NodeHolder::Create(owner_->next_id_++, std::make_unique<T>(owner_->env(), io_name_)));
     io_name_ = "";
     ImGui::CloseCurrentPopup();
   }
@@ -1053,22 +1064,22 @@ void NodeNet::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&)
 
 
 // RefNode allows other nodes to be treated as lambda
-class RefNode : public File, public iface::Node {
+class RefNode : public File, public iface::GUI, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<RefNode>(
       "RefNode", "uses node as lambda",
-      {typeid(iface::Node), typeid(iface::GUI)});
+      {typeid(iface::GUI), typeid(iface::Node)});
 
   using Life = std::weak_ptr<std::monostate>;
 
-  RefNode(std::string_view path = "",
+  RefNode(const std::shared_ptr<Env>& env,
+          std::string_view path = "",
           const std::vector<std::string>& in  = {},
           const std::vector<std::string>& out = {}) noexcept :
-      File(&type_), Node(kMenu),
+      File(&type_, env), Node(kMenu),
       path_(path),
       life_(std::make_shared<std::monostate>()),
-      ctx_(std::make_shared<Context>()),
-      gui_(this) {
+      ctx_(std::make_shared<Context>()) {
     in_.reserve(in.size());
     out_.reserve(out.size());
 
@@ -1077,11 +1088,11 @@ class RefNode : public File, public iface::Node {
     for (auto& v : out) out_.push_back(std::make_shared<OutSock>(this, v));
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj) {
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     auto str = msgpack::find(obj, "path"s).as<std::string>();
     auto in  = msgpack::find(obj, "in"s).as<std::vector<std::string>>();
     auto out = msgpack::find(obj, "out"s).as<std::vector<std::string>>();
-    return std::make_unique<RefNode>(str, std::move(in), std::move(out));
+    return std::make_unique<RefNode>(env, str, std::move(in), std::move(out));
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(3);
@@ -1097,19 +1108,35 @@ class RefNode : public File, public iface::Node {
     pk.pack("path"s);
     pk.pack(path_);
   }
-  std::unique_ptr<File> Clone() const noexcept override {
-    return std::make_unique<RefNode>(path_);
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<RefNode>(env, path_);
   }
 
-  void Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept override;
-  void UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept override;
+  void Update(RefStack& ref) noexcept override {
+    basepath_ = ref.GetFullPath();
+    Watch(&*ref.Resolve(path_));
+  }
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateMenu(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
+  void UpdateEntity(RefStack&, File* f) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node, iface::GUI>(t).Select(this, &gui_);
+    return PtrSelector<iface::Node, iface::GUI>(t).Select(this);
   }
 
  private:
-  void UpdateEntity(RefStack& ref, File* f) noexcept;
+  // permanentized params
+  std::string path_;
+
+  // volatile params
+  std::shared_ptr<std::monostate> life_;
+  std::shared_ptr<Context>        ctx_;
+  File::Path                      basepath_;
+
+  bool        synced_ = false;
+  std::string path_editing_;
+  Time        lastmod_;
+
 
   // detects changes of the entity
   void Watch(File* f) noexcept {
@@ -1122,9 +1149,9 @@ class RefNode : public File, public iface::Node {
     auto factory = File::iface<iface::Factory<Value>>(f);
     if (factory) {
       const auto mod = f->lastModified();
-      if (last_mod_ < mod) {
+      if (lastmod_ < mod) {
         out_[0]->Send(ctx_, factory->Create());
-        last_mod_ = mod;
+        lastmod_ = mod;
       }
       return;
     }
@@ -1192,34 +1219,6 @@ class RefNode : public File, public iface::Node {
       out_.clear();
     }
   }
-
-
-  // permanentized params
-  std::string path_;
-
-  // volatile params
-  std::shared_ptr<std::monostate> life_;
-  std::shared_ptr<Context>        ctx_;
-  File::Path                      basepath_;
-
-  bool        synced_ = false;
-  std::string path_editing_;
-  Time        last_mod_;
-
-
-  // just calls owner's Watch() method
-  class GUI : public iface::GUI {
-   public:
-    GUI(RefNode* o) : owner_(o) { }
-
-    void Update(RefStack& ref) noexcept override {
-      owner_->basepath_ = ref.GetFullPath();
-      owner_->Watch(&*ref.Resolve(owner_->path_));
-    }
-
-   private:
-    RefNode* owner_;
-  } gui_;
 
 
   // A watcher for a context of lambda execution
@@ -1331,55 +1330,16 @@ void RefNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   }
   gui::NodeCanvasSetZoom();
 }
-void RefNode::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
-  if (ImGui::BeginMenu("Change")) {
-    constexpr auto kFlags = 
-        ImGuiInputTextFlags_EnterReturnsTrue |
-        ImGuiInputTextFlags_AutoSelectAll;
-    static const char* const kHint = "enter new path...";
-
-    ImGui::SetKeyboardFocusHere();
-    const bool submit = ImGui::InputTextWithHint("##renamer", kHint, &path_editing_, kFlags);
-    if (ImGui::IsItemActivated()) path_editing_ = path_;
-
-    try {
-      auto newref = ref.Resolve(path_editing_);
-      if (submit) {
-        ImGui::CloseCurrentPopup();
-        path_ = path_editing_;
-        Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
-      }
-    } catch (NotFoundException&) {
-      ImGui::Bullet();
-      ImGui::TextUnformatted("file not found");
-    }
-    ImGui::EndMenu();
-  }
-
+void RefNode::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   if (ImGui::MenuItem("Re-sync")) {
     Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
   }
-
-  try {
-    auto eref = ref.Resolve(path_);
-    auto f    = &*eref;
-
-    ref.Push({"@", f});
-    ImGui::PushID(f);
-
-    auto node = File::iface<Node>(f);
-    if (node) {
-      if (node->flags() & kMenu) {
-        if (ImGui::BeginMenu("Target Node")) {
-          node->UpdateMenu(ref, ctx);
-          ImGui::EndMenu();
-        }
-      }
+  ImGui::Separator();
+  if (ImGui::BeginMenu("path")) {
+    if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
+      Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
     }
-
-    ImGui::PopID();
-    ref.Pop();
-  } catch (Exception&) {
+    ImGui::EndMenu();
   }
 }
 void RefNode::UpdateEntity(RefStack& ref, File* f) noexcept {
