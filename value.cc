@@ -17,6 +17,7 @@
 #include "iface/gui.hh"
 #include "iface/node.hh"
 
+#include "util/format.hh"
 #include "util/gui.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -33,7 +34,7 @@ class ImmValue : public File, public iface::Node {
 
   ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Integer{0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), Node(kNone), value_(std::move(v)), size_(size) {
-    out_.emplace_back(new Emitter(this));
+    out_.emplace_back(new CachedOutSock(this, "out", Value::Pulse()));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -189,12 +190,8 @@ class ImmValue : public File, public iface::Node {
   Value value_;
 
   ImVec2 size_;
-
-  class Emitter final : public CachedOutSock {
-   public:
-    Emitter(ImmValue* o) noexcept : CachedOutSock(o, "out", Value::Integer{0}) { }
-  };
 };
+
 
 class ExternalText final : public File,
     public iface::DirItem,
@@ -362,5 +359,256 @@ class ExternalText final : public File,
   bool modified_     = false;
   bool save_failure_ = false;
 };
+
+
+class ValueLogger final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<ValueLogger>(
+      "ValueLogger", "log values received from input",
+      {typeid(iface::Node)});
+
+  static constexpr size_t N = 256;  // max log items
+
+
+  ValueLogger(
+      const std::shared_ptr<Env>& env,
+      ImVec2 size      = {0, 0},
+      bool auto_scroll = true,
+      bool show_elapse = false) noexcept :
+      File(&type_, env), Node(kNone),
+      size_(size), auto_scroll_(auto_scroll), show_elapse_(show_elapse) {
+    in_.emplace_back(new Receiver(this));
+  }
+
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    std::tuple<float, float> size;
+    msgpack::find(obj, "size"s).convert(size);
+    return std::make_unique<ValueLogger>(
+        env,
+        ImVec2(std::get<0>(size), std::get<1>(size)),
+        msgpack::find(obj, "auto_scroll"s).as<bool>(),
+        msgpack::find(obj, "show_elapse"s).as<bool>());
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_map(3);
+
+    pk.pack("size"s);
+    pk.pack(std::make_tuple(size_.x, size_.y));
+
+    pk.pack("auto_scroll");
+    pk.pack(auto_scroll_);
+
+    pk.pack("show_elapse");
+    pk.pack(show_elapse_);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept {
+    return std::make_unique<ValueLogger>(
+        env, size_, auto_scroll_, show_elapse_);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+
+ private:
+  // permanentized params
+  ImVec2 size_;
+
+  bool auto_scroll_;
+  bool show_elapse_;
+
+
+  struct ValueItem final {
+   public:
+    Time time;
+
+    std::string type;
+    std::string value;
+    std::string tooltip;
+
+    static ValueItem CreateItem(const Value& val) noexcept {
+      ValueItem ret;
+      ret.time = Clock::now();
+
+      char buf[64];
+      if (val.has<Value::Pulse>()) {
+        ret.type  = "pulse";
+        ret.value = "Z";
+      } else if (val.has<Value::Integer>()) {
+        snprintf(buf, sizeof(buf), "%" PRIi64, val.get<Value::Integer>());
+        ret.type  = "integer";
+        ret.value = buf;
+      } else if (val.has<Value::Scalar>()) {
+        snprintf(buf, sizeof(buf), "%f", val.get<Value::Scalar>());
+        ret.type  = "scalar";
+        ret.value = buf;
+      } else if (val.has<Value::Boolean>()) {
+        ret.type  = "boolean";
+        ret.value = val.get<Value::Boolean>()? "true": "false";
+      } else if (val.has<Value::Vec2>()) {
+        const auto& v = val.get<Value::Vec2>();
+        snprintf(buf, sizeof(buf), "(%f, %f)", v[0], v[1]);
+        ret.type  = "vec2";
+        ret.value = buf;
+      } else if (val.has<Value::Vec3>()) {
+        const auto& v = val.get<Value::Vec3>();
+        snprintf(buf, sizeof(buf), "(%f, %f, %f)", v[0], v[1], v[2]);
+        ret.type  = "vec3";
+        ret.value = buf;
+      } else if (val.has<Value::Vec4>()) {
+        const auto& v = val.get<Value::Vec4>();
+        snprintf(buf, sizeof(buf), "(%f, %f, %f, %f)", v[0], v[1], v[2], v[3]);
+        ret.type  = "vec4";
+        ret.value = buf;
+      } else if (val.has<Value::String>()) {
+        const auto& str = val.get<Value::String>();
+
+        // find end of line
+        auto n = str.find('\n');
+        if (n == std::string::npos) {
+          n = str.size();
+        }
+
+        // copy str
+        auto n_clipped = std::min(static_cast<size_t>(n), sizeof(buf)-1);
+        strncpy(buf, str.data(), n_clipped);
+
+        // add ellipses
+        if (n_clipped != str.size()) {
+          if (n_clipped+3 > sizeof(buf)-1) {
+            n_clipped = sizeof(buf)-1;
+          } else {
+            n_clipped += 3;
+          }
+          strcpy(buf+n_clipped-3, "...");
+        }
+        buf[n_clipped] = 0;
+
+        ret.type    = "string";
+        ret.value   = buf;
+        ret.tooltip = str.substr(0, std::min(size_t{256}, str.size()));
+      }
+
+      if (ret.tooltip.empty()) {
+        ret.tooltip = ret.value;
+      }
+      return ret;
+    }
+  };
+  class ValueData final : public Context::Data {
+   public:
+    std::array<ValueItem, N> items;
+    size_t head = 0, tail = 0;
+
+    bool updated = false;
+  };
+
+
+  class Receiver : public InSock {
+   public:
+    Receiver(ValueLogger* o) noexcept : InSock(o, "in"), owner_(o) {
+    }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+      auto& data = ctx->GetOrNew<ValueData>(owner_);
+      data.updated = true;
+
+      data.items[data.tail] = ValueItem::CreateItem(v);
+      data.tail = (data.tail+1)%N;
+      if (data.tail == data.head) {
+        data.head = (data.head+1)%N;
+      }
+    }
+   private:
+    ValueLogger* owner_;
+  };
+};
+void ValueLogger::Update(
+    File::RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  const auto now = Clock::now();
+  const auto em  = ImGui::GetFontSize();
+
+  auto& data = ctx->GetOrNew<ValueData>(this);
+
+  ImGui::TextUnformatted("Value Logger");
+
+  if (ImNodes::BeginInputSlot("in", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+  ImGui::SameLine();
+
+  {
+    gui::ResizeGroup _("##ResizeGroup", &size_, {20, 12}, {32, 24}, em);
+
+    ImGui::Checkbox("auto-scroll", &auto_scroll_);
+    ImGui::SameLine();
+    ImGui::Checkbox("show-elapse", &show_elapse_);
+
+    constexpr auto kFlags =
+        ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_Hideable  |
+        ImGuiTableFlags_ContextMenuInBody |
+        ImGuiTableFlags_Borders |
+        ImGuiTableFlags_SizingStretchProp |
+        ImGuiTableFlags_ScrollY;
+    const auto table_size = size_*em - ImVec2(0, ImGui::GetFrameHeightWithSpacing());
+    if (ImGui::BeginTable("log", 3, kFlags, table_size)) {
+      ImGui::TableSetupColumn("type");
+      ImGui::TableSetupColumn("value");
+      ImGui::TableSetupColumn("time");
+      ImGui::TableSetupScrollFreeze(0, 1);
+      ImGui::TableHeadersRow();
+
+      for (size_t idx = data.head;; idx = (idx+1)%N) {
+        if (idx == data.tail) {
+          if (data.updated && auto_scroll_) {
+            ImGui::SetScrollHereY();
+            data.updated = false;
+          }
+          break;
+        }
+        const auto& item = data.items[idx];
+
+        const auto elapse    = now - item.time;
+        const auto elapse_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(elapse).count());
+
+        const auto appear  = 1.f-powf(1.f-std::min(static_cast<float>(elapse_ms)/1000.f, 1.f), 2);
+        const auto appear4 = ImVec4(appear, appear, appear, appear);
+
+        const auto bg   = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBg);
+        const auto bg_h = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+        const auto bg_c = (bg-bg_h)*appear4 + bg_h;
+
+        ImGui::TableNextRow();
+        ImGui::TableSetBgColor(
+            ImGuiTableBgTarget_RowBg0, ImGui::ColorConvertFloat4ToU32(bg_c));
+
+        if (ImGui::TableSetColumnIndex(0)) {
+          constexpr auto kSelectableFlags =
+              ImGuiSelectableFlags_SpanAllColumns |
+              ImGuiSelectableFlags_AllowItemOverlap;
+          ImGui::Selectable(item.type.c_str(), false, kSelectableFlags);
+        }
+        if (ImGui::TableNextColumn()) {
+          ImGui::TextUnformatted(item.value.c_str());
+          if (item.tooltip.size() && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(item.tooltip.c_str());
+          }
+        }
+        if (ImGui::TableNextColumn()) {
+          if (show_elapse_) {
+            ImGui::TextUnformatted(StringifyDuration(elapse).c_str());
+          } else {
+            ImGui::TextUnformatted(StringifyTime(item.time).c_str());
+          }
+        }
+      }
+      ImGui::EndTable();
+    }
+  }
+}
 
 } }  // namespace kingtaker
