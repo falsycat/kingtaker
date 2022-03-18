@@ -26,16 +26,20 @@
 namespace kingtaker {
 namespace {
 
-class ImmValue : public File, public iface::Factory<Value>, public iface::DirItem, public iface::Node {
+class ImmValue : public File,
+    public iface::Factory<Value>,
+    public iface::DirItem,
+    public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ImmValue>(
       "ImmValue", "immediate value",
       {typeid(iface::Node), typeid(iface::DirItem), typeid(iface::Node)});
 
-  ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Pulse(), ImVec2 size = {0, 0}) noexcept :
+  ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
-      value_(std::move(v)), size_(size) {
-    out_.emplace_back(new CachedOutSock(this, "out", Value(value_)));
+      value_(std::make_shared<Value>(std::move(v))), size_(size) {
+    out_.emplace_back(new CachedOutSock(this, "out", Value(*value_)));
+    in_.emplace_back(new PulseReceiver(this));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -50,14 +54,14 @@ class ImmValue : public File, public iface::Factory<Value>, public iface::DirIte
     pk.pack(std::make_pair(size_.x, size_.y));
 
     pk.pack("value"s);
-    value_.Serialize(pk);
+    value_->Serialize(pk);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<ImmValue>(env, Value(value_), size_);
+    return std::make_unique<ImmValue>(env, Value(*value_), size_);
   }
 
   Value Create() noexcept override {
-    return value_;
+    return *value_;
   }
 
   void UpdateTree(RefStack&) noexcept override;
@@ -74,31 +78,45 @@ class ImmValue : public File, public iface::Factory<Value>, public iface::DirIte
 
  private:
   // permanentized value
-  Time lastmod_;
+  std::shared_ptr<Value> value_;
 
-  Value value_;
+  Time lastmod_;
 
   ImVec2 size_;
 
-  // volatile params
-  bool updated_ = false;
+
+  class PulseReceiver : public InSock {
+   public:
+    PulseReceiver(ImmValue* o) noexcept :
+        InSock(o, "clk"), out_(o->out_[0]), value_(o->value_) {
+    }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&&) noexcept override {
+      out_->Send(ctx, Value(*value_));
+    }
+   private:
+    std::shared_ptr<OutSock> out_;
+
+    std::shared_ptr<Value> value_;
+  };
 };
 void ImmValue::UpdateTree(RefStack&) noexcept {
   UpdateEditor();
 }
-void ImmValue::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+void ImmValue::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   ImGui::TextUnformatted("IMM");
 
-  UpdateEditor();
-
-  ImGui::SameLine();
-  if (ImNodes::BeginOutputSlot("out", 1)) {
+  if (ImNodes::BeginInputSlot("clk", 1)) {
     gui::NodeSocket();
     ImNodes::EndSlot();
   }
-  if (updated_) {
-    out_[0]->Send(ctx, Value(value_));
-    updated_ = false;
+
+  ImGui::SameLine();
+  UpdateEditor();
+  ImGui::SameLine();
+
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
   }
 }
 void ImmValue::UpdateEditor() noexcept {
@@ -106,11 +124,10 @@ void ImmValue::UpdateEditor() noexcept {
   const auto fh = ImGui::GetFrameHeight();
   const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
 
-  auto& v = value_;
+  auto& v = *value_;
 
   bool mod = false;
   const char* type =
-      v.has<Value::Pulse>()?   "Pul":
       v.has<Value::Integer>()? "Int":
       v.has<Value::Scalar>()?  "Sca":
       v.has<Value::Boolean>()? "Boo":
@@ -122,10 +139,6 @@ void ImmValue::UpdateEditor() noexcept {
 
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-    if (ImGui::MenuItem("pulse", nullptr, v.has<Value::Pulse>())) {
-      v   = Value::Pulse();
-      mod = true;
-    }
     if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
       v   = Value::Integer {0};
       mod = true;
@@ -159,10 +172,7 @@ void ImmValue::UpdateEditor() noexcept {
   gui::NodeCanvasSetZoom();
 
   ImGui::SameLine();
-  if (v.has<Value::Pulse>()) {
-    mod |= ImGui::Button("Z");
-
-  } else if (v.has<Value::Integer>()) {
+  if (v.has<Value::Integer>()) {
     gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(size_.x*em);
     mod |= ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
@@ -195,12 +205,9 @@ void ImmValue::UpdateEditor() noexcept {
     mod |= ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), size_*em);
 
   } else {
-    assert(false);
+    ImGui::TextUnformatted("UNKNOWN TYPE X(");
   }
-  if (mod) {
-    updated_ = true;
-    lastmod_ = Clock::now();
-  }
+  if (mod) lastmod_ = Clock::now();
 }
 template <int D>
 bool ImmValue::UpdateVec(linalg::vec<double, D>& vec) noexcept {
@@ -385,6 +392,47 @@ class ExternalText final : public File,
 };
 
 
+class PulseEmitter : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<PulseEmitter>(
+      "PulseEmitter", "emits pulse on editor context",
+      {typeid(iface::Node)});
+
+  PulseEmitter(const std::shared_ptr<Env>& env) : File(&type_, env), Node(kNone) {
+    out_.emplace_back(new OutSock(this, "out"));
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object&, const std::shared_ptr<Env>& env) {
+    return std::make_unique<PulseEmitter>(env);
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_nil();
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<PulseEmitter>(env);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+};
+void PulseEmitter::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  ImGui::TextUnformatted("PULSE");
+
+  if (ImGui::Button("Z")) {
+    out_[0]->Send(ctx, Value::Pulse());
+  }
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+}
+
+
 class ValueLogger final : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ValueLogger>(
@@ -513,6 +561,9 @@ class ValueLogger final : public File, public iface::Node {
         ret.type    = "string";
         ret.value   = buf;
         ret.tooltip = str.substr(0, std::min(size_t{256}, str.size()));
+      } else {
+        ret.type  = "XXX";
+        ret.value = "???";
       }
 
       if (ret.tooltip.empty()) {
