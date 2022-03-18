@@ -240,7 +240,8 @@ class ExternalText final : public File,
     Load();
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     return std::make_unique<ExternalText>(
         env,
         msgpack::find(obj, "path"s).as<std::string>(),
@@ -350,18 +351,26 @@ class ExternalText final : public File,
       save_failure_ = true;
       return;
     }
+    modified_ = false;
   }
   bool Load(const std::string& path = "") noexcept {
-    const auto& p = path.size()? path: path_;
+    input_path_load_failure_ = true;
 
-    // TODO(falsycat): make async
-    std::ifstream ifs(p);
-    auto str = std::make_shared<std::string>(
-        std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+    const auto& p      = path.size()? path: path_;
+    const auto  target = env()->path().parent_path() / p;
 
-    input_path_load_failure_ = false;
-    if (ifs.fail()) {
-      input_path_load_failure_ = true;
+    const auto xx = env()->path().c_str();
+    (void) xx;
+
+    std::string str;
+    try {
+      // TODO(falsycat): make async
+      std::ifstream ifs(target, std::ios::binary);
+
+      str = std::string(std::istreambuf_iterator<char>(ifs),
+                        std::istreambuf_iterator<char>());
+      if (ifs.fail()) return false;
+    } catch (std::exception&) {
       return false;
     }
 
@@ -371,7 +380,9 @@ class ExternalText final : public File,
     save_failure_ = false;
 
     path_ = p;
-    str_  = std::move(str);
+    str_  = std::make_shared<std::string>(std::move(str));
+
+    input_path_load_failure_ = false;
     return true;
   }
 

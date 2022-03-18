@@ -28,9 +28,8 @@
 using namespace std::literals;
 using namespace kingtaker;
 
-
-static const char*      kFileName      = "kingtaker.bin";
-static constexpr size_t kTasksPerFrame = 1000;
+static constexpr const char* kFileName      = "kingtaker.bin";
+static constexpr size_t      kTasksPerFrame = 1000;
 
 
 static std::optional<std::string> panic_;
@@ -145,9 +144,9 @@ int main(int, char**) {
 
 
 void InitKingtaker() noexcept {
-  auto env = std::make_shared<File::Env>(
-      std::filesystem::current_path(), File::Env::kRoot);
+  const auto config = std::filesystem::current_path() / kFileName;
 
+  auto env = std::make_shared<File::Env>(config, File::Env::kRoot);
   if (!std::filesystem::exists(kFileName)) {
     static const uint8_t kInitialRoot[] = {
 #     include "generated/kingtaker.inc"
@@ -164,7 +163,7 @@ void InitKingtaker() noexcept {
     // open the file
     std::ifstream st(kFileName, std::ios::binary);
     if (!st) {
-      throw DeserializeException("failed to open: "s+kFileName);
+      throw DeserializeException("failed to open: "s+config.string());
     }
     root_ = File::Deserialize(st, env);
 
