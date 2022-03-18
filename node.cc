@@ -1064,11 +1064,11 @@ void NodeNet::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&)
 
 
 // RefNode allows other nodes to be treated as lambda
-class RefNode : public File, public iface::Node {
+class RefNode : public File, public iface::GUI, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<RefNode>(
       "RefNode", "uses node as lambda",
-      {typeid(iface::Node), typeid(iface::GUI)});
+      {typeid(iface::GUI), typeid(iface::Node)});
 
   using Life = std::weak_ptr<std::monostate>;
 
@@ -1079,8 +1079,7 @@ class RefNode : public File, public iface::Node {
       File(&type_, env), Node(kMenu),
       path_(path),
       life_(std::make_shared<std::monostate>()),
-      ctx_(std::make_shared<Context>()),
-      gui_(this) {
+      ctx_(std::make_shared<Context>()) {
     in_.reserve(in.size());
     out_.reserve(out.size());
 
@@ -1113,15 +1112,31 @@ class RefNode : public File, public iface::Node {
     return std::make_unique<RefNode>(env, path_);
   }
 
-  void Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept override;
-  void UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept override;
+  void Update(RefStack& ref) noexcept override {
+    basepath_ = ref.GetFullPath();
+    Watch(&*ref.Resolve(path_));
+  }
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateMenu(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
+  void UpdateEntity(RefStack&, File* f) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node, iface::GUI>(t).Select(this, &gui_);
+    return PtrSelector<iface::Node, iface::GUI>(t).Select(this);
   }
 
  private:
-  void UpdateEntity(RefStack& ref, File* f) noexcept;
+  // permanentized params
+  std::string path_;
+
+  // volatile params
+  std::shared_ptr<std::monostate> life_;
+  std::shared_ptr<Context>        ctx_;
+  File::Path                      basepath_;
+
+  bool        synced_ = false;
+  std::string path_editing_;
+  Time        lastmod_;
+
 
   // detects changes of the entity
   void Watch(File* f) noexcept {
@@ -1134,9 +1149,9 @@ class RefNode : public File, public iface::Node {
     auto factory = File::iface<iface::Factory<Value>>(f);
     if (factory) {
       const auto mod = f->lastModified();
-      if (last_mod_ < mod) {
+      if (lastmod_ < mod) {
         out_[0]->Send(ctx_, factory->Create());
-        last_mod_ = mod;
+        lastmod_ = mod;
       }
       return;
     }
@@ -1204,34 +1219,6 @@ class RefNode : public File, public iface::Node {
       out_.clear();
     }
   }
-
-
-  // permanentized params
-  std::string path_;
-
-  // volatile params
-  std::shared_ptr<std::monostate> life_;
-  std::shared_ptr<Context>        ctx_;
-  File::Path                      basepath_;
-
-  bool        synced_ = false;
-  std::string path_editing_;
-  Time        last_mod_;
-
-
-  // just calls owner's Watch() method
-  class GUI : public iface::GUI {
-   public:
-    GUI(RefNode* o) : owner_(o) { }
-
-    void Update(RefStack& ref) noexcept override {
-      owner_->basepath_ = ref.GetFullPath();
-      owner_->Watch(&*ref.Resolve(owner_->path_));
-    }
-
-   private:
-    RefNode* owner_;
-  } gui_;
 
 
   // A watcher for a context of lambda execution
@@ -1343,55 +1330,16 @@ void RefNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   }
   gui::NodeCanvasSetZoom();
 }
-void RefNode::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
-  if (ImGui::BeginMenu("Change")) {
-    constexpr auto kFlags = 
-        ImGuiInputTextFlags_EnterReturnsTrue |
-        ImGuiInputTextFlags_AutoSelectAll;
-    static const char* const kHint = "enter new path...";
-
-    ImGui::SetKeyboardFocusHere();
-    const bool submit = ImGui::InputTextWithHint("##renamer", kHint, &path_editing_, kFlags);
-    if (ImGui::IsItemActivated()) path_editing_ = path_;
-
-    try {
-      auto newref = ref.Resolve(path_editing_);
-      if (submit) {
-        ImGui::CloseCurrentPopup();
-        path_ = path_editing_;
-        Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
-      }
-    } catch (NotFoundException&) {
-      ImGui::Bullet();
-      ImGui::TextUnformatted("file not found");
-    }
-    ImGui::EndMenu();
-  }
-
+void RefNode::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   if (ImGui::MenuItem("Re-sync")) {
     Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
   }
-
-  try {
-    auto eref = ref.Resolve(path_);
-    auto f    = &*eref;
-
-    ref.Push({"@", f});
-    ImGui::PushID(f);
-
-    auto node = File::iface<Node>(f);
-    if (node) {
-      if (node->flags() & kMenu) {
-        if (ImGui::BeginMenu("Target Node")) {
-          node->UpdateMenu(ref, ctx);
-          ImGui::EndMenu();
-        }
-      }
+  ImGui::Separator();
+  if (ImGui::BeginMenu("path")) {
+    if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
+      Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
     }
-
-    ImGui::PopID();
-    ref.Pop();
-  } catch (Exception&) {
+    ImGui::EndMenu();
   }
 }
 void RefNode::UpdateEntity(RefStack& ref, File* f) noexcept {
