@@ -196,7 +196,14 @@ class Node::OutSock : public Sock {
     ctx->ObserveSend(*this, v);
     for (auto& dst : dst_) {
       auto ptr = dst.lock();
-      if (ptr) ptr->Receive(ctx, Value(v));
+      if (!ptr) continue;
+
+      auto task = [ptr, ctx = ctx, v]() mutable {
+        ptr->Receive(ctx, std::move(v));
+        ctx = nullptr;
+        ptr = nullptr;
+      };
+      Queue::sub().Push(std::move(task));
     }
   }
 
