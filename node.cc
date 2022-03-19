@@ -51,8 +51,6 @@ class NodeNet : public File, public iface::Node {
   // wrapper struct for node file
   struct NodeHolder final {
    public:
-    enum Type { kGeneric, kInput, kOutput };
-
     static std::unique_ptr<NodeHolder> Create(size_t id, std::unique_ptr<File>&& f) {
       auto n = f->iface<Node>();
       if (!n) return nullptr;
@@ -343,6 +341,14 @@ class NodeNet : public File, public iface::Node {
   }
 
  private:
+  std::shared_ptr<Context> ctx_;
+
+  // permanentized params
+  Time           lastmod_;
+  NodeHolderList nodes_;
+  size_t         next_id_ = 0;
+
+
   // MSVC doesn't allow inner class to access protected members came from super class.
   auto& node_in_() noexcept { return in_; }
   auto& node_out_() noexcept { return out_; }
@@ -367,14 +373,7 @@ class NodeNet : public File, public iface::Node {
   }
 
 
-  std::shared_ptr<Context> ctx_;
-
-  // permanentized params
-  Time           lastmod_;
-  NodeHolderList nodes_;
-  size_t         next_id_ = 0;
-
-
+  // GUI implementation for NodeNet
   class GUI final : public iface::GUI, public iface::DirItem {
    public:
     static inline const std::string kIdSuffix = ": NodeNet Editor";
@@ -456,6 +455,7 @@ class NodeNet : public File, public iface::Node {
   } gui_;
 
 
+  // History interface implementation
   class History : public iface::SimpleHistory<> {
    public:
     History(NodeNet* o) : owner_(o) { }
@@ -467,145 +467,18 @@ class NodeNet : public File, public iface::Node {
       list.push_back(std::move(h));
       AddNodes(std::move(list));
     }
-    void AddNodes(NodeHolderList&& h) noexcept {
-      Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
-    }
-    void RemoveNodes(NodeHolderRefList&& h) noexcept {
-      Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
-    }
-    void Link(ConnList&& conns) noexcept {
-      Queue(std::make_unique<LinkSwapCommand>(
-              owner_, LinkSwapCommand::kLink, std::move(conns)));
-    }
-    void Unlink(ConnList&& conns) noexcept {
-      Queue(std::make_unique<LinkSwapCommand>(
-              owner_, LinkSwapCommand::kUnlink, std::move(conns)));
-    }
+    void AddNodes(NodeHolderList&& h) noexcept;
+    void RemoveNodes(NodeHolderRefList&& h) noexcept;
+    void Link(ConnList&& conns) noexcept;
+    void Unlink(ConnList&& conns) noexcept;
 
    private:
     NodeNet* owner_;
 
-    // a command for link creation or removal
-    class LinkSwapCommand : public Command {
-     public:
-      enum Type {
-        kLink,
-        kUnlink,
-      };
-
-      LinkSwapCommand(NodeNet* o, Type t, ConnList&& conns) :
-          owner_(o), type_(t), conns_(std::move(conns)) {
-      }
-
-      void Link() const {
-        for (auto& conn : conns_) {
-          if (!Node::Link(owner_->ctx_, conn.out, conn.in)) {
-            throw Exception("cannot link deleted socket");
-          }
-        }
-      }
-      void Unlink() const {
-        for (auto& conn : conns_) {
-          if (!Node::Unlink(conn.out, conn.in)) {
-            throw Exception("cannot unlink deleted socket");
-          }
-        }
-      }
-      void Apply() override {
-        switch (type_) {
-        case kLink  : Link();   break;
-        case kUnlink: Unlink(); break;
-        }
-      }
-      void Revert() override {
-        switch (type_) {
-        case kLink  : Unlink(); break;
-        case kUnlink: Link();   break;
-        }
-      }
-
-     private:
-      NodeNet* owner_;
-      Type     type_;
-      ConnList conns_;
-    };
-
-    // a command for node creation or removal
-    class SwapCommand : public Command {
-     public:
-      SwapCommand(NodeNet* o, NodeHolderList&& h = {}) :
-          owner_(o), holders_(std::move(h)) {
-        refs_.reserve(holders_.size());
-        for (auto& holder : holders_) refs_.push_back(holder.get());
-      }
-      SwapCommand(NodeNet* o, NodeHolderRefList&& refs = {}) :
-          owner_(o), refs_(std::move(refs)) {
-      }
-
-      void Exec() {
-        auto& nodes = owner_->nodes_;
-        if (holders_.size()) {
-          for (auto& h : holders_) {
-            h->Setup(owner_);
-            nodes.push_back(std::move(h));
-          }
-          holders_.clear();
-
-          if (links_) links_->Link();
-        } else {
-          SaveLinks();
-          links_->Unlink();
-
-          holders_.reserve(refs_.size());
-          for (auto& r : refs_) {
-            auto itr = std::find_if(nodes.begin(), nodes.end(),
-                                    [r](auto& e) { return e.get() == r; });
-            if (itr == nodes.end()) {
-              throw Exception("target node is missing");
-            }
-            r->Teardown(owner_);
-            holders_.push_back(std::move(*itr));
-            nodes.erase(itr);
-          }
-        }
-      }
-      void Apply() override { Exec(); }
-      void Revert() override { Exec(); }
-
-     private:
-      void SaveLinks() {
-        ConnList conns;
-        for (auto h : refs_) {
-          auto& n = h->entity();
-          for (auto& out : n.out()) {
-            for (auto& w_in : out->dst()) {
-              auto in = w_in.lock();
-              if (!in) continue;
-              conns.push_back({in, out});
-            }
-          }
-          for (auto& in : n.in()) {
-            for (auto& w_out : in->src()) {
-              auto out = w_out.lock();
-              if (!out) continue;
-
-              auto found = std::find_if(
-                  refs_.begin(), refs_.end(),
-                  [&out](auto& e) { return &e->entity() == &out->owner(); });
-              if (found != refs_.end()) continue;
-              conns.push_back({in, out});
-            }
-          }
-        }
-        links_.emplace(owner_, LinkSwapCommand::kUnlink, std::move(conns));
-      }
-
-      NodeNet*                       owner_;
-      NodeHolderList                 holders_;
-      NodeHolderRefList              refs_;
-      std::optional<LinkSwapCommand> links_;
-    };
+    class LinkSwapCommand;
+    class SwapCommand;
   } history_;
+
 
   // an interface for nodes depends on NodeNet
   class InternalNode {
@@ -613,78 +486,69 @@ class NodeNet : public File, public iface::Node {
     InternalNode() = default;
     virtual ~InternalNode() = default;
 
+    // called when this is inserted to the NodeNet
     virtual void Setup(NodeNet*) noexcept { }
+
+    // called when this is removed from the NodeNet
     virtual void Teardown(NodeNet*) noexcept { }
   };
 
-  // common implementation for IO pins
+
+  // common implementation for IO socks of NodeNet
   // T must be InSock or OutSock
   template <typename T>
   class AbstractIONode : public File, public Node, public InternalNode {
    public:
-    // An interface of IO sockets which has a list of attached nodes.
-    class CtxSock : public T {
+    // sock interface for NodeNet IO
+    class SharedSock : public T {
      public:
-      CtxSock(NodeNet* owner, std::string_view name) : T(owner, name) {
+      SharedSock(NodeNet* owner, std::string_view name) noexcept : T(owner, name) {
       }
 
-      void Attach(Node* n) noexcept {
-        nodes_.insert(n);
-      }
-      bool Detach(Node* n) noexcept {
-        nodes_.erase(n);
-        return nodes_.empty();
-      }
+      // called when new AbstractIONode which has the same name is added
+      virtual void Attach(AbstractIONode* n) noexcept = 0;
 
-     protected:
-      std::unordered_set<Node*> nodes_;
+      // called when AbstractIONode which has the same name is deleted
+      // returning false can remove this socket from NodeNet
+      virtual bool Detach(AbstractIONode* n) noexcept = 0;
     };
 
-    // data struct registered to Node::Context
-    struct Data final {
-     public:
-      Data() = default;
-
-      std::shared_ptr<CtxSock> sock;
-    };
 
     AbstractIONode(TypeInfo* t, const std::shared_ptr<Env>& env, std::string_view name) :
-        File(t, env), Node(kNone), name_(name), data_(std::make_shared<Data>()) {
+        File(t, env), Node(kNone), name_(name) {
     }
 
-    void Serialize(Packer& pk) const noexcept override {
-      pk.pack(name_);
-    }
-
-    // called when this is inserted to the NodeNet
+    // attaches this node to the socket which has the same name,
+    // or adds new one to NodeNet if there's no such socket
     void Setup(NodeNet* owner) noexcept override {
+      owner_ = owner;
+
       auto& list = GetList(owner);
-      auto itr = std::find_if(
+      auto  itr  = std::find_if(
           list.begin(), list.end(), [this](auto& e) { return e->name() == name_; });
       if (itr != list.end()) {
-        data_->sock = std::dynamic_pointer_cast<CtxSock>(*itr);
+        ctx_sock_ = std::dynamic_pointer_cast<SharedSock>(*itr);
       } else {
-        auto sock = Create(owner, name_);
-        data_->sock = sock;
+        ctx_sock_ = CreateSock(owner, name_);
 
-        list.push_back(sock);
+        list.push_back(ctx_sock_);
         std::sort(list.begin(), list.end(), [](auto& a, auto& b) {
                     return a->name() < b->name();
                   });
       }
-
-      assert(data_->sock);
-      data_->sock->Attach(this);
+      assert(ctx_sock_);
+      ctx_sock_->Attach(this);
     }
-    // called when this is removed from the NodeNet
+    // detaches this node from the socket which has the same name
+    // removes the socket if it's requested
     void Teardown(NodeNet* owner) noexcept override {
       auto& list = GetList(owner);
-
-      if (data_->sock->Detach(this)) {
-        auto itr = std::find(list.begin(), list.end(), data_->sock);
+      if (ctx_sock_->Detach(this)) {
+        auto itr = std::find(list.begin(), list.end(), ctx_sock_);
         if (itr != list.end()) list.erase(itr);
       }
-      data_->sock = nullptr;
+      owner_    = nullptr;
+      ctx_sock_ = nullptr;
     }
 
     void* iface(const std::type_index& t) noexcept override {
@@ -692,16 +556,24 @@ class NodeNet : public File, public iface::Node {
     }
 
    protected:
-    virtual std::vector<std::shared_ptr<T>>& GetList(NodeNet*) const noexcept = 0;
-    virtual std::shared_ptr<CtxSock> Create(NodeNet*, std::string_view) const noexcept = 0;
+    std::string name_;
+
+    NodeNet* owner_ = nullptr;
+
+    std::shared_ptr<SharedSock> ctx_sock_;
 
     using Node::in_;
     using Node::out_;
 
-    std::string name_;
 
-    std::shared_ptr<Data> data_;
+    // returns a reference of target socket list from NodeNet
+    virtual std::vector<std::shared_ptr<T>>& GetList(NodeNet*) const noexcept = 0;
+
+    // creates new socket for NodeNet
+    virtual std::shared_ptr<SharedSock> CreateSock(NodeNet*, std::string_view) const noexcept = 0;
   };
+
+  // A Node that emits input provided to NodeNet
   class InputNode : public AbstractIONode<InSock> {
    public:
     static inline TypeInfo type_ = TypeInfo::New<InputNode>(
@@ -715,6 +587,9 @@ class NodeNet : public File, public iface::Node {
     static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
       return std::make_unique<InputNode>(env, obj.as<std::string>());
     }
+    void Serialize(Packer& pk) const noexcept override {
+      pk.pack(name_);
+    }
     std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
       return std::make_unique<InputNode>(env, name_);
     }
@@ -725,43 +600,53 @@ class NodeNet : public File, public iface::Node {
     std::vector<std::shared_ptr<InSock>>& GetList(NodeNet* owner) const noexcept override {
       return owner->node_in_();
     }
-    std::shared_ptr<CtxSock> Create(NodeNet* o, std::string_view n) const noexcept override {
-      class CtxInSock : public CtxSock {
+    std::shared_ptr<SharedSock> CreateSock(NodeNet* o, std::string_view n) const noexcept override {
+      class Sock final : public SharedSock {
        public:
-        CtxInSock(NodeNet* o, std::string_view n) : CtxSock(o, n) {
+        Sock(NodeNet* o, std::string_view n) : SharedSock(o, n) {
+        }
+        void Attach(AbstractIONode* n) noexcept override {
+          nodes_.insert(n);
+        }
+        bool Detach(AbstractIONode* n) noexcept override {
+          nodes_.erase(n);
+          return nodes_.empty();
         }
         void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
           for (auto n : nodes_) n->out()[0]->Send(ctx, Value(v));
         }
+       private:
+        std::unordered_set<AbstractIONode*> nodes_;
       };
-      return std::make_shared<CtxInSock>(o, n);
+      return std::make_shared<Sock>(o, n);
     }
   };
+
+  // A Node that receives an output for NodeNet
   class OutputNode : public AbstractIONode<OutSock> {
    public:
     static inline TypeInfo type_ = TypeInfo::New<OutputNode>(
         "NodeNet_OutputNode", "output receiver in NodeNet", {});
 
-    // takes input value and send it to CtxSock stored in Node::Context
-    class Receiver : public InSock {
-     public:
-      Receiver(OutputNode* o) noexcept : InSock(o, "in"), data_(o->data_) { }
-
-      void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-        if (data_->sock) data_->sock->Send(ctx, Value(v));
-      }
-
-     private:
-      std::shared_ptr<Data> data_;
-    };
-
     OutputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
-        AbstractIONode(&type_, env, name) {
-      in_.emplace_back(new Receiver(this));
+        AbstractIONode(&type_, env, name), life_(std::make_shared<std::monostate>()) {
+      std::weak_ptr<std::monostate> wlife = life_;
+      auto handler = [this, wlife, name = name_](const auto& ctx, auto&& v) {
+        if (wlife.expired() || !owner_) return;
+
+        auto sock = owner_->FindOut(name_);
+        if (!sock) return;
+
+        sock->Send(ctx, std::move(v));
+      };
+      in_.emplace_back(new LambdaInSock(this, "in", std::move(handler)));
     }
 
     static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
       return std::make_unique<OutputNode>(env, obj.as<std::string>());
+    }
+    void Serialize(Packer& pk) const noexcept override {
+      pk.pack(name_);
     }
     std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
       return std::make_unique<OutputNode>(env, name_);
@@ -770,20 +655,22 @@ class NodeNet : public File, public iface::Node {
     void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
    private:
+    std::shared_ptr<std::monostate> life_;
+
     std::vector<std::shared_ptr<OutSock>>& GetList(NodeNet* owner) const noexcept override {
       return owner->node_out_();
     }
-    std::shared_ptr<CtxSock> Create(NodeNet* o, std::string_view n) const noexcept override {
-      class CtxOutSock : public CtxSock {
+    std::shared_ptr<SharedSock> CreateSock(NodeNet* o, std::string_view n) const noexcept override {
+      class Sock final : public SharedSock {
        public:
-        CtxOutSock(NodeNet* o, std::string_view n) : CtxSock(o, n) {
+        Sock(NodeNet* o, std::string_view n) : SharedSock(o, n) {
         }
-        void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-          ctx->Receive(name(), Value(v));
-          CtxSock::Send(ctx, std::move(v));
-        }
+        void Attach(AbstractIONode*) noexcept override { ++refcnt_; }
+        bool Detach(AbstractIONode*) noexcept override { return !--refcnt_; }
+       private:
+        size_t refcnt_ = 0;
       };
-      return std::make_shared<CtxOutSock>(o, n);
+      return std::make_shared<Sock>(o, n);
     }
   };
 };
@@ -1036,7 +923,7 @@ void NodeNet::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) 
     return;
   }
 
-  ImGui::Text("IN> %s", data_->sock->name().c_str());
+  ImGui::Text("IN> %s", ctx_sock_->name().c_str());
 
   ImGui::SameLine();
   if (ImNodes::BeginOutputSlot("out", 1)) {
@@ -1059,7 +946,136 @@ void NodeNet::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&)
   }
 
   ImGui::SameLine();
-  ImGui::Text("%s >OUT", data_->sock->name().c_str());
+  ImGui::Text("%s >OUT", ctx_sock_->name().c_str());
+}
+
+// a command for link creation or removal
+class NodeNet::History::LinkSwapCommand : public Command {
+ public:
+  enum Type { kLink, kUnlink, };
+
+  LinkSwapCommand(Type t, ConnList&& conns) noexcept :
+      type_(t), conns_(std::move(conns)) {
+  }
+
+  void Link() const {
+    for (auto& conn : conns_) {
+      if (!Node::Link(conn.out, conn.in)) {
+        throw Exception("cannot link deleted socket");
+      }
+    }
+  }
+  void Unlink() const {
+    for (auto& conn : conns_) {
+      if (!Node::Unlink(conn.out, conn.in)) {
+        throw Exception("cannot unlink deleted socket");
+      }
+    }
+  }
+  void Apply() override {
+    switch (type_) {
+    case kLink  : Link();   break;
+    case kUnlink: Unlink(); break;
+    }
+  }
+  void Revert() override {
+    switch (type_) {
+    case kLink  : Unlink(); break;
+    case kUnlink: Link();   break;
+    }
+  }
+
+ private:
+  Type     type_;
+  ConnList conns_;
+};
+void NodeNet::History::Link(ConnList&& conns) noexcept {
+  Queue(std::make_unique<LinkSwapCommand>(LinkSwapCommand::kLink, std::move(conns)));
+}
+void NodeNet::History::Unlink(ConnList&& conns) noexcept {
+  Queue(std::make_unique<LinkSwapCommand>(LinkSwapCommand::kUnlink, std::move(conns)));
+}
+
+// a command for node creation or removal
+class NodeNet::History::SwapCommand : public Command {
+ public:
+  SwapCommand(NodeNet* o, NodeHolderList&& h = {}) :
+      owner_(o), holders_(std::move(h)) {
+    refs_.reserve(holders_.size());
+    for (auto& holder : holders_) refs_.push_back(holder.get());
+  }
+  SwapCommand(NodeNet* o, NodeHolderRefList&& refs = {}) :
+      owner_(o), refs_(std::move(refs)) {
+  }
+
+  void Exec() {
+    auto& nodes = owner_->nodes_;
+    if (holders_.size()) {
+      for (auto& h : holders_) {
+        h->Setup(owner_);
+        nodes.push_back(std::move(h));
+      }
+      holders_.clear();
+
+      if (links_) links_->Link();
+    } else {
+      SaveLinks();
+      links_->Unlink();
+
+      holders_.reserve(refs_.size());
+      for (auto& r : refs_) {
+        auto itr = std::find_if(nodes.begin(), nodes.end(),
+                                [r](auto& e) { return e.get() == r; });
+        if (itr == nodes.end()) {
+          throw Exception("target node is missing");
+        }
+        r->Teardown(owner_);
+        holders_.push_back(std::move(*itr));
+        nodes.erase(itr);
+      }
+    }
+  }
+  void Apply() override { Exec(); }
+  void Revert() override { Exec(); }
+
+ private:
+  void SaveLinks() {
+    ConnList conns;
+    for (auto h : refs_) {
+      auto& n = h->entity();
+      for (auto& out : n.out()) {
+        for (auto& w_in : out->dst()) {
+          auto in = w_in.lock();
+          if (!in) continue;
+          conns.push_back({in, out});
+        }
+      }
+      for (auto& in : n.in()) {
+        for (auto& w_out : in->src()) {
+          auto out = w_out.lock();
+          if (!out) continue;
+
+          auto found = std::find_if(
+              refs_.begin(), refs_.end(),
+              [&out](auto& e) { return &e->entity() == &out->owner(); });
+          if (found != refs_.end()) continue;
+          conns.push_back({in, out});
+        }
+      }
+    }
+    links_.emplace(LinkSwapCommand::kUnlink, std::move(conns));
+  }
+
+  NodeNet*                       owner_;
+  NodeHolderList                 holders_;
+  NodeHolderRefList              refs_;
+  std::optional<LinkSwapCommand> links_;
+};
+void NodeNet::History::AddNodes(NodeHolderList&& h) noexcept {
+  Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
+}
+void NodeNet::History::RemoveNodes(NodeHolderRefList&& h) noexcept {
+  Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
 }
 
 
@@ -1222,26 +1238,29 @@ class RefNode : public File, public iface::GUI, public iface::Node {
 
 
   // A watcher for a context of lambda execution
-  class LambdaContextWatcher final : public ContextWatcher {
+  class LambdaContext final : public Context {
    public:
-    LambdaContextWatcher(RefNode* o, const Life& life, const std::shared_ptr<Context>& outctx) :
-        owner_(o), life_(life), outctx_(outctx) {
+    LambdaContext(RefNode* o, Node* node, const std::shared_ptr<Context>& outctx) :
+        owner_(o), life_(o->life_), node_(node), outctx_(outctx) {
     }
-
-    void Receive(std::string_view name, Value&& v) noexcept override {
+    void ObserveSend(const OutSock& sock, const Value& v) noexcept override {
       if (life_.expired()) return;
 
       auto outctx = outctx_.lock();
       if (!outctx) return;
 
-      auto dst = owner_->FindOut(name);
-      if (dst) dst->Send(outctx, std::move(v));
+      if (&sock.owner() == node_) {
+        auto dst = owner_->FindOut(sock.name());
+        if (dst) dst->Send(outctx, Value(v));
+      }
     }
 
    private:
     RefNode* owner_;
 
     std::weak_ptr<std::monostate> life_;
+
+    Node* node_;
 
     std::weak_ptr<Context> outctx_;
   };
@@ -1264,8 +1283,8 @@ class RefNode : public File, public iface::GUI, public iface::Node {
         auto dst = node->FindIn(name());
         if (!dst) throw Exception("socket mismatch");
 
-        auto& data = ctx->GetOrNew<Data>(owner_, owner_, life_, ctx);
-        dst->Receive(data.ctx(), std::move(v));
+        auto data = ctx->GetOrNew<Data>(owner_, owner_, node, ctx);
+        dst->Receive(data->ctx(), std::move(v));
 
       } catch (Exception& e) {
         notify::Error(owner_->basepath_, owner_, e.msg());
@@ -1273,26 +1292,24 @@ class RefNode : public File, public iface::GUI, public iface::Node {
     }
 
    private:
-    // One instance per one RefNode.
-    // This holds a lambda context shared with all input pins.
-    class Data final : public Context::Data {
-     public:
-      Data() = delete;
-      Data(RefNode* o, const Life& life, const std::shared_ptr<Context>& ctx) :
-          ctx_(std::make_shared<Context>(
-                  std::make_unique<LambdaContextWatcher>(o, life, ctx))) {
-      }
-
-      const std::shared_ptr<Context>& ctx() noexcept { return ctx_; }
-
-     private:
-      std::shared_ptr<Context> ctx_;
-    };
-
-
     RefNode* owner_;
 
     std::weak_ptr<std::monostate> life_;
+
+
+    // one Data per one lambda execution
+    class Data final : public Context::Data {
+     public:
+      Data() = delete;
+      Data(RefNode* o, Node* node, const std::shared_ptr<Context>& ctx) noexcept :
+          ctx_(std::make_unique<LambdaContext>(o, node, ctx)) {
+      }
+
+      const std::shared_ptr<LambdaContext>& ctx() noexcept { return ctx_; }
+
+     private:
+      std::shared_ptr<LambdaContext> ctx_;
+    };
   };
 };
 void RefNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {

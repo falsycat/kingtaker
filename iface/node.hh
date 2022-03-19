@@ -20,14 +20,13 @@ namespace kingtaker::iface {
 
 class Node {
  public:
-  class ContextWatcher;
   class Context;
 
   class Sock;
   class InSock;
   class CachedInSock;
+  class LambdaInSock;
   class OutSock;
-  class CachedOutSock;
 
   using InSockList  = std::vector<std::shared_ptr<InSock>>;
   using OutSockList = std::vector<std::shared_ptr<OutSock>>;
@@ -39,7 +38,6 @@ class Node {
   using Flags = uint8_t;
 
   static inline bool Link(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
-  static inline bool Link(const std::shared_ptr<Context>&, const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
   static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
 
   Node(Flags f, InSockList&& in = {}, OutSockList&& out = {}) :
@@ -71,18 +69,8 @@ class Node {
 };
 
 
-class Node::ContextWatcher {
- public:
-  ContextWatcher() = default;
-  virtual ~ContextWatcher() = default;
-  ContextWatcher(const ContextWatcher&) = delete;
-  ContextWatcher(ContextWatcher&&) = delete;
-  ContextWatcher& operator=(const ContextWatcher&) = delete;
-  ContextWatcher& operator=(ContextWatcher&&) = delete;
-
-  virtual void Receive(std::string_view, Value&&) noexcept { }
-};
-class Node::Context final {
+// context for Node execution
+class Node::Context {
  public:
   class Data {
    public:
@@ -94,44 +82,33 @@ class Node::Context final {
     Data& operator=(Data&&) = default;
   };
 
-  Context(std::unique_ptr<ContextWatcher>&& w) noexcept : w_(std::move(w)) {
-  }
-  Context() noexcept : Context(std::make_unique<ContextWatcher>()) {
-  }
+  Context() = default;
+  virtual ~Context() = default;
   Context(const Context&) = delete;
   Context(Context&&) = delete;
   Context& operator=(const Context&) = delete;
   Context& operator=(Context&&) = delete;
 
-  template <typename T, typename... Args>
-  T& GetOrNew(Node* n, Args... args) {
-    auto itr = map_.find(n);
-    if (itr != map_.end()) {
-      auto ptr = dynamic_cast<T*>(itr->second.get());
-      if (!ptr) throw Exception("data is already set, but down cast failed");
-      return *ptr;
-    }
-    auto uptr = std::make_unique<T>(args...);
-    auto ret  = uptr.get();
-    map_[n]   = std::move(uptr);
-    return *ret;
-  }
+  virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
 
-  void Receive(std::string_view n, Value&& v) noexcept {
-    Queue::sub().Push(
-        [name = std::string(n), w = w_, v = std::move(v)]() mutable {
-          w->Receive(name, std::move(v));
-          w = nullptr;
-        });
+  template <typename T, typename... Args>
+  std::shared_ptr<T> GetOrNew(Node* n, Args... args) noexcept {
+    auto [itr, created] = map_.try_emplace(n);
+    if (!created) {
+      auto ptr = std::dynamic_pointer_cast<T>(itr->second);
+      if (ptr) return ptr;
+    }
+    auto ret = std::make_shared<T>(args...);
+    itr->second = ret;
+    return ret;
   }
 
  private:
-  std::shared_ptr<ContextWatcher> w_;
-
-  std::unordered_map<Node*, std::unique_ptr<Data>> map_;
+  std::unordered_map<Node*, std::shared_ptr<Data>> map_;
 };
 
 
+// base of all Node sockets
 class Node::Sock {
  public:
   Sock() = delete;
@@ -152,6 +129,8 @@ class Node::Sock {
   std::string name_;
 };
 
+// A Node socket that receive values from output sockets
+// all operations must be done from main thread
 class Node::InSock : public Sock {
  public:
   friend Node;
@@ -160,8 +139,6 @@ class Node::InSock : public Sock {
   }
 
   virtual void Receive(const std::shared_ptr<Context>&, Value&&) noexcept { }
-
-  virtual void NotifyLink(const std::shared_ptr<Context>&, const std::weak_ptr<OutSock>&) noexcept { }
 
   void CleanConns() const noexcept {
     auto& v = const_cast<decltype(src_)&>(src_);
@@ -175,7 +152,6 @@ class Node::InSock : public Sock {
  private:
   std::vector<std::weak_ptr<OutSock>> src_;
 };
-
 class Node::CachedInSock : public InSock {
  public:
   CachedInSock(Node* o, std::string_view n, Value&& v) noexcept :
@@ -191,29 +167,38 @@ class Node::CachedInSock : public InSock {
  private:
   Value value_;
 };
+class Node::LambdaInSock final : public InSock {
+ public:
+  using Receiver = std::function<void(const std::shared_ptr<Context>&, Value&&)>;
 
+  LambdaInSock(Node* o, std::string_view n, Receiver&& f) noexcept :
+      InSock(o, n), lambda_(std::move(f)) {
+  }
+
+  void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+    lambda_(ctx, std::move(v));
+  }
+ private:
+  Receiver lambda_;
+};
+
+
+// A Node socket that emits value to input sockets
+// all operations must be done from main thread
 class Node::OutSock : public Sock {
  public:
   friend Node;
 
-  static void Link() noexcept {
-  }
-
   OutSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
   }
 
-  virtual void Send(const std::shared_ptr<Context>& c, Value&& v) noexcept {
-    Queue::sub().Push(
-        [this, c = c, v = std::move(v)]() mutable {
-          for (auto& dst : dst_) {
-            auto ptr = dst.lock();
-            if (ptr) ptr->Receive(c, Value(v));
-          }
-          c = nullptr;
-        });
+  virtual void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
+    ctx->ObserveSend(*this, v);
+    for (auto& dst : dst_) {
+      auto ptr = dst.lock();
+      if (ptr) ptr->Receive(ctx, Value(v));
+    }
   }
-
-  virtual void NotifyLink(const std::shared_ptr<Context>&, const std::weak_ptr<InSock>&) noexcept { }
 
   void CleanConns() noexcept {
     auto& v = const_cast<decltype(dst_)&>(dst_);
@@ -228,24 +213,6 @@ class Node::OutSock : public Sock {
   std::vector<std::weak_ptr<InSock>> dst_;
 };
 
-class Node::CachedOutSock : public OutSock {
- public:
-  CachedOutSock(Node* o, std::string_view n, Value&& v) noexcept :
-      OutSock(o, n), value_(std::move(v)) {
-  }
-
-  void Send(const std::shared_ptr<Context>& c, Value&& v) noexcept override {
-    value_ = std::move(v);
-    OutSock::Send(c, Value(value_));
-  }
-  void NotifyLink(const std::shared_ptr<Context>& c, const std::weak_ptr<InSock>& dst) noexcept override {
-    dst.lock()->Receive(c, Value(value_));
-  }
-
- private:
-  Value value_;
-};
-
 
 bool Node::Link(const std::weak_ptr<OutSock>& out,
                 const std::weak_ptr<InSock>&  in) noexcept {
@@ -255,17 +222,6 @@ bool Node::Link(const std::weak_ptr<OutSock>& out,
 
   s_in->src_.emplace_back(out);
   s_out->dst_.emplace_back(in);
-  return true;
-}
-bool Node::Link(const std::shared_ptr<Context>& ctx,
-                const std::weak_ptr<OutSock>& out,
-                const std::weak_ptr<InSock>&  in) noexcept {
-  Link(out, in);
-
-  auto s_in  = in.lock();
-  auto s_out = out.lock();
-  s_in->NotifyLink(ctx, out);
-  s_out->NotifyLink(ctx, in);
   return true;
 }
 bool Node::Unlink(const std::weak_ptr<OutSock>& out,

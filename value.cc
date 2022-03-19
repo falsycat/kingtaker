@@ -37,9 +37,19 @@ class ImmValue : public File,
 
   ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
-      value_(std::make_shared<Value>(std::move(v))), size_(size) {
-    out_.emplace_back(new CachedOutSock(this, "out", Value(*value_)));
-    in_.emplace_back(new PulseReceiver(this));
+      value_(std::make_shared<Value>(std::move(v))),
+      size_(size) {
+    out_.emplace_back(new OutSock(this, "out"));
+
+    std::weak_ptr<OutSock> wout = out_[0];
+    std::weak_ptr<Value>   wval = value_;
+    auto receiver = [wout, wval](const auto& ctx, auto&&) {
+      auto val = wval.lock();
+      auto out = wout.lock();
+      if (!val || !out) return;
+      out->Send(ctx, Value(*val));
+    };
+    in_.emplace_back(new LambdaInSock(this, "clk", std::move(receiver)));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -83,21 +93,6 @@ class ImmValue : public File,
   Time lastmod_;
 
   ImVec2 size_;
-
-
-  class PulseReceiver : public InSock {
-   public:
-    PulseReceiver(ImmValue* o) noexcept :
-        InSock(o, "clk"), out_(o->out_[0]), value_(o->value_) {
-    }
-    void Receive(const std::shared_ptr<Context>& ctx, Value&&) noexcept override {
-      out_->Send(ctx, Value(*value_));
-    }
-   private:
-    std::shared_ptr<OutSock> out_;
-
-    std::shared_ptr<Value> value_;
-  };
 };
 void ImmValue::UpdateTree(RefStack&) noexcept {
   UpdateEditor();
@@ -460,7 +455,17 @@ class ValueLogger final : public File, public iface::Node {
       bool show_elapse = false) noexcept :
       File(&type_, env), Node(kNone),
       size_(size), auto_scroll_(auto_scroll), show_elapse_(show_elapse) {
-    in_.emplace_back(new Receiver(this));
+    auto handler = [self = this](const auto& ctx, auto&& v) {
+      auto data = ctx->template GetOrNew<ValueData>(self);
+      data->updated = true;
+
+      data->items[data->tail] = ValueItem::CreateItem(v);
+      data->tail = (data->tail+1)%N;
+      if (data->tail == data->head) {
+        data->head = (data->head+1)%N;
+      }
+    };
+    in_.emplace_back(new LambdaInSock(this, "in", std::move(handler)));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -590,32 +595,13 @@ class ValueLogger final : public File, public iface::Node {
 
     bool updated = false;
   };
-
-
-  class Receiver : public InSock {
-   public:
-    Receiver(ValueLogger* o) noexcept : InSock(o, "in"), owner_(o) {
-    }
-    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-      auto& data = ctx->GetOrNew<ValueData>(owner_);
-      data.updated = true;
-
-      data.items[data.tail] = ValueItem::CreateItem(v);
-      data.tail = (data.tail+1)%N;
-      if (data.tail == data.head) {
-        data.head = (data.head+1)%N;
-      }
-    }
-   private:
-    ValueLogger* owner_;
-  };
 };
 void ValueLogger::Update(
     File::RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   const auto now = Clock::now();
   const auto em  = ImGui::GetFontSize();
 
-  auto& data = ctx->GetOrNew<ValueData>(this);
+  auto data = ctx->GetOrNew<ValueData>(this);
 
   ImGui::TextUnformatted("Value Logger");
 
@@ -647,15 +633,15 @@ void ValueLogger::Update(
       ImGui::TableSetupScrollFreeze(0, 1);
       ImGui::TableHeadersRow();
 
-      for (size_t idx = data.head;; idx = (idx+1)%N) {
-        if (idx == data.tail) {
-          if (data.updated && auto_scroll_) {
+      for (size_t idx = data->head;; idx = (idx+1)%N) {
+        if (idx == data->tail) {
+          if (data->updated && auto_scroll_) {
             ImGui::SetScrollHereY();
-            data.updated = false;
+            data->updated = false;
           }
           break;
         }
-        const auto& item = data.items[idx];
+        const auto& item = data->items[idx];
 
         const auto elapse    = now - item.time;
         const auto elapse_ms = static_cast<uint64_t>(

@@ -852,17 +852,17 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
 
       if (sock->cache) cache_ = std::move(v);
 
-      auto& lctx = nctx->GetOrNew<LuaContext>(owner_);
-      auto  task = [
+      auto lctx = nctx->GetOrNew<LuaContext>(owner_);
+      auto task = [
           owner = owner_,
           sock,
           data = owner_->data_,
           nctx = nctx,
-          &lctx,
+          lctx,
           v = std::move(v),
           life = life_](auto L) mutable {
         lua_rawgeti(L, LUA_REGISTRYINDEX, sock->reg_handler);
-        L_PushEvent(L, v, lctx, nctx, data);
+        L_PushEvent(L, v, *lctx, nctx, data);
         if (dev_.SandboxCall(L, 1, 0) == 0) {
           ++data->handle_cnt_;
         } else {
@@ -877,6 +877,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
           }
         }
         nctx = nullptr;
+        lctx = nullptr;
         sock = nullptr;
         data = nullptr;
       };
