@@ -278,7 +278,7 @@ class LogPrinter final : public File, public iface::Node, public iface::GUI {
       const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     try {
       const auto size = msgpack::as_if<std::tuple<float, float>>(
-          msgpack::find(obj, "size"s), {0, 0});
+          msgpack::find(obj, "size"s), {0.f, 0.f});
 
       return std::make_unique<LogPrinter>(
           env,

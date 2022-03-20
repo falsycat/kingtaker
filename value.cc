@@ -508,7 +508,7 @@ void PulseEmitter::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexce
 
     ImGui::SameLine();
     if (ImGui::Button("X")) {
-      auto task = [this, ctxdata]() mutable {
+      auto task = [ctxdata]() mutable {
         ctxdata->conds.clear();
         ctxdata = nullptr;
       };
