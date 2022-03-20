@@ -4,6 +4,7 @@
 #include <thread>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <ImNodes.h>
 
@@ -101,7 +102,7 @@ class SystemLogger : public File, public iface::GUI {
 };
 
 
-class PulseGenerator : public File, public iface::DirItem, public iface::GUI {
+class PulseGenerator final : public File, public iface::DirItem, public iface::GUI {
  public:
   static inline TypeInfo type_ = TypeInfo::New<PulseGenerator>(
       "PulseGenerator", "emits a clock pulse into a specific node",
@@ -246,6 +247,145 @@ void PulseGenerator::UpdateEditor(RefStack& ref) noexcept {
     ImGui::Checkbox("enable", &enable_);
   }
   ImGui::PopItemWidth();
+}
+
+
+class LogPrinter final : public File, public iface::Node, public iface::GUI {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<LogPrinter>(
+      "LogPrinter", "retrieves key/mouse data",
+      {typeid(iface::Node), typeid(iface::GUI)});
+
+  LogPrinter(const std::shared_ptr<Env>& env,
+             notify::Level      lv   = notify::kTrace,
+             const std::string& msg  = "",
+             ImVec2             size = {0, 0}) noexcept :
+      File(&type_, env), Node(kNone),
+      data_(std::make_shared<UniversalData>(lv, msg)), size_(size) {
+    std::weak_ptr<UniversalData> wdata = data_;
+    auto task = [self = this, wdata](const auto&, auto&&) {
+      auto data = wdata.lock();
+      if (!data) return;
+      // TODO: replace '%' with the passed value
+      notify::Push(
+          {std::source_location::current(), data->lv,
+          data->msg, File::Path(data->path), self});
+    };
+    in_.emplace_back(new LambdaInSock(this, "clk", std::move(task)));
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    try {
+      const auto size = msgpack::as_if<std::tuple<float, float>>(
+          msgpack::find(obj, "size"s), {0, 0});
+
+      return std::make_unique<LogPrinter>(
+          env,
+          IntToLevel(msgpack::as_if<int>(msgpack::find(obj, "level"s), 0)),
+          msgpack::as_if<std::string>(msgpack::find(obj, "msg"s), ""s),
+          ImVec2 {std::get<0>(size), std::get<1>(size)});
+    } catch (msgpack::type_error&) {
+      return std::make_unique<LogPrinter>(env);
+    }
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_map(3);
+
+    pk.pack("level"s);
+    pk.pack(LevelToInt(data_->lv));
+
+    pk.pack("msg"s);
+    pk.pack(data_->msg);
+
+    pk.pack("size"s);
+    pk.pack(std::make_tuple(size_.x, size_.y));
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<LogPrinter>(env, data_->lv, data_->msg, size_);
+  }
+
+  void Update(RefStack&) noexcept override;
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  static void UpdateLevelCombo(notify::Level* lv) noexcept;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+  }
+
+ private:
+  struct UniversalData {
+    UniversalData(notify::Level l, const std::string& v) noexcept :
+        lv(l), msg(v) {
+    }
+    notify::Level lv;
+    std::string msg;
+
+    File::Path path;
+  };
+  std::shared_ptr<UniversalData> data_;
+
+  ImVec2 size_;
+
+
+  static int LevelToInt(notify::Level lv) noexcept {
+    switch (lv) {
+    case notify::kTrace: return 0;
+    case notify::kInfo:  return 1;
+    case notify::kWarn:  return 2;
+    case notify::kError: return 3;
+    default: assert(false); return 0;
+    }
+  }
+  static notify::Level IntToLevel(int idx) noexcept {
+    switch (idx) {
+    case 0: return notify::kTrace;
+    case 1: return notify::kInfo;
+    case 2: return notify::kWarn;
+    case 3: return notify::kError;
+    default: return notify::kTrace;
+    }
+  }
+};
+void LogPrinter::Update(RefStack& ref) noexcept {
+  data_->path = ref.GetFullPath();
+}
+void LogPrinter::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+  const auto em = ImGui::GetFontSize();
+  const auto fh = ImGui::GetFrameHeight();
+
+  ImGui::BeginGroup();
+  {
+    if (ImNodes::BeginInputSlot("clk", 1)) {
+      gui::NodeSocket();
+      ImNodes::EndSlot();
+    }
+  }
+  ImGui::EndGroup();
+  ImGui::SameLine();
+  ImGui::BeginGroup();
+  {
+    ImGui::SetNextItemWidth(4.5f*em);
+    UpdateLevelCombo(&data_->lv);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("output log level");
+    }
+
+    {
+      gui::ResizeGroup _("##resizer", &size_, {8, fh/em}, {32, 4*fh/em}, em);
+      ImGui::InputTextMultiline("##msg", &data_->msg, size_*em);
+    }
+  }
+  ImGui::EndGroup();
+}
+void LogPrinter::UpdateLevelCombo(notify::Level* lv) noexcept {
+  static const char* kNames[] = {"TRAC", "INFO", "WARN", "ERRR"};
+  static const int   kCount   = sizeof(kNames)/sizeof(kNames[0]);
+
+  int idx = LevelToInt(*lv);
+  if (ImGui::Combo("##level", &idx, kNames, kCount)) {
+    *lv = IntToLevel(idx);
+  }
 }
 
 
