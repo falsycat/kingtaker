@@ -555,6 +555,61 @@ void PulseEmitter::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexce
 }
 
 
+class ValuePassthru final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<ValuePassthru>(
+      "ValuePassthru", "passes all inputs into output directly",
+      {typeid(iface::Node)});
+
+  ValuePassthru(const std::shared_ptr<Env>& env) noexcept :
+      File(&type_, env), Node(kNone) {
+    out_.emplace_back(new OutSock(this, "out"));
+
+    std::weak_ptr<OutSock> wout = out_[0];
+    auto task = [wout](const auto& ctx, auto&& v) {
+      auto out = wout.lock();
+      if (!out) return;
+      out->Send(ctx, std::move(v));
+    };
+    in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
+  }
+
+
+  static std::unique_ptr<File> Deserialize(const msgpack::object&, const std::shared_ptr<Env>& env) {
+    return std::make_unique<ValuePassthru>(env);
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_nil();
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<ValuePassthru>(env);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+};
+void ValuePassthru::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+  ImGui::TextUnformatted("PASSTHRU");
+
+  if (ImNodes::BeginInputSlot("in", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+
+  ImGui::SameLine();
+  ImGui::TextUnformatted("->");
+  ImGui::SameLine();
+
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+}
+
+
 class ValueLogger final : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ValueLogger>(
