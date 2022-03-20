@@ -5,6 +5,7 @@
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
+#include <ImNodes.h>
 
 #include "iface/dir.hh"
 #include "iface/gui.hh"
@@ -245,6 +246,147 @@ void PulseGenerator::UpdateEditor(RefStack& ref) noexcept {
     ImGui::Checkbox("enable", &enable_);
   }
   ImGui::PopItemWidth();
+}
+
+
+class MouseInput : public File, public iface::GUI, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<MouseInput>(
+      "MouseInput", "retrieves key/mouse data",
+      {typeid(iface::Node)});
+
+  MouseInput(const std::shared_ptr<Env>& env) noexcept :
+      File(&type_, env), Node(kNone), data_(std::make_shared<UniversalData>()) {
+    out_.emplace_back(new OutSock(this, "pos"));
+    out_.emplace_back(new OutSock(this, "left"));
+    out_.emplace_back(new OutSock(this, "middle"));
+    out_.emplace_back(new OutSock(this, "right"));
+    out_.emplace_back(new OutSock(this, "gui_active"));
+
+    std::weak_ptr<UniversalData> wdata = data_;
+    std::weak_ptr<OutSock>       wp = out_[0];
+    std::weak_ptr<OutSock>       wl = out_[1];
+    std::weak_ptr<OutSock>       wm = out_[2];
+    std::weak_ptr<OutSock>       wr = out_[3];
+    std::weak_ptr<OutSock>       wa = out_[4];
+    auto task = [wdata, wp, wl, wm, wr, wa](const auto& ctx, auto&&) {
+      auto data = wdata.lock();
+      if (!data) return;
+
+      auto p = wp.lock();
+      if (p) p->Send(ctx, data->pos);
+
+      auto l = wl.lock();
+      if (l) l->Send(ctx, data->l);
+
+      auto m = wm.lock();
+      if (m) m->Send(ctx, data->m);
+
+      auto r = wr.lock();
+      if (r) r->Send(ctx, data->r);
+
+      auto a = wa.lock();
+      if (a) a->Send(ctx, data->gui_active);
+    };
+    in_.emplace_back(new LambdaInSock(this, "clk", std::move(task)));
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object&, const std::shared_ptr<Env>& env) {
+    return std::make_unique<MouseInput>(env);
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_nil();
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<MouseInput>(env);
+  }
+
+  void Update(RefStack&) noexcept override;
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  static void UpdateSocket(const char*, float) noexcept;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+  }
+
+ private:
+  struct UniversalData {
+    Value::Vec2 pos;
+    std::string l, m, r;
+    bool gui_active;
+  };
+  std::shared_ptr<UniversalData> data_;
+
+
+  static void GetState(std::string& str, ImGuiMouseButton b) noexcept {
+    str = "";
+    if (ImGui::IsMouseDown(b))          str = "DOWN";
+    if (ImGui::IsMouseClicked(b))       str = "CLICK";
+    if (ImGui::IsMouseReleased(b))      str = "RELEASE";
+    if (ImGui::IsMouseDoubleClicked(b)) str = "DOUBLE";
+  }
+};
+void MouseInput::Update(RefStack&) noexcept {
+  const auto p = ImGui::GetMousePos();
+  data_->pos = {p.x, p.y};
+
+  GetState(data_->l, ImGuiMouseButton_Left);
+  GetState(data_->m, ImGuiMouseButton_Middle);
+  GetState(data_->r, ImGuiMouseButton_Right);
+
+  data_->gui_active =
+      ImGui::IsAnyItemHovered() ||
+      ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
+}
+void MouseInput::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+  const auto w = 4*ImGui::GetFontSize();
+
+  ImGui::TextUnformatted("USER INPUT");
+  if (ImNodes::BeginInputSlot("clk", 1)) {
+    gui::NodeSocket();
+    ImGui::SameLine();
+    ImGui::TextUnformatted("clk");
+    ImNodes::EndSlot();
+  }
+  ImGui::SameLine();
+
+  ImGui::BeginGroup();
+  if (ImNodes::BeginOutputSlot("pos", 1)) {
+    UpdateSocket("pos", w);
+    ImNodes::EndSlot();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("mouse pos in native window coordinates");
+    }
+  }
+  if (ImNodes::BeginOutputSlot("left", 1)) {
+    UpdateSocket("left", w);
+    ImNodes::EndSlot();
+  }
+  if (ImNodes::BeginOutputSlot("middle", 1)) {
+    UpdateSocket("middle", w);
+    ImNodes::EndSlot();
+  }
+  if (ImNodes::BeginOutputSlot("right", 1)) {
+    UpdateSocket("right", w);
+    ImNodes::EndSlot();
+  }
+
+  if (ImNodes::BeginOutputSlot("gui_active", 1)) {
+    UpdateSocket("GUI active", w);
+    ImNodes::EndSlot();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("is any UI component hovered");
+    }
+  }
+  ImGui::EndGroup();
+}
+void MouseInput::UpdateSocket(const char* s, float w) noexcept {
+  const auto tw = ImGui::CalcTextSize(s).x;
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-tw));
+  ImGui::TextUnformatted(s);
+  ImGui::SameLine();
+  gui::NodeSocket();
 }
 
 } }  // namespace kingtaker
