@@ -97,7 +97,7 @@ class Imm final : public File,
 void Imm::UpdateTree(RefStack&) noexcept {
   UpdateEditor();
 }
-void Imm::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+void Imm::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::TextUnformatted("IMM");
 
   if (ImNodes::BeginInputSlot("clk", 1)) {
@@ -107,6 +107,14 @@ void Imm::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
 
   ImGui::SameLine();
   UpdateEditor();
+  ImGui::SameLine();
+
+  if (ImGui::Button("Z")) {
+    out_[0]->Send(ctx, Value(*value_));
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("emits Value manually");
+  }
   ImGui::SameLine();
 
   if (ImNodes::BeginOutputSlot("out", 1)) {
