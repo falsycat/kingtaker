@@ -48,6 +48,7 @@ target_sources(kingtaker
     kingtaker.hh
 
     kingtaker.cc
+    logic.cc
     luajit.cc
     main.cc
     node.cc
