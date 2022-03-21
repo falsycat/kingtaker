@@ -542,13 +542,23 @@ class Logger final : public File, public iface::Node, public iface::GUI {
       File(&type_, env), Node(kNone),
       data_(std::make_shared<UniversalData>(lv, msg)), size_(size) {
     std::weak_ptr<UniversalData> wdata = data_;
-    auto task = [self = this, wdata](const auto&, auto&&) {
+    auto task = [self = this, wdata](const auto&, auto&& v) {
       auto data = wdata.lock();
       if (!data) return;
-      // TODO: replace '%' with the passed value
+      auto msg = data->msg;
+
+      const auto d = msg.find('$');
+      if (d != std::string::npos) {
+        msg = msg.substr(0, d)+v.StringifyType()+msg.substr(d+1);
+      }
+
+      const auto p = msg.find('%');
+      if (p != std::string::npos) {
+        msg = msg.substr(0, p)+v.Stringify()+msg.substr(p+1);
+      }
+
       notify::Push(
-          {std::source_location::current(), data->lv,
-          data->msg, File::Path(data->path), self});
+          {std::source_location::current(), data->lv, msg, File::Path(data->path), self});
     };
     in_.emplace_back(new LambdaInSock(this, "clk", std::move(task)));
   }
@@ -632,6 +642,8 @@ void Logger::Update(RefStack& ref) noexcept {
 void Logger::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
+
+  ImGui::TextUnformatted("SYSTEM LOGGER");
 
   ImGui::BeginGroup();
   {
