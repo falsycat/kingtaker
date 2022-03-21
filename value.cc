@@ -409,8 +409,16 @@ class PulseEmitter : public File, public iface::Node {
 
   PulseEmitter(const std::shared_ptr<Env>& env, size_t n = 0) noexcept :
       File(&type_, env), Node(kNone) {
-    out_.emplace_back(new OutSock(this, "out"));
     data_ = std::make_shared<UniversalData>();
+
+    out_.emplace_back(new OutSock(this, "out"));
+
+    auto task = [self = this](const auto& ctx, auto&&) {
+      auto& conds = ctx->template GetOrNew<ContextData>(self)->conds;
+      for (auto b : conds) b = false;
+    };
+    clear_ = std::make_shared<LambdaInSock>(this, "clear", std::move(task));;
+
     Rebuild(n);
   }
 
@@ -438,12 +446,15 @@ class PulseEmitter : public File, public iface::Node {
   };
   std::shared_ptr<UniversalData> data_;
 
+  std::shared_ptr<InSock> clear_;
+
 
   void Rebuild(size_t n) noexcept {
     in_.resize(n);
     for (size_t i = data_->n; i < n; ++i) {
       in_[i] = std::make_shared<SatisfySock>(this, i);
     }
+    if (in_.size()) in_.push_back(clear_);
     data_->n = n;
   }
 
@@ -539,6 +550,14 @@ void PulseEmitter::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexce
         } else {
           ImGui::TextUnformatted(name.c_str());
         }
+        ImNodes::EndSlot();
+      }
+    }
+    if (in_.size()) {
+      if (ImNodes::BeginInputSlot("clear", 1)) {
+        gui::NodeSocket();
+        ImGui::SameLine();
+        ImGui::TextDisabled("clear");
         ImNodes::EndSlot();
       }
     }
