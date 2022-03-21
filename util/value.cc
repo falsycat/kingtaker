@@ -141,6 +141,34 @@ std::string Value::Stringify(size_t max) const noexcept {
   return "???";
 }
 
+bool operator==(const Value& a, const Value& b) noexcept {
+  if (a.has<Value::Pulse>() && b.has<Value::Pulse>()) {
+    return true;
+  }
+  if (a.has<Value::Integer>() && b.has<Value::Integer>()) {
+    return a.get<Value::Integer>() == b.get<Value::Integer>();
+  }
+  if (b.has<Value::Scalar>() && b.has<Value::Scalar>()) {
+    return a.get<Value::Scalar>() == b.get<Value::Scalar>();
+  }
+  if (b.has<Value::Boolean>() && b.has<Value::Boolean>()) {
+    return a.get<Value::Boolean>() == b.get<Value::Boolean>();
+  }
+  if (b.has<Value::String>() && b.has<Value::String>()) {
+    return a.get<Value::String>() == b.get<Value::String>();
+  }
+  if (b.has<Value::Vec2>() && b.has<Value::Vec2>()) {
+    return a.get<Value::Vec2>() == b.get<Value::Vec2>();
+  }
+  if (b.has<Value::Vec3>() && b.has<Value::Vec3>()) {
+    return a.get<Value::Vec3>() == b.get<Value::Vec3>();
+  }
+  if (b.has<Value::Vec4>() && b.has<Value::Vec4>()) {
+    return a.get<Value::Vec4>() == b.get<Value::Vec4>();
+  }
+  return false;
+}
+
 
 const char* Value::Tensor::StringifyType(Type t) noexcept {
   switch (t) {

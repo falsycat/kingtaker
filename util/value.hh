@@ -124,6 +124,7 @@ class Value final {
 
   Variant v_;
 };
+bool operator==(const Value& a, const Value& b) noexcept;
 
 class Value::Tensor final {
  public:

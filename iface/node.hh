@@ -4,6 +4,7 @@
 #include <cassert>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -154,18 +155,21 @@ class Node::InSock : public Sock {
 };
 class Node::CachedInSock : public InSock {
  public:
-  CachedInSock(Node* o, std::string_view n, Value&& v) noexcept :
+  CachedInSock(Node* o, std::string_view n, std::optional<Value>&& v) noexcept :
       InSock(o, n), value_(std::move(v)) {
   }
 
   void Receive(const std::shared_ptr<Context>&, Value&& v) noexcept override {
     value_ = std::move(v);
   }
+  void Clear() noexcept {
+    value_ = std::nullopt;
+  }
 
-  const Value& value() const noexcept { return value_; }
+  const std::optional<Value>& value() const noexcept { return value_; }
 
  private:
-  Value value_;
+  std::optional<Value> value_;
 };
 class Node::LambdaInSock final : public InSock {
  public:

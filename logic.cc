@@ -1,16 +1,307 @@
 #include "kingtaker.hh"
 
+#include <optional>
+
 #include <imgui.h>
 #include <ImNodes.h>
 
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
 namespace kingtaker {
 namespace {
+
+class Equal final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<Equal>(
+      "Logic/Equal", "emits a pulse if all of AND_X is equal to one of OR_X",
+      {typeid(iface::Node)});
+
+  static constexpr size_t kMaxInput = 16;
+
+  Equal(const std::shared_ptr<Env>& env, size_t and_n = 1, size_t or_n = 1) noexcept :
+      File(&type_, env), Node(kNone) {
+    assert(and_n >= 1 && or_n >= 1);
+
+    data_ = std::make_shared<UniversalData>();
+
+    out_and_ = std::make_shared<OutSock>(this, "AND");
+    out_or_  = std::make_shared<OutSock>(this, "OR");
+    out_     = {out_and_, out_or_};
+
+    std::weak_ptr<UniversalData> wd = data_;
+    std::weak_ptr<OutSock>       wa = out_and_;
+    std::weak_ptr<OutSock>       wo = out_or_;
+    auto clk_task = [self = this, wd, wa, wo](const auto& ctx, auto&&) {
+      Proc(self, ctx, wd, wa, wo);
+    };
+    clk_ = std::make_shared<LambdaInSock>(this, "clk", std::move(clk_task));
+
+    auto clr_task = [self = this](const auto& ctx, auto&&) {
+      auto ctxdata = ctx->template GetOrNew<ContextData>(self);
+      ctxdata->and_.clear();
+      ctxdata->or_ .clear();
+    };
+    clr_ = std::make_shared<LambdaInSock>(this, "clr", std::move(clr_task));
+    Rebuild(and_n, or_n);
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    try {
+      const auto a = msgpack::find(obj, "and"s).as<size_t>();
+      const auto o = msgpack::find(obj, "or"s).as<size_t>();
+      if (a == 0 || a > kMaxInput || o == 0 || o > kMaxInput) {
+        throw DeserializeException("Logic/Equal socket count overflow");
+      }
+      return std::make_unique<Equal>(env, a, o);
+    } catch (msgpack::type_error&) {
+      throw DeserializeException("broken Logic/Equal");
+    }
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_map(2);
+
+    pk.pack("and");
+    pk.pack(data_->and_n);
+
+    pk.pack("or");
+    pk.pack(data_->or_n);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<Equal>(env, data_->and_n, data_->or_n);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  static bool UpdateSocks(const char*, int*, std::span<std::shared_ptr<InSock>>) noexcept;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+
+ private:
+  struct UniversalData final {
+   public:
+    File::Path path;
+
+    size_t and_n;
+    size_t or_n;
+  };
+  class ContextData final : public Context::Data {
+   public:
+    std::vector<std::optional<Value>> and_;
+    std::vector<std::optional<Value>> or_;
+  };
+
+
+  std::shared_ptr<UniversalData> data_;
+
+  std::vector<std::shared_ptr<InSock>> in_and_;
+  std::vector<std::shared_ptr<InSock>> in_or_;
+
+  std::shared_ptr<OutSock> out_and_;
+  std::shared_ptr<OutSock> out_or_;
+
+  std::shared_ptr<InSock> clk_;
+  std::shared_ptr<InSock> clr_;
+
+
+  // handles clk input (called from InSock::Receive())
+  static void Proc(Equal*                              self,
+                   const std::shared_ptr<Context>&     ctx,
+                   const std::weak_ptr<UniversalData>& wd,
+                   const std::weak_ptr<OutSock>&       wa,
+                   const std::weak_ptr<OutSock>&       wo) noexcept {
+    auto data    = wd.lock();
+    auto out_and = wa.lock();
+    auto out_or  = wo.lock();
+    if (!data || !out_and || !out_or) return;
+
+    auto ctxdata = ctx->template GetOrNew<ContextData>(self);
+    bool satisfy = (ctxdata->and_.size() == data->and_n &&
+                    ctxdata->or_ .size() == data->or_n);
+    for (size_t i = 0; satisfy && i < ctxdata->and_.size(); ++i) {
+      if (!ctxdata->and_[i]) satisfy = false;
+    }
+    for (size_t i = 0; satisfy && i < ctxdata->or_.size(); ++i) {
+      if (!ctxdata->or_[i]) satisfy = false;
+    }
+    if (!satisfy) {
+      notify::Warn(data->path, self,
+                   "all inputs are not satisfied yet, evaluation aborted");
+      return;
+    }
+
+    bool a = true;
+    bool o = false;
+    for (auto& av : ctxdata->and_) {
+      bool match = false;
+      for (const auto& ov : ctxdata->or_) {
+        if (*av == *ov) match = true;
+      }
+      if (match) {
+        o = true;
+      } else {
+        a = false;
+      }
+    }
+    ctxdata->and_.clear();
+    ctxdata->or_ .clear();
+    if (a) out_and->Send(ctx, Value::Pulse());
+    if (o) out_or ->Send(ctx, Value::Pulse());
+  }
+
+  // recreates input sockets
+  void Rebuild(size_t a, size_t o) noexcept {
+    // creates AND sockets
+    in_and_.resize(a);
+    for (size_t i = data_->and_n; i < a; ++i) {
+      in_and_[i] = std::make_shared<AndInSock>(this, i);
+    }
+    data_->and_n = a;
+
+    // creates OR sockets
+    in_or_.resize(o);
+    for (size_t i = data_->or_n; i < o; ++i) {
+      in_or_[i] = std::make_shared<OrInSock>(this, i);
+    }
+    data_->or_n  = o;
+
+    // sync input socket list
+    in_.clear();
+    in_.push_back(clk_);
+    in_.push_back(clr_);
+    for (auto& sock : in_and_) in_.push_back(sock);
+    for (auto& sock : in_or_ ) in_.push_back(sock);
+  }
+
+
+  // common implementation of AND and OR
+  class AbstractInSock : public InSock {
+   public:
+    AbstractInSock(Equal* o, const std::string& prefix, size_t idx) noexcept :
+        InSock(o, prefix+std::string(1, static_cast<char>('A'+idx))),
+        idx_(idx) {
+    }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+      auto  ctxdata = ctx->GetOrNew<ContextData>(&owner());
+      auto& list    = GetList(*ctxdata);
+
+      if (list.size() <= idx_) list.resize(idx_+1);
+      list[idx_] = std::move(v);
+    }
+
+   protected:
+    virtual std::vector<std::optional<Value>>& GetList(ContextData&) const noexcept = 0;
+
+   private:
+    size_t idx_;
+  };
+  class AndInSock final : public AbstractInSock {
+   public:
+    AndInSock(Equal* o, size_t idx) noexcept : AbstractInSock(o, "AND_", idx) {
+    }
+    std::vector<std::optional<Value>>& GetList(ContextData& data) const noexcept override {
+      return data.and_;
+    }
+  };
+  class OrInSock final : public AbstractInSock {
+   public:
+    OrInSock(Equal* o, size_t idx) noexcept : AbstractInSock(o, "OR_", idx) {
+    }
+    std::vector<std::optional<Value>>& GetList(ContextData& data) const noexcept override {
+      return data.or_;
+    }
+  };
+};
+void Equal::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  const auto em = ImGui::GetFontSize();
+
+  ImGui::TextUnformatted("EQUAL");
+
+  // input sockets
+  ImGui::BeginGroup();
+  {
+    if (ImNodes::BeginInputSlot("clk", 1)) {
+      gui::NodeSocket();
+      ImGui::SameLine();
+      if (ImGui::SmallButton("clk")) {
+        Queue::sub().Push([clk = clk_, ctx]() { clk->Receive(ctx, Value::Pulse()); });
+      }
+      ImNodes::EndSlot();
+    }
+    if (ImNodes::BeginInputSlot("clr", 1)) {
+      gui::NodeSocket();
+      ImGui::SameLine();
+      if (ImGui::SmallButton("clr")) {
+        Queue::sub().Push([clr = clr_, ctx]() { clr->Receive(ctx, Value::Pulse()); });
+      }
+      ImNodes::EndSlot();
+    }
+
+    int and_n = static_cast<int>(data_->and_n);
+    int or_n  = static_cast<int>(data_->or_n);
+
+    const bool mod =
+      UpdateSocks("##AndCount", &and_n, in_and_) | UpdateSocks("##OrCount", &or_n,  in_or_);
+
+    if (mod) {
+      auto task = [this, and_n, or_n]() {
+        Rebuild(static_cast<size_t>(and_n), static_cast<size_t>(or_n));
+      };
+      Queue::main().Push(std::move(task));
+    }
+  }
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+  ImGui::Dummy({1*em, 1});
+  ImGui::SameLine();
+
+  // output sockets
+  ImGui::BeginGroup();
+  {
+    if (ImNodes::BeginOutputSlot("AND", 1)) {
+      ImGui::TextUnformatted("AND");
+      ImGui::SameLine();
+      gui::NodeSocket();
+      ImNodes::EndSlot();
+    }
+    if (ImNodes::BeginOutputSlot("OR", 1)) {
+      ImGui::TextUnformatted(" OR");
+      ImGui::SameLine();
+      gui::NodeSocket();
+      ImNodes::EndSlot();
+    }
+  }
+  ImGui::EndGroup();
+}
+bool Equal::UpdateSocks(
+    const char* id, int* n, std::span<std::shared_ptr<InSock>> socks) noexcept {
+  const auto left = ImGui::GetCursorPosX();
+  const auto em   = ImGui::GetFontSize();
+
+  ImGui::BeginGroup();
+  for (auto& sock : socks) {
+    if (ImNodes::BeginInputSlot(sock->name().c_str(), 1)) {
+      gui::NodeSocket();
+      ImGui::SameLine();
+      ImGui::TextUnformatted(sock->name().c_str());
+      ImNodes::EndSlot();
+    }
+  }
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(2*em);
+  ImGui::SetCursorPosX(left + 5*em);
+  return ImGui::DragInt(id, n, .2f, 1, kMaxInput);
+}
+
 
 class Passthru final : public File, public iface::Node {
  public:
@@ -66,7 +357,7 @@ void Passthru::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
 }
 
 
-class Satisfaction : public File, public iface::Node {
+class Satisfaction final : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Satisfaction>(
       "Logic/Satisfaction", "emits pulse when all inputs are satisfied",
@@ -165,7 +456,7 @@ class Satisfaction : public File, public iface::Node {
   };
 };
 void Satisfaction::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  ImGui::TextUnformatted("PULSE");
+  ImGui::TextUnformatted("SATISFACTION");
 
   const auto em = ImGui::GetFontSize();
 
