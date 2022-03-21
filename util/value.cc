@@ -94,8 +94,55 @@ Value Value::Deserialize(const msgpack::object& obj) {
   throw DeserializeException("invalid value");
 }
 
+const char* Value::StringifyType() const noexcept {
+  if (has<Pulse>())   return "pulse";
+  if (has<Integer>()) return "integer";
+  if (has<Scalar>())  return "scalar";
+  if (has<Boolean>()) return "boolean";
+  if (has<String>())  return "string";
+  if (has<Vec2>())    return "vec2";
+  if (has<Vec3>())    return "vec3";
+  if (has<Vec4>())    return "vec4";
+  if (has<Tensor>())  return "tensor";
+  return "unknown";
+}
 
-std::string_view Value::Tensor::StringifyType(Type t) noexcept {
+std::string Value::Stringify(size_t max) const noexcept {
+  if (has<Pulse>()) {
+    return "Z";
+  }
+  if (has<Integer>()) {
+    return std::to_string(get<Integer>());
+  }
+  if (has<Scalar>()) {
+    return std::to_string(get<Scalar>());
+  }
+  if (has<Boolean>()) {
+    return get<Boolean>()? "T": "F";
+  }
+  if (has<String>()) {
+    return get<String>().substr(0, max);
+  }
+  if (has<Vec2>()) {
+    auto& v = get<Vec2>();
+    return "("+std::to_string(v[0])+", "+std::to_string(v[1])+")";
+  }
+  if (has<Vec3>()) {
+    auto& v = get<Vec3>();
+    return "("+std::to_string(v[0])+", "+std::to_string(v[1])+", "+std::to_string(v[2])+")";
+  }
+  if (has<Vec4>()) {
+    auto& v = get<Vec4>();
+    return "("+std::to_string(v[0])+", "+std::to_string(v[1])+", "+std::to_string(v[2])+", "+std::to_string(v[3])+")";
+  }
+  if (has<Tensor>()) {
+    return get<Tensor>().StringifyMeta();
+  }
+  return "???";
+}
+
+
+const char* Value::Tensor::StringifyType(Type t) noexcept {
   switch (t) {
   case I8:  return "i8";
   case I16: return "i16";
@@ -171,6 +218,16 @@ void Value::Tensor::Serialize(File::Packer& pk) const noexcept {
 
   pk.pack("buf"s);
   pk.pack(buf_);
+}
+
+std::string Value::Tensor::StringifyMeta() const noexcept {
+  std::string ret = StringifyType(type_);
+  ret += " ";
+  for (auto& v : dim_) {
+    if (ret.back() != ' ') ret += "x";
+    ret += std::to_string(v);
+  }
+  return ret;
 }
 
 }  // namespace kingtaker

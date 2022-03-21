@@ -688,73 +688,10 @@ class Logger final : public File, public iface::Node {
 
     static ValueItem CreateItem(const Value& val) noexcept {
       ValueItem ret;
-      ret.time = Clock::now();
-
-      char buf[64];
-      if (val.has<Value::Pulse>()) {
-        ret.type  = "pulse";
-        ret.value = "Z";
-      } else if (val.has<Value::Integer>()) {
-        snprintf(buf, sizeof(buf), "%" PRIi64, val.get<Value::Integer>());
-        ret.type  = "integer";
-        ret.value = buf;
-      } else if (val.has<Value::Scalar>()) {
-        snprintf(buf, sizeof(buf), "%f", val.get<Value::Scalar>());
-        ret.type  = "scalar";
-        ret.value = buf;
-      } else if (val.has<Value::Boolean>()) {
-        ret.type  = "boolean";
-        ret.value = val.get<Value::Boolean>()? "true": "false";
-      } else if (val.has<Value::Vec2>()) {
-        const auto& v = val.get<Value::Vec2>();
-        snprintf(buf, sizeof(buf), "(%f, %f)", v[0], v[1]);
-        ret.type  = "vec2";
-        ret.value = buf;
-      } else if (val.has<Value::Vec3>()) {
-        const auto& v = val.get<Value::Vec3>();
-        snprintf(buf, sizeof(buf), "(%f, %f, %f)", v[0], v[1], v[2]);
-        ret.type  = "vec3";
-        ret.value = buf;
-      } else if (val.has<Value::Vec4>()) {
-        const auto& v = val.get<Value::Vec4>();
-        snprintf(buf, sizeof(buf), "(%f, %f, %f, %f)", v[0], v[1], v[2], v[3]);
-        ret.type  = "vec4";
-        ret.value = buf;
-      } else if (val.has<Value::String>()) {
-        const auto& str = val.get<Value::String>();
-
-        // find end of line
-        auto n = str.find('\n');
-        if (n == std::string::npos) {
-          n = str.size();
-        }
-
-        // copy str
-        auto n_clipped = std::min(static_cast<size_t>(n), sizeof(buf)-1);
-        strncpy(buf, str.data(), n_clipped);
-
-        // add ellipses
-        if (n_clipped != str.size()) {
-          if (n_clipped+3 > sizeof(buf)-1) {
-            n_clipped = sizeof(buf)-1;
-          } else {
-            n_clipped += 3;
-          }
-          strcpy(buf+n_clipped-3, "...");
-        }
-        buf[n_clipped] = 0;
-
-        ret.type    = "string";
-        ret.value   = buf;
-        ret.tooltip = str.substr(0, std::min(size_t{256}, str.size()));
-      } else {
-        ret.type  = "XXX";
-        ret.value = "???";
-      }
-
-      if (ret.tooltip.empty()) {
-        ret.tooltip = ret.value;
-      }
+      ret.time    = Clock::now();
+      ret.type    = val.StringifyType();
+      ret.tooltip = val.Stringify();
+      ret.value   = ret.tooltip.substr(0, ret.tooltip.find('\n'));
       return ret;
     }
   };
@@ -772,7 +709,7 @@ void Logger::Update(File::RefStack&, const std::shared_ptr<Context>& ctx) noexce
 
   auto data = ctx->GetOrNew<ValueData>(this);
 
-  ImGui::TextUnformatted("Value Logger");
+  ImGui::TextUnformatted("VALUE LOGGER");
 
   if (ImNodes::BeginInputSlot("in", 1)) {
     gui::NodeSocket();
