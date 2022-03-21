@@ -39,14 +39,14 @@ class Equal final : public File, public iface::Node {
     auto clk_task = [self = this, wd, wa, wo](const auto& ctx, auto&&) {
       Proc(self, ctx, wd, wa, wo);
     };
-    clk_ = std::make_shared<LambdaInSock>(this, "clk", std::move(clk_task));
+    clk_ = std::make_shared<LambdaInSock>(this, "CLK", std::move(clk_task));
 
     auto clr_task = [self = this](const auto& ctx, auto&&) {
       auto ctxdata = ctx->template GetOrNew<ContextData>(self);
       ctxdata->and_.clear();
       ctxdata->or_ .clear();
     };
-    clr_ = std::make_shared<LambdaInSock>(this, "clr", std::move(clr_task));
+    clr_ = std::make_shared<LambdaInSock>(this, "CLR", std::move(clr_task));
     Rebuild(and_n, or_n);
   }
 
@@ -226,18 +226,18 @@ void Equal::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   // input sockets
   ImGui::BeginGroup();
   {
-    if (ImNodes::BeginInputSlot("clk", 1)) {
+    if (ImNodes::BeginInputSlot("CLK", 1)) {
       gui::NodeSocket();
       ImGui::SameLine();
-      if (ImGui::SmallButton("clk")) {
+      if (ImGui::SmallButton("CLK")) {
         Queue::sub().Push([clk = clk_, ctx]() { clk->Receive(ctx, Value::Pulse()); });
       }
       ImNodes::EndSlot();
     }
-    if (ImNodes::BeginInputSlot("clr", 1)) {
+    if (ImNodes::BeginInputSlot("CLR", 1)) {
       gui::NodeSocket();
       ImGui::SameLine();
-      if (ImGui::SmallButton("clr")) {
+      if (ImGui::SmallButton("CLR")) {
         Queue::sub().Push([clr = clr_, ctx]() { clr->Receive(ctx, Value::Pulse()); });
       }
       ImNodes::EndSlot();
@@ -266,13 +266,17 @@ void Equal::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::BeginGroup();
   {
     if (ImNodes::BeginOutputSlot("AND", 1)) {
-      ImGui::TextUnformatted("AND");
+      if (ImGui::SmallButton("AND")) {
+        out_and_->Send(ctx, Value::Pulse());
+      }
       ImGui::SameLine();
       gui::NodeSocket();
       ImNodes::EndSlot();
     }
     if (ImNodes::BeginOutputSlot("OR", 1)) {
-      ImGui::TextUnformatted(" OR");
+      if (ImGui::SmallButton(" OR")) {
+        out_or_->Send(ctx, Value::Pulse());
+      }
       ImGui::SameLine();
       gui::NodeSocket();
       ImNodes::EndSlot();
@@ -357,15 +361,15 @@ void Passthru::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
 }
 
 
-class Satisfaction final : public File, public iface::Node {
+class Satisfy final : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Satisfaction>(
-      "Logic/Satisfaction", "emits pulse when all inputs are satisfied",
+  static inline TypeInfo type_ = TypeInfo::New<Satisfy>(
+      "Logic/Satisfy", "emits pulse when all inputs are satisfied",
       {typeid(iface::Node)});
 
   static constexpr size_t kMaxInput = 16;
 
-  Satisfaction(const std::shared_ptr<Env>& env, size_t n = 0) noexcept :
+  Satisfy(const std::shared_ptr<Env>& env, size_t n = 0) noexcept :
       File(&type_, env), Node(kNone) {
     data_ = std::make_shared<UniversalData>();
 
@@ -373,22 +377,22 @@ class Satisfaction final : public File, public iface::Node {
 
     auto task = [self = this](const auto& ctx, auto&&) {
       auto& conds = ctx->template GetOrNew<ContextData>(self)->conds;
-      for (auto b : conds) b = false;
+      conds.clear();
     };
-    clear_ = std::make_shared<LambdaInSock>(this, "clear", std::move(task));;
+    clr_ = std::make_shared<LambdaInSock>(this, "CLR", std::move(task));;
 
     Rebuild(n);
   }
 
   static std::unique_ptr<File> Deserialize(
       const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    return std::make_unique<Satisfaction>(env, msgpack::as_if<size_t>(obj, 0));
+    return std::make_unique<Satisfy>(env, msgpack::as_if<size_t>(obj, 0));
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack(data_->n);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<Satisfaction>(env, data_->n);
+    return std::make_unique<Satisfy>(env, data_->n);
   }
 
   void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
@@ -404,16 +408,21 @@ class Satisfaction final : public File, public iface::Node {
   };
   std::shared_ptr<UniversalData> data_;
 
-  std::shared_ptr<InSock> clear_;
+  std::shared_ptr<InSock> clr_;
+  std::vector<std::shared_ptr<InSock>> in_sats_;
 
 
+  // recreates input sockets
   void Rebuild(size_t n) noexcept {
-    in_.resize(n);
+    in_sats_.resize(n);
     for (size_t i = data_->n; i < n; ++i) {
-      in_[i] = std::make_shared<SatisfySock>(this, i);
+      in_sats_[i] = std::make_shared<SatisfySock>(this, i);
     }
-    if (in_.size()) in_.push_back(clear_);
     data_->n = n;
+
+    in_.clear();
+    if (n) in_.push_back(clr_);
+    for (auto& sock : in_sats_) in_.push_back(sock);
   }
 
 
@@ -423,7 +432,7 @@ class Satisfaction final : public File, public iface::Node {
   };
   class SatisfySock final : public InSock {
    public:
-    SatisfySock(Satisfaction* o, size_t idx) noexcept :
+    SatisfySock(Satisfy* o, size_t idx) noexcept :
         InSock(o, std::string(1, static_cast<char>('A'+idx))),
         data_(o->data_), out_(o->out_[0]), idx_(idx) {
     }
@@ -455,8 +464,8 @@ class Satisfaction final : public File, public iface::Node {
     size_t idx_;
   };
 };
-void Satisfaction::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  ImGui::TextUnformatted("SATISFACTION");
+void Satisfy::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  ImGui::TextUnformatted("SATISFY");
 
   const auto em = ImGui::GetFontSize();
 
@@ -465,38 +474,19 @@ void Satisfaction::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexce
 
   ImGui::BeginGroup();
   {
-    int n = static_cast<int>(data_->n);
-    ImGui::SetNextItemWidth(2*em);
-    if (ImGui::DragInt("##InputCount", &n, 1, 0, kMaxInput)) {
-      Queue::main().Push([this, n]() { Rebuild(static_cast<size_t>(n)); });
+    if (in_.size()) {
+      if (ImNodes::BeginInputSlot("CLR", 1)) {
+        gui::NodeSocket();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("CLR")) {
+          Queue::sub().Push([clr = clr_, ctx]() { clr->Receive(ctx, Value::Pulse()); });
+        }
+        ImNodes::EndSlot();
+      }
     }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("number of inputs\n"
-                        "pulse is emitted when all input received something");
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("X")) {
-      auto task = [ctxdata]() mutable {
-        ctxdata->conds.clear();
-        ctxdata = nullptr;
-      };
-      Queue::main().Push(std::move(task));
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("clears state");
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Z")) {
-      out_[0]->Send(ctx, Value::Pulse());
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("generates pulse manually");
-    }
-
+    ImGui::BeginGroup();
     for (size_t i = 0; i < data_->n; ++i) {
-      const auto& name = in_[i]->name();
+      const auto& name = in_sats_[i]->name();
       if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
         gui::NodeSocket();
         ImGui::SameLine();
@@ -511,20 +501,27 @@ void Satisfaction::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexce
         ImNodes::EndSlot();
       }
     }
-    if (in_.size()) {
-      if (ImNodes::BeginInputSlot("clear", 1)) {
-        gui::NodeSocket();
-        ImGui::SameLine();
-        ImGui::TextDisabled("clear");
-        ImNodes::EndSlot();
-      }
+    ImGui::EndGroup();
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(2*em);
+
+    int n = static_cast<int>(data_->n);
+    if (ImGui::DragInt("##InputCount", &n, 1, 0, kMaxInput)) {
+      Queue::main().Push([this, n]() { Rebuild(static_cast<size_t>(n)); });
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("number of inputs\n"
+                        "pulse is emitted when all input received something");
     }
   }
   ImGui::EndGroup();
 
   ImGui::SameLine();
   if (ImNodes::BeginOutputSlot("out", 1)) {
-    ImGui::TextUnformatted("out");
+    if (ImGui::SmallButton("out")) {
+      out_[0]->Send(ctx, Value::Pulse());
+    }
     ImGui::SameLine();
     gui::NodeSocket();
     ImNodes::EndSlot();
