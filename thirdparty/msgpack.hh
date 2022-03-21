@@ -32,12 +32,12 @@ inline const object& find(const object& map, const T& key) noexcept {
 }
 
 template <typename T>
-inline T as_if(const object& obj, T def) noexcept {
+inline T as_if(const object& obj, T def) {
   obj.convert_if_not_nil(def);
   return def;
 }
 template <>
-inline ImVec2 as_if<ImVec2>(const object& obj, ImVec2 def) noexcept {
+inline ImVec2 as_if<ImVec2>(const object& obj, ImVec2 def) {
   if (obj.type == msgpack::type::NIL) return def;
   if (obj.type != msgpack::type::ARRAY) throw msgpack::type_error();
   if (obj.via.array.size != 2) throw msgpack::type_error();
