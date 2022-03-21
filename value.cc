@@ -27,16 +27,16 @@
 namespace kingtaker {
 namespace {
 
-class ImmValue final : public File,
+class Imm final : public File,
     public iface::Factory<Value>,
     public iface::DirItem,
     public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<ImmValue>(
-      "ImmValue", "immediate value",
-      {typeid(iface::Node), typeid(iface::DirItem), typeid(iface::Node)});
+  static inline TypeInfo type_ = TypeInfo::New<Imm>(
+      "Value/Imm", "immediate value",
+      {typeid(iface::Factory<Value>), typeid(iface::DirItem), typeid(iface::Node)});
 
-  ImmValue(const std::shared_ptr<Env>& env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
+  Imm(const std::shared_ptr<Env>& env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
       value_(std::make_shared<Value>(std::move(v))),
       size_(size) {
@@ -56,7 +56,7 @@ class ImmValue final : public File,
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     const auto value = Value::Deserialize(msgpack::find(obj, "value"s));
     const auto size  = msgpack::find(obj, "size"s).as<std::pair<float, float>>();
-    return std::make_unique<ImmValue>(env, Value(value), ImVec2 {size.first, size.second});
+    return std::make_unique<Imm>(env, Value(value), ImVec2 {size.first, size.second});
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);
@@ -68,7 +68,7 @@ class ImmValue final : public File,
     value_->Serialize(pk);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<ImmValue>(env, Value(*value_), size_);
+    return std::make_unique<Imm>(env, Value(*value_), size_);
   }
 
   Value Create() noexcept override {
@@ -95,10 +95,10 @@ class ImmValue final : public File,
 
   ImVec2 size_;
 };
-void ImmValue::UpdateTree(RefStack&) noexcept {
+void Imm::UpdateTree(RefStack&) noexcept {
   UpdateEditor();
 }
-void ImmValue::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+void Imm::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   ImGui::TextUnformatted("IMM");
 
   if (ImNodes::BeginInputSlot("clk", 1)) {
@@ -115,7 +115,7 @@ void ImmValue::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
     ImNodes::EndSlot();
   }
 }
-void ImmValue::UpdateEditor() noexcept {
+void Imm::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
   const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
@@ -206,7 +206,7 @@ void ImmValue::UpdateEditor() noexcept {
   if (mod) lastmod_ = Clock::now();
 }
 template <int D>
-bool ImmValue::UpdateVec(linalg::vec<double, D>& vec) noexcept {
+bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
   bool mod = false;
   for (int i = 0; i < D; ++i) {
     ImGui::PushID(&vec[i]);
@@ -226,7 +226,7 @@ class ExternalText final : public File,
     public iface::Factory<Value> {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ExternalText>(
-      "ExternalText", "text data from a native file",
+      "Value/ExternalText", "text data from a native file",
       {typeid(iface::DirItem), typeid(iface::GUI), typeid(iface::Factory<Value>)});
 
   ExternalText(const std::shared_ptr<Env>& env, const std::string& path = "", bool editor_shown = false) noexcept :
@@ -402,7 +402,7 @@ class ExternalText final : public File,
 class PulseEmitter : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<PulseEmitter>(
-      "PulseEmitter", "emits pulse on editor context",
+      "Value/PulseEmitter", "emits pulse when all inputs are satisfied",
       {typeid(iface::Node)});
 
   static constexpr size_t kMaxInput = 16;
@@ -555,13 +555,13 @@ void PulseEmitter::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexce
 }
 
 
-class ValuePassthru final : public File, public iface::Node {
+class Passthru final : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<ValuePassthru>(
-      "ValuePassthru", "passes all inputs into output directly",
+  static inline TypeInfo type_ = TypeInfo::New<Passthru>(
+      "Value/Passthru", "passes all inputs into output directly",
       {typeid(iface::Node)});
 
-  ValuePassthru(const std::shared_ptr<Env>& env) noexcept :
+  Passthru(const std::shared_ptr<Env>& env) noexcept :
       File(&type_, env), Node(kNone) {
     out_.emplace_back(new OutSock(this, "out"));
 
@@ -576,13 +576,13 @@ class ValuePassthru final : public File, public iface::Node {
 
 
   static std::unique_ptr<File> Deserialize(const msgpack::object&, const std::shared_ptr<Env>& env) {
-    return std::make_unique<ValuePassthru>(env);
+    return std::make_unique<Passthru>(env);
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<ValuePassthru>(env);
+    return std::make_unique<Passthru>(env);
   }
 
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
@@ -591,7 +591,7 @@ class ValuePassthru final : public File, public iface::Node {
     return PtrSelector<iface::Node>(t).Select(this);
   }
 };
-void ValuePassthru::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+void Passthru::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   ImGui::TextUnformatted("PASSTHRU");
 
   if (ImNodes::BeginInputSlot("in", 1)) {
@@ -610,16 +610,15 @@ void ValuePassthru::Update(RefStack&, const std::shared_ptr<Context>&) noexcept 
 }
 
 
-class ValueLogger final : public File, public iface::Node {
+class Logger final : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<ValueLogger>(
-      "ValueLogger", "log values received from input",
+  static inline TypeInfo type_ = TypeInfo::New<Logger>(
+      "Value/Logger", "log values received from input",
       {typeid(iface::Node)});
 
   static constexpr size_t N = 256;  // max log items
 
-
-  ValueLogger(
+  Logger(
       const std::shared_ptr<Env>& env,
       ImVec2 size      = {0, 0},
       bool auto_scroll = true,
@@ -642,7 +641,7 @@ class ValueLogger final : public File, public iface::Node {
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     std::tuple<float, float> size;
     msgpack::find(obj, "size"s).convert(size);
-    return std::make_unique<ValueLogger>(
+    return std::make_unique<Logger>(
         env,
         ImVec2(std::get<0>(size), std::get<1>(size)),
         msgpack::find(obj, "auto_scroll"s).as<bool>(),
@@ -661,7 +660,7 @@ class ValueLogger final : public File, public iface::Node {
     pk.pack(show_elapse_);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<ValueLogger>(
+    return std::make_unique<Logger>(
         env, size_, auto_scroll_, show_elapse_);
   }
 
@@ -767,8 +766,7 @@ class ValueLogger final : public File, public iface::Node {
     bool updated = false;
   };
 };
-void ValueLogger::Update(
-    File::RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+void Logger::Update(File::RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   const auto now = Clock::now();
   const auto em  = ImGui::GetFontSize();
 
@@ -853,6 +851,5 @@ void ValueLogger::Update(
     }
   }
 }
-
 
 } }  // namespace kingtaker

@@ -31,11 +31,10 @@
 namespace kingtaker {
 namespace {
 
-// holds nodes and their links and transmits input and output to them
-class NodeNet : public File, public iface::Node {
+class Network : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<NodeNet>(
-      "NodeNet", "node network",
+  static inline TypeInfo type_ = TypeInfo::New<Network>(
+      "Node/Network", "manages multiple Nodes and connections between them",
       {typeid(iface::DirItem), typeid(iface::GUI), typeid(iface::History)});
 
   using IndexMap = std::unordered_map<Node*, size_t>;
@@ -167,16 +166,16 @@ class NodeNet : public File, public iface::Node {
       return NodeHolder::Create(id, file_->Clone(env));
     }
 
-    void Setup(NodeNet* owner) noexcept {
+    void Setup(Network* owner) noexcept {
       auto inter = dynamic_cast<InternalNode*>(file_.get());
       if (inter) inter->Setup(owner);
     }
-    void Teardown(NodeNet* owner) noexcept {
+    void Teardown(Network* owner) noexcept {
       auto inter = dynamic_cast<InternalNode*>(file_.get());
       if (inter) inter->Teardown(owner);
     }
 
-    void UpdateNode(NodeNet* owner, RefStack& ref) noexcept;
+    void UpdateNode(Network* owner, RefStack& ref) noexcept;
     void UpdateWindow(RefStack& ref) noexcept;
 
     void Select() noexcept { select_ = true; }
@@ -205,7 +204,7 @@ class NodeNet : public File, public iface::Node {
   using NodeHolderRefList = std::vector<NodeHolder*>;
 
 
-  NodeNet(const std::shared_ptr<Env>& env,
+  Network(const std::shared_ptr<Env>& env,
           Time lastmod = Clock::now(),
           NodeHolderList&& nodes = {},
           size_t next = 0) noexcept :
@@ -239,13 +238,13 @@ class NodeNet : public File, public iface::Node {
       auto& obj_links = msgpack::find(obj, "links"s);
       if (obj_links.type != msgpack::type::ARRAY) throw msgpack::type_error();
       if (obj_links.via.array.size > nmap.size()) {
-        throw DeserializeException("broken NodeNet");
+        throw DeserializeException("broken Network");
       }
       for (size_t i = 0; i < obj_links.via.array.size; ++i) {
         nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
       }
 
-      auto ret = std::make_unique<NodeNet>(env, lastmod, std::move(nodes), next);
+      auto ret = std::make_unique<Network>(env, lastmod, std::move(nodes), next);
       ret->gui_.Deserialize(msgpack::find(obj, "gui"s));
       for (auto& h : ret->nodes_) h->Setup(ret.get());
       return ret;
@@ -310,7 +309,7 @@ class NodeNet : public File, public iface::Node {
         }
       }
     }
-    return std::make_unique<NodeNet>(env, Clock::now(), std::move(nodes));
+    return std::make_unique<Network>(env, Clock::now(), std::move(nodes));
   }
 
   File* Find(std::string_view name) const noexcept override {
@@ -373,11 +372,11 @@ class NodeNet : public File, public iface::Node {
   }
 
 
-  // GUI implementation for NodeNet
+  // GUI implementation for Network
   class GUI final : public iface::GUI, public iface::DirItem {
    public:
-    static inline const std::string kIdSuffix = ": NodeNet Editor";
-    GUI(NodeNet* o) : DirItem(kMenu), owner_(o) {
+    static inline const std::string kIdSuffix = ": Network Editor";
+    GUI(Network* o) : DirItem(kMenu), owner_(o) {
       canvas_.Style.NodeRounding = 0.f;
     }
 
@@ -442,7 +441,7 @@ class NodeNet : public File, public iface::Node {
     void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
 
    private:
-    NodeNet* owner_;
+    Network* owner_;
     ImNodes::CanvasState canvas_;
 
     // permanentized params
@@ -458,7 +457,7 @@ class NodeNet : public File, public iface::Node {
   // History interface implementation
   class History : public iface::SimpleHistory<> {
    public:
-    History(NodeNet* o) : owner_(o) { }
+    History(Network* o) : owner_(o) { }
 
     void AddNodeIf(std::unique_ptr<NodeHolder>&& h) noexcept {
       if (!h) return;
@@ -473,43 +472,43 @@ class NodeNet : public File, public iface::Node {
     void Unlink(ConnList&& conns) noexcept;
 
    private:
-    NodeNet* owner_;
+    Network* owner_;
 
     class LinkSwapCommand;
     class SwapCommand;
   } history_;
 
 
-  // an interface for nodes depends on NodeNet
+  // an interface for nodes depends on Network
   class InternalNode {
    public:
     InternalNode() = default;
     virtual ~InternalNode() = default;
 
-    // called when this is inserted to the NodeNet
-    virtual void Setup(NodeNet*) noexcept { }
+    // called when this is inserted to the Network
+    virtual void Setup(Network*) noexcept { }
 
-    // called when this is removed from the NodeNet
-    virtual void Teardown(NodeNet*) noexcept { }
+    // called when this is removed from the Network
+    virtual void Teardown(Network*) noexcept { }
   };
 
 
-  // common implementation for IO socks of NodeNet
+  // common implementation for IO socks of Network
   // T must be InSock or OutSock
   template <typename T>
   class AbstractIONode : public File, public Node, public InternalNode {
    public:
-    // sock interface for NodeNet IO
+    // sock interface for Network IO
     class SharedSock : public T {
      public:
-      SharedSock(NodeNet* owner, std::string_view name) noexcept : T(owner, name) {
+      SharedSock(Network* owner, std::string_view name) noexcept : T(owner, name) {
       }
 
       // called when new AbstractIONode which has the same name is added
       virtual void Attach(AbstractIONode* n) noexcept = 0;
 
       // called when AbstractIONode which has the same name is deleted
-      // returning false can remove this socket from NodeNet
+      // returning false can remove this socket from Network
       virtual bool Detach(AbstractIONode* n) noexcept = 0;
     };
 
@@ -519,8 +518,8 @@ class NodeNet : public File, public iface::Node {
     }
 
     // attaches this node to the socket which has the same name,
-    // or adds new one to NodeNet if there's no such socket
-    void Setup(NodeNet* owner) noexcept override {
+    // or adds new one to Network if there's no such socket
+    void Setup(Network* owner) noexcept override {
       owner_ = owner;
 
       auto& list = GetList(owner);
@@ -541,7 +540,7 @@ class NodeNet : public File, public iface::Node {
     }
     // detaches this node from the socket which has the same name
     // removes the socket if it's requested
-    void Teardown(NodeNet* owner) noexcept override {
+    void Teardown(Network* owner) noexcept override {
       auto& list = GetList(owner);
       if (ctx_sock_->Detach(this)) {
         auto itr = std::find(list.begin(), list.end(), ctx_sock_);
@@ -558,7 +557,7 @@ class NodeNet : public File, public iface::Node {
    protected:
     std::string name_;
 
-    NodeNet* owner_ = nullptr;
+    Network* owner_ = nullptr;
 
     std::shared_ptr<SharedSock> ctx_sock_;
 
@@ -566,18 +565,18 @@ class NodeNet : public File, public iface::Node {
     using Node::out_;
 
 
-    // returns a reference of target socket list from NodeNet
-    virtual std::vector<std::shared_ptr<T>>& GetList(NodeNet*) const noexcept = 0;
+    // returns a reference of target socket list from Network
+    virtual std::vector<std::shared_ptr<T>>& GetList(Network*) const noexcept = 0;
 
-    // creates new socket for NodeNet
-    virtual std::shared_ptr<SharedSock> CreateSock(NodeNet*, std::string_view) const noexcept = 0;
+    // creates new socket for Network
+    virtual std::shared_ptr<SharedSock> CreateSock(Network*, std::string_view) const noexcept = 0;
   };
 
-  // A Node that emits input provided to NodeNet
+  // A Node that emits input provided to Network
   class InputNode : public AbstractIONode<InSock> {
    public:
     static inline TypeInfo type_ = TypeInfo::New<InputNode>(
-        "NodeNet_InputNode", "input emitter in NodeNet", {});
+        "Node/Network/Input", "input emitter in Node/Network", {});
 
     InputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
         AbstractIONode(&type_, env, name) {
@@ -597,13 +596,13 @@ class NodeNet : public File, public iface::Node {
     void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
    private:
-    std::vector<std::shared_ptr<InSock>>& GetList(NodeNet* owner) const noexcept override {
+    std::vector<std::shared_ptr<InSock>>& GetList(Network* owner) const noexcept override {
       return owner->node_in_();
     }
-    std::shared_ptr<SharedSock> CreateSock(NodeNet* o, std::string_view n) const noexcept override {
+    std::shared_ptr<SharedSock> CreateSock(Network* o, std::string_view n) const noexcept override {
       class Sock final : public SharedSock {
        public:
-        Sock(NodeNet* o, std::string_view n) : SharedSock(o, n) {
+        Sock(Network* o, std::string_view n) : SharedSock(o, n) {
         }
         void Attach(AbstractIONode* n) noexcept override {
           nodes_.insert(n);
@@ -622,11 +621,11 @@ class NodeNet : public File, public iface::Node {
     }
   };
 
-  // A Node that receives an output for NodeNet
+  // A Node that receives an output for Network
   class OutputNode : public AbstractIONode<OutSock> {
    public:
     static inline TypeInfo type_ = TypeInfo::New<OutputNode>(
-        "NodeNet_OutputNode", "output receiver in NodeNet", {});
+        "Node/Network/Output", "output receiver in Node/Network", {});
 
     OutputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
         AbstractIONode(&type_, env, name), life_(std::make_shared<std::monostate>()) {
@@ -657,13 +656,13 @@ class NodeNet : public File, public iface::Node {
    private:
     std::shared_ptr<std::monostate> life_;
 
-    std::vector<std::shared_ptr<OutSock>>& GetList(NodeNet* owner) const noexcept override {
+    std::vector<std::shared_ptr<OutSock>>& GetList(Network* owner) const noexcept override {
       return owner->node_out_();
     }
-    std::shared_ptr<SharedSock> CreateSock(NodeNet* o, std::string_view n) const noexcept override {
+    std::shared_ptr<SharedSock> CreateSock(Network* o, std::string_view n) const noexcept override {
       class Sock final : public SharedSock {
        public:
-        Sock(NodeNet* o, std::string_view n) : SharedSock(o, n) {
+        Sock(Network* o, std::string_view n) : SharedSock(o, n) {
         }
         void Attach(AbstractIONode*) noexcept override { ++refcnt_; }
         bool Detach(AbstractIONode*) noexcept override { return !--refcnt_; }
@@ -674,7 +673,7 @@ class NodeNet : public File, public iface::Node {
     }
   };
 };
-void NodeNet::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+void Network::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   const auto em   = ImGui::GetFontSize();
   const auto line = ImGui::GetCursorPosY();
   ImGui::NewLine();
@@ -721,16 +720,16 @@ void NodeNet::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   }
   ImGui::EndGroup();
 
-  static const char* title = "NodeNet";
+  static const char* title = "Network";
   const auto w  = ImGui::GetItemRectSize().x;
   const auto tw = ImGui::CalcTextSize(title).x;
   if (w > tw) {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w-tw)/2);
   }
   ImGui::SetCursorPosY(line);
-  ImGui::TextUnformatted("NodeNet");
+  ImGui::TextUnformatted("Network");
 }
-void NodeNet::NodeHolder::UpdateWindow(RefStack& ref) noexcept {
+void Network::NodeHolder::UpdateWindow(RefStack& ref) noexcept {
   ref.Push({std::to_string(id_), file_.get()});
   ImGui::PushID(file_.get());
 
@@ -739,7 +738,7 @@ void NodeNet::NodeHolder::UpdateWindow(RefStack& ref) noexcept {
   ImGui::PopID();
   ref.Pop();
 }
-void NodeNet::NodeHolder::UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
+void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
   ref.Push({std::to_string(id_), file_.get()});
   ImGui::PushID(file_.get());
 
@@ -772,7 +771,7 @@ void NodeNet::NodeHolder::UpdateNode(NodeNet* owner, RefStack& ref) noexcept {
   ImGui::PopID();
   ref.Pop();
 }
-void NodeNet::GUI::Update(RefStack& ref) noexcept {
+void Network::GUI::Update(RefStack& ref) noexcept {
   for (auto& h : owner_->nodes_) {
     h->UpdateWindow(ref);
   }
@@ -789,10 +788,10 @@ void NodeNet::GUI::Update(RefStack& ref) noexcept {
   }
   ImGui::End();
 }
-void NodeNet::GUI::UpdateMenu(RefStack&) noexcept {
-  ImGui::MenuItem("NodeNet Editor", nullptr, &shown_);
+void Network::GUI::UpdateMenu(RefStack&) noexcept {
+  ImGui::MenuItem("Network Editor", nullptr, &shown_);
 }
-void NodeNet::GUI::UpdateCanvas(RefStack& ref) noexcept {
+void Network::GUI::UpdateCanvas(RefStack& ref) noexcept {
   ImNodes::BeginCanvas(&canvas_);
   gui::NodeCanvasSetZoom();
 
@@ -884,7 +883,7 @@ void NodeNet::GUI::UpdateCanvas(RefStack& ref) noexcept {
   ImNodes::EndCanvas();
 }
 template <typename T, typename U>
-void NodeNet::GUI::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
+void Network::GUI::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
   constexpr auto kFlags =
       ImGuiInputTextFlags_EnterReturnsTrue |
       ImGuiInputTextFlags_AutoSelectAll;
@@ -914,12 +913,12 @@ void NodeNet::GUI::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
     ImGui::CloseCurrentPopup();
   }
 }
-void NodeNet::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
-  auto owner = ref.FindParent<NodeNet>();
+void Network::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  auto owner = ref.FindParent<Network>();
   if (!owner) {
     ImGui::TextUnformatted("INPUT");
     ImGui::TextUnformatted("ERROR X(");
-    ImGui::TextUnformatted("This node must be used at inside of NodeNet");
+    ImGui::TextUnformatted("This node must be used at inside of Network");
     return;
   }
 
@@ -931,12 +930,12 @@ void NodeNet::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) 
     ImNodes::EndSlot();
   }
 }
-void NodeNet::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
-  auto owner = ref.FindParent<NodeNet>();
+void Network::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  auto owner = ref.FindParent<Network>();
   if (!owner) {
     ImGui::TextUnformatted("OUTPUT");
     ImGui::TextUnformatted("ERROR X(");
-    ImGui::TextUnformatted("This node must be used at inside of NodeNet");
+    ImGui::TextUnformatted("This node must be used at inside of Network");
     return;
   }
 
@@ -950,7 +949,7 @@ void NodeNet::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&)
 }
 
 // a command for link creation or removal
-class NodeNet::History::LinkSwapCommand : public Command {
+class Network::History::LinkSwapCommand : public Command {
  public:
   enum Type { kLink, kUnlink, };
 
@@ -989,22 +988,22 @@ class NodeNet::History::LinkSwapCommand : public Command {
   Type     type_;
   ConnList conns_;
 };
-void NodeNet::History::Link(ConnList&& conns) noexcept {
+void Network::History::Link(ConnList&& conns) noexcept {
   Queue(std::make_unique<LinkSwapCommand>(LinkSwapCommand::kLink, std::move(conns)));
 }
-void NodeNet::History::Unlink(ConnList&& conns) noexcept {
+void Network::History::Unlink(ConnList&& conns) noexcept {
   Queue(std::make_unique<LinkSwapCommand>(LinkSwapCommand::kUnlink, std::move(conns)));
 }
 
 // a command for node creation or removal
-class NodeNet::History::SwapCommand : public Command {
+class Network::History::SwapCommand : public Command {
  public:
-  SwapCommand(NodeNet* o, NodeHolderList&& h = {}) :
+  SwapCommand(Network* o, NodeHolderList&& h = {}) :
       owner_(o), holders_(std::move(h)) {
     refs_.reserve(holders_.size());
     for (auto& holder : holders_) refs_.push_back(holder.get());
   }
-  SwapCommand(NodeNet* o, NodeHolderRefList&& refs = {}) :
+  SwapCommand(Network* o, NodeHolderRefList&& refs = {}) :
       owner_(o), refs_(std::move(refs)) {
   }
 
@@ -1066,29 +1065,28 @@ class NodeNet::History::SwapCommand : public Command {
     links_.emplace(LinkSwapCommand::kUnlink, std::move(conns));
   }
 
-  NodeNet*                       owner_;
+  Network*                       owner_;
   NodeHolderList                 holders_;
   NodeHolderRefList              refs_;
   std::optional<LinkSwapCommand> links_;
 };
-void NodeNet::History::AddNodes(NodeHolderList&& h) noexcept {
+void Network::History::AddNodes(NodeHolderList&& h) noexcept {
   Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
 }
-void NodeNet::History::RemoveNodes(NodeHolderRefList&& h) noexcept {
+void Network::History::RemoveNodes(NodeHolderRefList&& h) noexcept {
   Queue(std::make_unique<SwapCommand>(owner_, std::move(h)));
 }
 
 
-// RefNode allows other nodes to be treated as lambda
-class RefNode : public File, public iface::GUI, public iface::Node {
+class Ref : public File, public iface::GUI, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<RefNode>(
-      "RefNode", "uses node as lambda",
+  static inline TypeInfo type_ = TypeInfo::New<Ref>(
+      "Node/Ref", "allows other nodes to be treated as lambda",
       {typeid(iface::GUI), typeid(iface::Node)});
 
   using Life = std::weak_ptr<std::monostate>;
 
-  RefNode(const std::shared_ptr<Env>& env,
+  Ref(const std::shared_ptr<Env>& env,
           std::string_view path = "",
           const std::vector<std::string>& in  = {},
           const std::vector<std::string>& out = {}) noexcept :
@@ -1108,7 +1106,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
     auto str = msgpack::find(obj, "path"s).as<std::string>();
     auto in  = msgpack::find(obj, "in"s).as<std::vector<std::string>>();
     auto out = msgpack::find(obj, "out"s).as<std::vector<std::string>>();
-    return std::make_unique<RefNode>(env, str, std::move(in), std::move(out));
+    return std::make_unique<Ref>(env, str, std::move(in), std::move(out));
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(3);
@@ -1125,7 +1123,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
     pk.pack(path_);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<RefNode>(env, path_);
+    return std::make_unique<Ref>(env, path_);
   }
 
   void Update(RefStack& ref) noexcept override {
@@ -1240,7 +1238,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
   // A watcher for a context of lambda execution
   class LambdaContext final : public Context {
    public:
-    LambdaContext(RefNode* o, Node* node, const std::shared_ptr<Context>& outctx) :
+    LambdaContext(Ref* o, Node* node, const std::shared_ptr<Context>& outctx) :
         owner_(o), life_(o->life_), node_(node), outctx_(outctx) {
     }
     void ObserveSend(const OutSock& sock, const Value& v) noexcept override {
@@ -1256,7 +1254,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
     }
 
    private:
-    RefNode* owner_;
+    Ref* owner_;
 
     std::weak_ptr<std::monostate> life_;
 
@@ -1269,7 +1267,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
   // An input pin which redirects to the entity
   class Input : public InSock {
    public:
-    Input(RefNode* o, std::string_view n) :
+    Input(Ref* o, std::string_view n) :
         InSock(o, n), owner_(o), life_(o->life_) {
     }
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
@@ -1292,7 +1290,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
     }
 
    private:
-    RefNode* owner_;
+    Ref* owner_;
 
     std::weak_ptr<std::monostate> life_;
 
@@ -1301,7 +1299,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
     class Data final : public Context::Data {
      public:
       Data() = delete;
-      Data(RefNode* o, Node* node, const std::shared_ptr<Context>& ctx) noexcept :
+      Data(Ref* o, Node* node, const std::shared_ptr<Context>& ctx) noexcept :
           ctx_(std::make_unique<LambdaContext>(o, node, ctx)) {
       }
 
@@ -1312,7 +1310,7 @@ class RefNode : public File, public iface::GUI, public iface::Node {
     };
   };
 };
-void RefNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+void Ref::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   ImGui::TextUnformatted("REF");
 
   const auto line = ImGui::GetCursorPosY();
@@ -1347,7 +1345,7 @@ void RefNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   }
   gui::NodeCanvasSetZoom();
 }
-void RefNode::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+void Ref::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   if (ImGui::MenuItem("Re-sync")) {
     Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
   }
@@ -1359,7 +1357,7 @@ void RefNode::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcep
     ImGui::EndMenu();
   }
 }
-void RefNode::UpdateEntity(RefStack& ref, File* f) noexcept {
+void Ref::UpdateEntity(RefStack& ref, File* f) noexcept {
   if (f == this) return;
   const auto em = ImGui::GetFontSize();
 

@@ -47,7 +47,6 @@ target_sources(kingtaker
   PRIVATE
     kingtaker.hh
 
-    generic.cc
     kingtaker.cc
     luajit.cc
     main.cc
