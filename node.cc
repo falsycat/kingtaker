@@ -30,11 +30,13 @@
 namespace kingtaker {
 namespace {
 
-class Network : public File, public iface::Node {
+class Network : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Network>(
       "Node/Network", "manages multiple Nodes and connections between them",
       {typeid(iface::DirItem), typeid(iface::History)});
+
+  static inline const std::string kIdSuffix = ": Network Editor";
 
   using IndexMap = std::unordered_map<Node*, size_t>;
   using NodeMap  = std::vector<Node*>;
@@ -69,98 +71,13 @@ class Network : public File, public iface::Node {
       assert(file_);
       assert(entity_);
     }
-    NodeHolder(const NodeHolder&) = delete;
-    NodeHolder(NodeHolder&&) = delete;
-    NodeHolder& operator=(const NodeHolder&) = delete;
-    NodeHolder& operator=(NodeHolder&&) = delete;
 
-    static std::unique_ptr<NodeHolder> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-      try {
-        const size_t id = msgpack::find(obj, "id"s).as<size_t>();
+    static std::unique_ptr<NodeHolder> Deserialize(
+        const msgpack::object&, const std::shared_ptr<Env>&);
+    void DeserializeLink(const msgpack::object&, const NodeMap&);
+    void Serialize(Packer&) const noexcept;
+    void SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept;
 
-        auto f = File::Deserialize(msgpack::find(obj, "file"s), env);
-        auto n = File::iface<Node>(f.get());
-        if (!n) throw DeserializeException("it's not node");
-
-        std::pair<float, float> p;
-        msgpack::find(obj, "pos"s).convert(p);
-
-        auto h = std::make_unique<NodeHolder>(
-            id, std::move(f), n, ImVec2 {p.first, p.second});
-        try {
-          h->select_ = msgpack::find(obj, "select"s).as<bool>();
-        } catch (msgpack::type_error&) {
-        }
-        return h;
-
-      } catch (msgpack::type_error&) {
-        throw DeserializeException("broken NodeHolder structure");
-      }
-    }
-    void DeserializeLink(const msgpack::object& obj, const NodeMap& nmap) {
-      try {
-        if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
-        for (size_t i = 0; i < obj.via.map.size; ++i) {
-          auto  out_name = obj.via.map.ptr[i].key.as<std::string>();
-          auto& out_dst  = obj.via.map.ptr[i].val;
-
-          auto out = entity_->FindOut(out_name);
-          if (!out) continue;
-
-          for (size_t j = 0; j < out_dst.via.array.size; ++j) {
-            std::pair<size_t, std::string> conn;
-            if (!out_dst.via.array.ptr[j].convert_if_not_nil(conn)) {
-              continue;
-            }
-            if (conn.first >= nmap.size()) throw DeserializeException("missing node");
-
-            auto in = nmap[conn.first]->FindIn(conn.second);
-            if (!in) continue;
-
-            Node::Link(out, in);
-          }
-        }
-      } catch (msgpack::type_error&) {
-        throw DeserializeException("broken NodeHolder link");
-      }
-    }
-    void Serialize(Packer& pk) const noexcept {
-      pk.pack_map(4);
-
-      pk.pack("id"s);
-      pk.pack(id_);
-
-      pk.pack("file"s);
-      file_->SerializeWithTypeInfo(pk);
-
-      pk.pack("pos"s);
-      pk.pack(std::make_pair(pos_.x, pos_.y));
-
-      pk.pack("select"s);
-      pk.pack(select_);
-    }
-    void SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept {
-      pk.pack_map(static_cast<uint32_t>(entity_->out().size()));
-      for (auto out : entity_->out()) {
-        out->CleanConns();
-        std::vector<std::shared_ptr<InSock>> socks;
-        for (auto& inw : out->dst()) {
-          auto in = inw.lock();
-          if (in) socks.push_back(in);
-        }
-
-        pk.pack(out->name());
-        pk.pack_array(static_cast<uint32_t>(socks.size()));
-        for (auto& in : socks) {
-          auto itr = idxmap.find(&in->owner());
-          if (itr != idxmap.end()) {
-            pk.pack(std::make_tuple(itr->second, in->name()));
-          } else {
-            pk.pack_nil();
-          }
-        }
-      }
-    }
     std::unique_ptr<NodeHolder> Clone(size_t id, const std::shared_ptr<Env>& env) const noexcept {
       return NodeHolder::Create(id, file_->Clone(env));
     }
@@ -207,109 +124,21 @@ class Network : public File, public iface::Node {
           Time lastmod = Clock::now(),
           NodeHolderList&& nodes = {},
           size_t next = 0) noexcept :
-      File(&type_, env), Node(kNone),
+      File(&type_, env), DirItem(DirItem::kMenu), Node(Node::kNone),
       ctx_(std::make_shared<Context>()),
       lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
-      gui_(this), history_(this) {
+      history_(this) {
+    canvas_.Style.NodeRounding = 0.f;
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    try {
-      const auto lastmod = Clock::from_time_t(msgpack::find(obj, "lastMod"s).as<time_t>());
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object&, const std::shared_ptr<Env>&);
+  void Serialize(Packer&) const noexcept override;
 
-      const auto next = msgpack::find(obj, "nextId"s).as<size_t>();
+  void DeserializeGUI(const msgpack::object&) noexcept;
+  void SerializeGUI(Packer&) const noexcept;
 
-      auto& obj_nodes = msgpack::find(obj, "nodes"s);
-      if (obj_nodes.type != msgpack::type::ARRAY) throw msgpack::type_error();
-
-      NodeMap nmap(obj_nodes.via.array.size);
-      NodeHolderList nodes(obj_nodes.via.array.size);
-
-      for (size_t i = 0; i < obj_nodes.via.array.size; ++i) {
-        nodes[i] = NodeHolder::Deserialize(obj_nodes.via.array.ptr[i], env);
-        nmap[i]  = &nodes[i]->entity();
-
-        if (nodes[i]->id() == next) {
-          throw DeserializeException("nodeId conflict");
-        }
-      }
-
-      auto& obj_links = msgpack::find(obj, "links"s);
-      if (obj_links.type != msgpack::type::ARRAY) throw msgpack::type_error();
-      if (obj_links.via.array.size > nmap.size()) {
-        throw DeserializeException("broken Network");
-      }
-      for (size_t i = 0; i < obj_links.via.array.size; ++i) {
-        nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
-      }
-
-      auto ret = std::make_unique<Network>(env, lastmod, std::move(nodes), next);
-      ret->gui_.Deserialize(msgpack::find(obj, "gui"s));
-      for (auto& h : ret->nodes_) h->Setup(ret.get());
-      return ret;
-
-    } catch (msgpack::type_error&) {
-      throw DeserializeException("broken data structure");
-    }
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    std::unordered_map<Node*, size_t> idxmap;
-
-    pk.pack_map(5);
-
-    pk.pack("lastMod"s);
-    pk.pack(Clock::to_time_t(lastmod_));
-
-    pk.pack("nodes"s);
-    pk.pack_array(static_cast<uint32_t>(nodes_.size()));
-    for (size_t i = 0; i < nodes_.size(); ++i) {
-      auto& h = nodes_[i];
-      h->Serialize(pk);
-      idxmap[&h->entity()] = i;
-    }
-
-    pk.pack("links"s);
-    pk.pack_array(static_cast<uint32_t>(nodes_.size()));
-    for (auto& h : nodes_) {
-      h->SerializeLink(pk, idxmap);
-    }
-
-    pk.pack("nextId"s);
-    pk.pack(next_id_);
-
-    pk.pack("gui"s);
-    gui_.Serialize(pk);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    std::unordered_map<Node*, Node*> nmap;
-
-    size_t id = 0;
-
-    NodeHolderList nodes;
-    nodes.reserve(nodes_.size());
-    for (auto& h : nodes_) {
-      nodes.push_back(h->Clone(id++, env));
-      nmap[&h->entity()] = &nodes.back()->entity();
-    }
-    for (auto& h : nodes) {
-      auto srcn = &h->entity();
-      auto dstn = nmap[srcn];
-
-      for (auto srcoutsock : srcn->out()) {
-        auto dstoutsock = dstn->FindOut(srcoutsock->name());
-        if (!dstoutsock) continue;
-
-        for (auto& w_srcinsock : srcoutsock->dst()) {
-          auto srcinsock = w_srcinsock.lock();
-          auto dstinsock = nmap[&srcinsock->owner()]->FindIn(srcinsock->name());
-          if (!dstinsock) continue;
-
-          Node::Link(dstoutsock, dstinsock);
-        }
-      }
-    }
-    return std::make_unique<Network>(env, Clock::now(), std::move(nodes));
-  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override;
 
   File* Find(std::string_view name) const noexcept override {
     try {
@@ -327,10 +156,24 @@ class Network : public File, public iface::Node {
       return nullptr;
     }
   }
+  void Focus(RefStack& ref, NodeHolder* target) noexcept {
+    for (auto& h : nodes_) h->Unselect();
+    target->Select();
 
-  void Update(RefStack& ref, Event& ev) noexcept override {
-    gui_.Update(ref, ev);
+    // adjust offset to make the node displayed in center
+    canvas_.Offset = (target->pos()*canvas_.Zoom - canvas_size_/2.f)*-1.f;
+
+    // focus the editor
+    const auto id = ref.Stringify() + kIdSuffix;
+    ImGui::SetWindowFocus(id.c_str());
+    shown_ = true;
   }
+
+  void Update(RefStack& ref, Event& ev) noexcept override;
+  void UpdateMenu(RefStack&) noexcept;
+  void UpdateCanvas(RefStack&) noexcept;
+  template <typename T, typename U>
+  void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   Time lastModified() const noexcept override {
@@ -343,11 +186,19 @@ class Network : public File, public iface::Node {
 
  private:
   std::shared_ptr<Context> ctx_;
+  ImNodes::CanvasState canvas_;
 
   // permanentized params
   Time           lastmod_;
   NodeHolderList nodes_;
   size_t         next_id_ = 0;
+
+  bool shown_ = false;
+
+  // volatile params
+  std::string io_new_name_;
+
+  ImVec2 canvas_size_;
 
 
   // MSVC doesn't allow inner class to access protected members came from super class.
@@ -372,78 +223,6 @@ class Network : public File, public iface::Node {
     const auto id = static_cast<size_t>(std::stoll(std::string(name), &pos));
     return name.size() == pos? FindHolder(id): nullptr;
   }
-
-
-  // GUI implementation for Network
-  class GUI final : public iface::DirItem {
-   public:
-    static inline const std::string kIdSuffix = ": Network Editor";
-    GUI(Network* o) : DirItem(kMenu), owner_(o) {
-      canvas_.Style.NodeRounding = 0.f;
-    }
-
-    void Serialize(Packer& pk) const noexcept {
-      pk.pack_map(3);
-
-      pk.pack("shown"s);
-      pk.pack(shown_);
-
-      pk.pack("zoom"s);
-      pk.pack(canvas_.Zoom);
-
-      pk.pack("offset"s);
-      pk.pack(std::make_tuple(canvas_.Offset.x, canvas_.Offset.y));
-    }
-    void Deserialize(const msgpack::object& obj) noexcept {
-      try {
-        shown_ = msgpack::find(obj, "shown"s).as<bool>();
-
-        canvas_.Zoom = msgpack::find(obj, "zoom"s).as<float>();
-
-        std::pair<float, float> offset;
-        msgpack::find(obj, "offset"s).convert(offset);
-        canvas_.Offset = {offset.first, offset.second};
-
-      } catch (msgpack::type_error&) {
-        shown_         = false;
-        canvas_.Zoom   = 1.f;
-        canvas_.Offset = {0, 0};
-      }
-    }
-
-    void Focus(RefStack& self, NodeHolder* target) noexcept {
-      for (auto& h : owner_->nodes_) h->Unselect();
-      target->Select();
-
-      // adjust offset to make the node displayed in center
-      canvas_.Offset = (target->pos()*canvas_.Zoom - canvas_size_/2.f)*-1.f;
-
-      // focus the editor
-      const auto id = self.Stringify() + kIdSuffix;
-      ImGui::SetWindowFocus(id.c_str());
-      shown_ = true;
-    }
-
-    void Update(RefStack&, Event&) noexcept;
-    void UpdateMenu(RefStack&) noexcept;
-    void UpdateCanvas(RefStack&) noexcept;
-
-    // display input popup for creating new IO pins
-    template <typename T, typename U>
-    void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
-
-   private:
-    Network* owner_;
-    ImNodes::CanvasState canvas_;
-
-    // permanentized params
-    bool shown_ = false;
-
-    // volatile params
-    std::string io_name_;
-
-    ImVec2 canvas_size_;
-  } gui_;
 
 
   // History interface implementation
@@ -504,7 +283,6 @@ class Network : public File, public iface::Node {
       virtual bool Detach(AbstractIONode* n) noexcept = 0;
     };
 
-
     AbstractIONode(TypeInfo* t, const std::shared_ptr<Env>& env, std::string_view name) :
         File(t, env), Node(kNone), name_(name) {
     }
@@ -556,7 +334,6 @@ class Network : public File, public iface::Node {
     using Node::in_;
     using Node::out_;
 
-
     // returns a reference of target socket list from Network
     virtual std::vector<std::shared_ptr<T>>& GetList(Network*) const noexcept = 0;
 
@@ -594,20 +371,18 @@ class Network : public File, public iface::Node {
     std::shared_ptr<SharedSock> CreateSock(Network* o, std::string_view n) const noexcept override {
       class Sock final : public SharedSock {
        public:
-        Sock(Network* o, std::string_view n) : SharedSock(o, n) {
-        }
+        Sock(Network* o, std::string_view n) : SharedSock(o, n) { }
         void Attach(AbstractIONode* n) noexcept override {
-          nodes_.insert(n);
+          n_.insert(n);
         }
         bool Detach(AbstractIONode* n) noexcept override {
-          nodes_.erase(n);
-          return nodes_.empty();
+          n_.erase(n); return n_.empty();
         }
         void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-          for (auto n : nodes_) n->out()[0]->Send(ctx, Value(v));
+          for (auto n : n_) n->out()[0]->Send(ctx, Value(v));
         }
        private:
-        std::unordered_set<AbstractIONode*> nodes_;
+        std::unordered_set<AbstractIONode*> n_;
       };
       return std::make_shared<Sock>(o, n);
     }
@@ -665,6 +440,416 @@ class Network : public File, public iface::Node {
     }
   };
 };
+
+std::unique_ptr<File> Network::Deserialize(
+    const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+  try {
+    const auto lastmod = msgpack::find(obj, "lastmod"s).as<Time>();
+
+    const auto next = msgpack::find(obj, "nextId"s).as<size_t>();
+
+    auto& obj_nodes = msgpack::find(obj, "nodes"s);
+    if (obj_nodes.type != msgpack::type::ARRAY) throw msgpack::type_error();
+
+    NodeMap nmap(obj_nodes.via.array.size);
+    NodeHolderList nodes(obj_nodes.via.array.size);
+
+    for (size_t i = 0; i < obj_nodes.via.array.size; ++i) {
+      nodes[i] = NodeHolder::Deserialize(obj_nodes.via.array.ptr[i], env);
+      nmap[i]  = &nodes[i]->entity();
+
+      if (nodes[i]->id() == next) {
+        throw DeserializeException("nodeId conflict");
+      }
+    }
+
+    auto& obj_links = msgpack::find(obj, "links"s);
+    if (obj_links.type != msgpack::type::ARRAY) throw msgpack::type_error();
+    if (obj_links.via.array.size > nmap.size()) {
+      throw DeserializeException("broken Network");
+    }
+    for (size_t i = 0; i < obj_links.via.array.size; ++i) {
+      nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
+    }
+
+    auto ret = std::make_unique<Network>(env, lastmod, std::move(nodes), next);
+    ret->DeserializeGUI(msgpack::find(obj, "gui"s));
+    for (auto& h : ret->nodes_) h->Setup(ret.get());
+    return ret;
+
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken data structure");
+  }
+}
+void Network::Serialize(Packer& pk) const noexcept {
+  std::unordered_map<Node*, size_t> idxmap;
+
+  pk.pack_map(5);
+
+  pk.pack("lastmod"s);
+  pk.pack(lastmod_);
+
+  pk.pack("nodes"s);
+  pk.pack_array(static_cast<uint32_t>(nodes_.size()));
+  for (size_t i = 0; i < nodes_.size(); ++i) {
+    auto& h = nodes_[i];
+    h->Serialize(pk);
+    idxmap[&h->entity()] = i;
+  }
+
+  pk.pack("links"s);
+  pk.pack_array(static_cast<uint32_t>(nodes_.size()));
+  for (auto& h : nodes_) {
+    h->SerializeLink(pk, idxmap);
+  }
+
+  pk.pack("nextId"s);
+  pk.pack(next_id_);
+
+  pk.pack("gui"s);
+  SerializeGUI(pk);
+}
+
+void Network::DeserializeGUI(const msgpack::object& obj) noexcept {
+  try {
+    shown_ = msgpack::find(obj, "shown"s).as<bool>();
+
+    canvas_.Zoom = msgpack::find(obj, "zoom"s).as<float>();
+
+    std::pair<float, float> offset;
+    msgpack::find(obj, "offset"s).convert(offset);
+    canvas_.Offset = {offset.first, offset.second};
+
+  } catch (msgpack::type_error&) {
+    shown_         = false;
+    canvas_.Zoom   = 1.f;
+    canvas_.Offset = {0, 0};
+  }
+}
+void Network::SerializeGUI(Packer& pk) const noexcept {
+  pk.pack_map(3);
+
+  pk.pack("shown"s);
+  pk.pack(shown_);
+
+  pk.pack("zoom"s);
+  pk.pack(canvas_.Zoom);
+
+  pk.pack("offset"s);
+  pk.pack(std::make_tuple(canvas_.Offset.x, canvas_.Offset.y));
+}
+
+std::unique_ptr<Network::NodeHolder> Network::NodeHolder::Deserialize(
+    const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+  try {
+    const size_t id = msgpack::find(obj, "id"s).as<size_t>();
+
+    auto f = File::Deserialize(msgpack::find(obj, "file"s), env);
+    auto n = File::iface<Node>(f.get());
+    if (!n) throw DeserializeException("it's not node");
+
+    std::pair<float, float> p;
+    msgpack::find(obj, "pos"s).convert(p);
+
+    auto h = std::make_unique<NodeHolder>(
+        id, std::move(f), n, ImVec2 {p.first, p.second});
+    try {
+      h->select_ = msgpack::find(obj, "select"s).as<bool>();
+    } catch (msgpack::type_error&) {
+    }
+    return h;
+
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken NodeHolder structure");
+  }
+}
+void Network::NodeHolder::Serialize(Packer& pk) const noexcept {
+  pk.pack_map(4);
+
+  pk.pack("id"s);
+  pk.pack(id_);
+
+  pk.pack("file"s);
+  file_->SerializeWithTypeInfo(pk);
+
+  pk.pack("pos"s);
+  pk.pack(std::make_pair(pos_.x, pos_.y));
+
+  pk.pack("select"s);
+  pk.pack(select_);
+}
+
+void Network::NodeHolder::DeserializeLink(const msgpack::object& obj, const NodeMap& nmap) {
+  try {
+    if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
+    for (size_t i = 0; i < obj.via.map.size; ++i) {
+      auto  out_name = obj.via.map.ptr[i].key.as<std::string>();
+      auto& out_dst  = obj.via.map.ptr[i].val;
+
+      auto out = entity_->FindOut(out_name);
+      if (!out) continue;
+
+      for (size_t j = 0; j < out_dst.via.array.size; ++j) {
+        std::pair<size_t, std::string> conn;
+        if (!out_dst.via.array.ptr[j].convert_if_not_nil(conn)) {
+          continue;
+        }
+        if (conn.first >= nmap.size()) throw DeserializeException("missing node");
+
+        auto in = nmap[conn.first]->FindIn(conn.second);
+        if (!in) continue;
+
+        Node::Link(out, in);
+      }
+    }
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken NodeHolder link");
+  }
+}
+void Network::NodeHolder::SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept {
+  pk.pack_map(static_cast<uint32_t>(entity_->out().size()));
+  for (auto out : entity_->out()) {
+    out->CleanConns();
+    std::vector<std::shared_ptr<InSock>> socks;
+    for (auto& inw : out->dst()) {
+      auto in = inw.lock();
+      if (in) socks.push_back(in);
+    }
+
+    pk.pack(out->name());
+    pk.pack_array(static_cast<uint32_t>(socks.size()));
+    for (auto& in : socks) {
+      auto itr = idxmap.find(&in->owner());
+      if (itr != idxmap.end()) {
+        pk.pack(std::make_tuple(itr->second, in->name()));
+      } else {
+        pk.pack_nil();
+      }
+    }
+  }
+}
+
+std::unique_ptr<File> Network::Clone(const std::shared_ptr<Env>& env) const noexcept {
+  std::unordered_map<Node*, Node*> nmap;
+
+  size_t id = 0;
+
+  NodeHolderList nodes;
+  nodes.reserve(nodes_.size());
+  for (auto& h : nodes_) {
+    nodes.push_back(h->Clone(id++, env));
+    nmap[&h->entity()] = &nodes.back()->entity();
+  }
+  for (auto& h : nodes) {
+    auto srcn = &h->entity();
+    auto dstn = nmap[srcn];
+
+    for (auto srcoutsock : srcn->out()) {
+      auto dstoutsock = dstn->FindOut(srcoutsock->name());
+      if (!dstoutsock) continue;
+
+      for (auto& w_srcinsock : srcoutsock->dst()) {
+        auto srcinsock = w_srcinsock.lock();
+        auto dstinsock = nmap[&srcinsock->owner()]->FindIn(srcinsock->name());
+        if (!dstinsock) continue;
+
+        Node::Link(dstoutsock, dstinsock);
+      }
+    }
+  }
+  return std::make_unique<Network>(env, Clock::now(), std::move(nodes));
+}
+
+void Network::Update(RefStack& ref, Event& ev) noexcept {
+  for (auto& h : nodes_) {
+    if (ev.IsFocused(&h->file())) Focus(ref, h.get());
+    h->UpdateWindow(ref, ev);
+  }
+
+  const auto id = ref.Stringify() + kIdSuffix;
+  if (ev.IsFocused(this)) {
+    ImGui::SetWindowFocus(id.c_str());
+    shown_ = true;
+  }
+
+  const auto size = ImVec2(24.f, 24.f)*ImGui::GetFontSize();
+  ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+
+  constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+  if (ImGui::Begin(id.c_str(), &shown_, kFlags)) {
+    canvas_size_ = ImGui::GetWindowSize();
+    UpdateCanvas(ref);
+  }
+  ImGui::End();
+}
+void Network::UpdateMenu(RefStack&) noexcept {
+  ImGui::MenuItem("Network Editor", nullptr, &shown_);
+}
+void Network::UpdateCanvas(RefStack& ref) noexcept {
+  ImNodes::BeginCanvas(&canvas_);
+  gui::NodeCanvasSetZoom();
+
+  gui::NodeCanvasResetZoom();
+  if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::BeginMenu("New")) {
+      for (auto& p : File::registry()) {
+        auto& t = *p.second;
+        if (!t.factory() || !t.CheckImplemented<Node>()) continue;
+        if (ImGui::MenuItem(t.name().c_str())) {
+          history_.AddNodeIf(NodeHolder::Create(next_id_++, t.Create(env())));
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip("%s", t.desc().c_str());
+        }
+      }
+      ImGui::Separator();
+      if (ImGui::BeginMenu("Input")) {
+        UpdateNewIO<InputNode>(in_);
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Output")) {
+        UpdateNewIO<OutputNode>(out_);
+        ImGui::EndMenu();
+      }
+      ImGui::EndMenu();
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Undo")) {
+      history_.Move(-1);
+    }
+    if (ImGui::MenuItem("Redo")) {
+      history_.Move(1);
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Clear history")) {
+      history_.Clear();
+    }
+    if (ImGui::MenuItem("Clear entire context")) {
+      Queue::main().Push([this]() { ctx_ = std::make_shared<Context>(); });
+    }
+    ImGui::EndPopup();
+  }
+  gui::NodeCanvasSetZoom();
+
+  for (auto& h : nodes_) {
+    h->UpdateNode(this, ref);
+  }
+
+  ConnList rm_conns;
+  for (auto& h : nodes_) {
+    auto node = &h->entity();
+    for (auto src : node->out()) {
+      for (auto w_dst : src->dst()) {
+        auto dst = w_dst.lock();
+        if (!dst) continue;
+
+        auto& srch = FindHolder(src->owner());
+        auto  srcs = src->name().c_str();
+        auto& dsth = FindHolder(dst->owner());
+        auto  dsts = dst->name().c_str();
+        if (!ImNodes::Connection(&dsth, dsts, &srch, srcs)) {
+          rm_conns.push_back({dst, src});
+        }
+      }
+    }
+  }
+  if (rm_conns.size()) {
+    history_.Unlink(std::move(rm_conns));
+  }
+
+  void* inptr;
+  void* outptr;
+  const char* srcs;
+  const char* dsts;
+  if (ImNodes::GetNewConnection(&inptr, &dsts, &outptr, &srcs)) {
+    auto dstn = reinterpret_cast<NodeHolder*>(inptr);
+    auto srcn = reinterpret_cast<NodeHolder*>(outptr);
+
+    auto src = srcn->entity().FindOut(srcs);
+    auto dst = dstn->entity().FindIn(dsts);
+    if (src && dst) history_.Link({{dst, src}});
+  }
+
+  gui::NodeCanvasResetZoom();
+  ImNodes::EndCanvas();
+}
+template <typename T, typename U>
+void Network::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
+  constexpr auto kFlags =
+      ImGuiInputTextFlags_EnterReturnsTrue |
+      ImGuiInputTextFlags_AutoSelectAll;
+
+  static const char* kHint = "enter to add...";
+
+  ImGui::SetKeyboardFocusHere();
+  const bool submit =
+      ImGui::InputTextWithHint("##newIO", kHint, &io_new_name_, kFlags);
+
+  const bool empty = io_new_name_.empty();
+  const bool dup   = list.end() !=
+      std::find_if(list.begin(), list.end(),
+                   [this](auto& e) { return e->name() == io_new_name_; });
+
+  if (empty) {
+    ImGui::Bullet();
+    ImGui::TextUnformatted("empty name");
+  }
+  if (dup) {
+    ImGui::Bullet();
+    ImGui::TextUnformatted("name duplication");
+  }
+  if (submit && !empty && !dup) {
+    history_.AddNodeIf(NodeHolder::Create(
+            next_id_++, std::make_unique<T>(env(), io_new_name_)));
+    io_new_name_ = "";
+    ImGui::CloseCurrentPopup();
+  }
+}
+void Network::NodeHolder::UpdateWindow(RefStack& ref, Event& ev) noexcept {
+  ref.Push({std::to_string(id_), file_.get()});
+  ImGui::PushID(file_.get());
+
+  file_->Update(ref, ev);
+
+  ImGui::PopID();
+  ref.Pop();
+}
+void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
+  ref.Push({std::to_string(id_), file_.get()});
+  ImGui::PushID(file_.get());
+
+  if (first_) {
+    ImNodes::AutoPositionNode(this);
+    first_ = false;
+  }
+
+  if (ImNodes::BeginNode(this, &pos_, &select_)) {
+    entity_->Update(ref, owner->ctx_);
+  }
+  ImNodes::EndNode();
+
+  gui::NodeCanvasResetZoom();
+  if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::MenuItem("Clone")) {
+      owner->history_.AddNodeIf(Clone(owner->next_id_++, owner->env()));
+    }
+    if (ImGui::MenuItem("Remove")) {
+      owner->history_.RemoveNodes({this});
+    }
+    if (entity_->flags() & Node::kMenu) {
+      ImGui::Separator();
+      entity_->UpdateMenu(ref, owner->ctx_);
+    }
+    ImGui::EndPopup();
+  }
+  gui::NodeCanvasSetZoom();
+
+  ImGui::PopID();
+  ref.Pop();
+}
+
 void Network::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   const auto em   = ImGui::GetFontSize();
   const auto line = ImGui::GetCursorPosY();
@@ -720,195 +905,6 @@ void Network::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   }
   ImGui::SetCursorPosY(line);
   ImGui::TextUnformatted("Network");
-}
-void Network::NodeHolder::UpdateWindow(RefStack& ref, Event& ev) noexcept {
-  ref.Push({std::to_string(id_), file_.get()});
-  ImGui::PushID(file_.get());
-
-  file_->Update(ref, ev);
-
-  ImGui::PopID();
-  ref.Pop();
-}
-void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
-  ref.Push({std::to_string(id_), file_.get()});
-  ImGui::PushID(file_.get());
-
-  if (first_) {
-    ImNodes::AutoPositionNode(this);
-    first_ = false;
-  }
-
-  if (ImNodes::BeginNode(this, &pos_, &select_)) {
-    entity_->Update(ref, owner->ctx_);
-  }
-  ImNodes::EndNode();
-
-  gui::NodeCanvasResetZoom();
-  if (ImGui::BeginPopupContextItem()) {
-    if (ImGui::MenuItem("Clone")) {
-      owner->history_.AddNodeIf(Clone(owner->next_id_++, owner->env()));
-    }
-    if (ImGui::MenuItem("Remove")) {
-      owner->history_.RemoveNodes({this});
-    }
-    if (entity_->flags() & Node::kMenu) {
-      ImGui::Separator();
-      entity_->UpdateMenu(ref, owner->ctx_);
-    }
-    ImGui::EndPopup();
-  }
-  gui::NodeCanvasSetZoom();
-
-  ImGui::PopID();
-  ref.Pop();
-}
-void Network::GUI::Update(RefStack& ref, Event& ev) noexcept {
-  for (auto& h : owner_->nodes_) {
-    if (ev.IsFocused(&h->file())) Focus(ref, h.get());
-    h->UpdateWindow(ref, ev);
-  }
-
-  const auto id = ref.Stringify() + kIdSuffix;
-  if (ev.IsFocused(owner_)) {
-    ImGui::SetWindowFocus(id.c_str());
-    shown_ = true;
-  }
-
-  ImGui::SetNextWindowSize(ImVec2 {24.f, 24.f}*ImGui::GetFontSize(),
-                           ImGuiCond_FirstUseEver);
-
-  constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-  if (ImGui::Begin(id.c_str(), &shown_, kFlags)) {
-    canvas_size_ = ImGui::GetWindowSize();
-    UpdateCanvas(ref);
-  }
-  ImGui::End();
-}
-void Network::GUI::UpdateMenu(RefStack&) noexcept {
-  ImGui::MenuItem("Network Editor", nullptr, &shown_);
-}
-void Network::GUI::UpdateCanvas(RefStack& ref) noexcept {
-  ImNodes::BeginCanvas(&canvas_);
-  gui::NodeCanvasSetZoom();
-
-  gui::NodeCanvasResetZoom();
-  if (ImGui::BeginPopupContextItem()) {
-    if (ImGui::BeginMenu("New")) {
-      for (auto& p : File::registry()) {
-        auto& t = *p.second;
-        if (!t.factory() || !t.CheckImplemented<Node>()) continue;
-        if (ImGui::MenuItem(t.name().c_str())) {
-          owner_->history_.AddNodeIf(
-              NodeHolder::Create(owner_->next_id_++, t.Create(owner_->env())));
-        }
-        if (ImGui::IsItemHovered()) {
-          ImGui::SetTooltip("%s", t.desc().c_str());
-        }
-      }
-      ImGui::Separator();
-      if (ImGui::BeginMenu("Input")) {
-        UpdateNewIO<InputNode>(owner_->in_);
-        ImGui::EndMenu();
-      }
-      if (ImGui::BeginMenu("Output")) {
-        UpdateNewIO<OutputNode>(owner_->out_);
-        ImGui::EndMenu();
-      }
-      ImGui::EndMenu();
-    }
-
-    ImGui::Separator();
-    if (ImGui::MenuItem("Undo")) {
-      owner_->history_.Move(-1);
-    }
-    if (ImGui::MenuItem("Redo")) {
-      owner_->history_.Move(1);
-    }
-
-    ImGui::Separator();
-    if (ImGui::MenuItem("Clear history")) {
-      owner_->history_.Clear();
-    }
-    if (ImGui::MenuItem("Clear entire context")) {
-      Queue::main().Push([this]() { owner_->ctx_ = std::make_shared<Context>(); });
-    }
-    ImGui::EndPopup();
-  }
-  gui::NodeCanvasSetZoom();
-
-  for (auto& h : owner_->nodes_) {
-    h->UpdateNode(owner_, ref);
-  }
-
-  ConnList rm_conns;
-  for (auto& h : owner_->nodes_) {
-    auto node = &h->entity();
-    for (auto src : node->out()) {
-      for (auto w_dst : src->dst()) {
-        auto dst = w_dst.lock();
-        if (!dst) continue;
-
-        auto& srch = owner_->FindHolder(src->owner());
-        auto  srcs = src->name().c_str();
-        auto& dsth = owner_->FindHolder(dst->owner());
-        auto  dsts = dst->name().c_str();
-        if (!ImNodes::Connection(&dsth, dsts, &srch, srcs)) {
-          rm_conns.push_back({dst, src});
-        }
-      }
-    }
-  }
-  if (rm_conns.size()) {
-    owner_->history_.Unlink(std::move(rm_conns));
-  }
-
-  void* inptr;
-  void* outptr;
-  const char* srcs;
-  const char* dsts;
-  if (ImNodes::GetNewConnection(&inptr, &dsts, &outptr, &srcs)) {
-    auto dstn = reinterpret_cast<NodeHolder*>(inptr);
-    auto srcn = reinterpret_cast<NodeHolder*>(outptr);
-
-    auto src = srcn->entity().FindOut(srcs);
-    auto dst = dstn->entity().FindIn(dsts);
-    if (src && dst) owner_->history_.Link({{dst, src}});
-  }
-
-  gui::NodeCanvasResetZoom();
-  ImNodes::EndCanvas();
-}
-template <typename T, typename U>
-void Network::GUI::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
-  constexpr auto kFlags =
-      ImGuiInputTextFlags_EnterReturnsTrue |
-      ImGuiInputTextFlags_AutoSelectAll;
-
-  static const char* kHint = "enter to add...";
-
-  ImGui::SetKeyboardFocusHere();
-  const bool submit = ImGui::InputTextWithHint("##newIO", kHint, &io_name_, kFlags);
-
-  const bool empty = io_name_.empty();
-  const bool dup   = list.end() !=
-      std::find_if(list.begin(), list.end(),
-                   [this](auto& e) { return e->name() == io_name_; });
-
-  if (empty) {
-    ImGui::Bullet();
-    ImGui::TextUnformatted("empty name");
-  }
-  if (dup) {
-    ImGui::Bullet();
-    ImGui::TextUnformatted("name duplication");
-  }
-  if (submit && !empty && !dup) {
-    owner_->history_.AddNodeIf(
-        NodeHolder::Create(owner_->next_id_++, std::make_unique<T>(owner_->env(), io_name_)));
-    io_name_ = "";
-    ImGui::CloseCurrentPopup();
-  }
 }
 void Network::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   auto owner = ref.FindParent<Network>();
