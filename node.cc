@@ -170,7 +170,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   }
 
   void Update(RefStack& ref, Event& ev) noexcept override;
-  void UpdateMenu(RefStack&) noexcept;
+  void UpdateMenu(RefStack&) noexcept override;
   void UpdateCanvas(RefStack&) noexcept;
   template <typename T, typename U>
   void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
