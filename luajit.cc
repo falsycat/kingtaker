@@ -18,7 +18,6 @@
 
 #include "iface/dir.hh"
 #include "iface/factory.hh"
-#include "iface/gui.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
@@ -287,11 +286,11 @@ class LuaJIT final {
 LuaJIT dev_;
 
 
-class Script : public File, public iface::GUI, public iface::DirItem {
+class Script : public File, public iface::DirItem {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Script>(
       "LuaJIT/Script", "compiled object of LuaJIT script",
-      {typeid(iface::DirItem), typeid(iface::GUI)});
+      {typeid(iface::DirItem)});
 
 
   struct Data final {
@@ -354,23 +353,23 @@ class Script : public File, public iface::GUI, public iface::DirItem {
     return std::make_unique<Script>(env, path_, shown_, auto_recompile_);
   }
 
-  void Update(File::RefStack&) noexcept override;
-  void UpdateMenu(File::RefStack&) noexcept override;
-  void UpdateCompiler(File::RefStack&) noexcept;
+  void Update(RefStack&, Event&) noexcept override;
+  void UpdateMenu(RefStack&) noexcept override;
+  void UpdateCompiler(RefStack&) noexcept;
 
   Time lastModified() const noexcept override {
     std::unique_lock<std::mutex> k(data_->mtx);
     return data_->lastmod;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI, iface::DirItem>(t).Select(this);
+    return PtrSelector<iface::DirItem>(t).Select(this);
   }
   const std::shared_ptr<Data>& data() noexcept {
     return data_;
   }
 
 
-  void CompileIf(const File::RefStack& ref) noexcept {
+  void CompileIf(const RefStack& ref) noexcept {
     try {
       auto f = &*ref.Resolve(path_);
       if (f == this) throw Exception("self reference");
@@ -390,7 +389,7 @@ class Script : public File, public iface::GUI, public iface::DirItem {
       data_->msg = std::move(str);
     }
   }
-  void Compile(const File::RefStack& ref) noexcept {
+  void Compile(const RefStack& ref) noexcept {
     try {
       Compile_(ref.GetFullPath(), &*ref.Resolve(path_));
     } catch (Exception& e) {
@@ -453,7 +452,7 @@ class Script : public File, public iface::GUI, public iface::DirItem {
     dev_.Queue(std::move(task));
   }
 };
-void Script::Update(File::RefStack& ref) noexcept {
+void Script::Update(RefStack& ref, Event&) noexcept {
   if (auto_recompile_) CompileIf(ref);
 
   const auto id = ref.Stringify() + ": LuaJIT Script Compiler";
@@ -468,7 +467,7 @@ void Script::Update(File::RefStack& ref) noexcept {
     ImGui::End();
   }
 }
-void Script::UpdateMenu(File::RefStack& ref) noexcept {
+void Script::UpdateMenu(RefStack& ref) noexcept {
   ImGui::MenuItem("Compiler View", nullptr, &shown_);
   ImGui::Separator();
 
@@ -485,7 +484,7 @@ void Script::UpdateMenu(File::RefStack& ref) noexcept {
   }
   ImGui::MenuItem("re-compile automatically", nullptr, &auto_recompile_);
 }
-void Script::UpdateCompiler(File::RefStack& ref) noexcept {
+void Script::UpdateCompiler(RefStack& ref) noexcept {
   if (ImGui::Button("compile")) Compile(ref);
 
   std::unique_lock<std::mutex> k(data_->mtx);
@@ -497,11 +496,11 @@ void Script::UpdateCompiler(File::RefStack& ref) noexcept {
 }
 
 
-class Node : public File, public iface::GUI, public iface::Node {
+class Node : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Node>(
       "LuaJIT/ScriptNode", "Node driven by LuaJIT/Script",
-      {typeid(iface::GUI), typeid(iface::Node)});
+      {typeid(iface::Node)});
 
   Node(const std::shared_ptr<Env>& env,
              std::string_view path = "",
@@ -568,16 +567,16 @@ class Node : public File, public iface::GUI, public iface::Node {
     return std::make_unique<Node>(env, path_, auto_rebuild_);
   }
 
-  void Update(File::RefStack&) noexcept override;
-  void Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept override;
-  void UpdateMenu(File::RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void Update(RefStack&, Event&) noexcept override;
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateMenu(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   Time lastModified() const noexcept override {
     std::unique_lock<std::recursive_mutex> k(data_->mtx);
     return data_->lastmod;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:
@@ -1029,7 +1028,7 @@ class Node : public File, public iface::GUI, public iface::Node {
     }
   };
 };
-void Node::Update(File::RefStack& ref) noexcept {
+void Node::Update(RefStack& ref, Event&) noexcept {
   if (auto_rebuild_ || force_build_) {
     try {
       auto f = &*ref.Resolve(path_);
@@ -1045,7 +1044,7 @@ void Node::Update(File::RefStack& ref) noexcept {
   std::unique_lock<std::mutex> k(logger.mtx);
   logger.path = ref.GetFullPath();
 }
-void Node::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
+void Node::Update(RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::TextUnformatted("LuaJIT");
   const auto em = ImGui::GetFontSize();
 
@@ -1128,7 +1127,7 @@ void Node::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noex
     ImGui::EndPopup();
   }
 }
-void Node::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+void Node::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   if (ImGui::MenuItem("Rebuild")) Build(ref);
   ImGui::Separator();
 
@@ -1142,11 +1141,11 @@ void Node::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&) noex
 }
 
 
-class InlineNode final : public File, public iface::GUI, public iface::Node {
+class InlineNode final : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<InlineNode>(
       "LuaJIT/InlineNode", "inline Node",
-      {typeid(iface::GUI), typeid(iface::Node)});
+      {typeid(iface::Node)});
 
   InlineNode(const std::shared_ptr<Env>& env,
              const std::string& expr      = "",
@@ -1194,13 +1193,13 @@ class InlineNode final : public File, public iface::GUI, public iface::Node {
     return std::make_unique<InlineNode>(env, data_->expr, data_->multiline, size_);
   }
 
-  void Update(RefStack& ref) noexcept override {
+  void Update(RefStack& ref, Event&) noexcept override {
     data_->path = ref.GetFullPath();
   }
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:

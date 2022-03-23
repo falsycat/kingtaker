@@ -10,8 +10,6 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
-#include "iface/gui.hh"
-
 #include "util/format.hh"
 
 
@@ -34,25 +32,11 @@ void Push(Item&& item) noexcept {
   }
 }
 
-static void FocusAll() noexcept {
-  std::unordered_set<std::string> paths;
+static void FocusAll(File::Event& ev) noexcept {
   for (size_t i = head_; i != tail_; i = (i+1)%N) {
-    const auto& item = logs_[i];
-    if (item.select) paths.insert(File::StringifyPath(item.path));
+    if (logs_[i].select) ev.Focus(logs_[i].fptr);
   }
-  for (const auto& p : paths) {
-    try {
-      auto target = File::RefStack().Resolve(p);
-      auto ref    = target;
-      for (;;) {
-        auto g = File::iface<iface::GUI>(&*ref);
-        if (g && g->OnFocus(target, ref.size())) break;
-        if (ref.size() == 0) break;
-        ref.Pop();
-      }
-    } catch (File::NotFoundException&) {
-    }
-  }
+  
 }
 static void CopyAll() noexcept {
   std::stringstream ret;
@@ -89,7 +73,8 @@ static bool Filter(const Item& item, std::string_view filter) noexcept {
   return false;
 }
 
-void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
+void UpdateLogger(
+    File::Event& ev, std::string_view filter, bool autoscroll) noexcept {
   constexpr auto kTableFlags =
       ImGuiTableFlags_Resizable |
       ImGuiTableFlags_Hideable |
@@ -150,7 +135,7 @@ void UpdateLogger(std::string_view filter, bool autoscroll) noexcept {
       if (ImGui::BeginPopupContextItem()) {
         Select(item);
         if (ImGui::MenuItem("focus")) {
-          FocusAll();
+          FocusAll(ev);
         }
         if (ImGui::MenuItem("copy as text")) {
           CopyAll();

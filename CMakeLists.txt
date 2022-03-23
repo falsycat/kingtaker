@@ -57,7 +57,6 @@ target_sources(kingtaker
 
     iface/dir.hh
     iface/factory.hh
-    iface/gui.hh
     iface/history.hh
     iface/node.hh
 

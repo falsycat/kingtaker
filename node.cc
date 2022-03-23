@@ -19,7 +19,6 @@
 
 #include "iface/dir.hh"
 #include "iface/factory.hh"
-#include "iface/gui.hh"
 #include "iface/history.hh"
 #include "iface/node.hh"
 
@@ -35,7 +34,7 @@ class Network : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Network>(
       "Node/Network", "manages multiple Nodes and connections between them",
-      {typeid(iface::DirItem), typeid(iface::GUI), typeid(iface::History)});
+      {typeid(iface::DirItem), typeid(iface::History)});
 
   using IndexMap = std::unordered_map<Node*, size_t>;
   using NodeMap  = std::vector<Node*>;
@@ -51,7 +50,7 @@ class Network : public File, public iface::Node {
   struct NodeHolder final {
    public:
     static std::unique_ptr<NodeHolder> Create(size_t id, std::unique_ptr<File>&& f) {
-      auto n = f->iface<Node>();
+      auto n = File::iface<Node>(f.get());
       if (!n) return nullptr;
       return std::make_unique<NodeHolder>(id, std::move(f), n);
     }
@@ -80,7 +79,7 @@ class Network : public File, public iface::Node {
         const size_t id = msgpack::find(obj, "id"s).as<size_t>();
 
         auto f = File::Deserialize(msgpack::find(obj, "file"s), env);
-        auto n = f->iface<Node>();
+        auto n = File::iface<Node>(f.get());
         if (!n) throw DeserializeException("it's not node");
 
         std::pair<float, float> p;
@@ -175,8 +174,8 @@ class Network : public File, public iface::Node {
       if (inter) inter->Teardown(owner);
     }
 
-    void UpdateNode(Network* owner, RefStack& ref) noexcept;
-    void UpdateWindow(RefStack& ref) noexcept;
+    void UpdateNode(Network*, RefStack&) noexcept;
+    void UpdateWindow(RefStack&, Event&) noexcept;
 
     void Select() noexcept { select_ = true; }
     void Unselect() noexcept { select_ = false; }
@@ -329,14 +328,17 @@ class Network : public File, public iface::Node {
     }
   }
 
+  void Update(RefStack& ref, Event& ev) noexcept override {
+    gui_.Update(ref, ev);
+  }
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   Time lastModified() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem, iface::GUI, iface::History, iface::Node>(t).
-        Select(this, &gui_, &history_);
+    return PtrSelector<iface::DirItem, iface::History, iface::Node>(t).
+        Select(this, &history_);
   }
 
  private:
@@ -373,7 +375,7 @@ class Network : public File, public iface::Node {
 
 
   // GUI implementation for Network
-  class GUI final : public iface::GUI, public iface::DirItem {
+  class GUI final : public iface::DirItem {
    public:
     static inline const std::string kIdSuffix = ": Network Editor";
     GUI(Network* o) : DirItem(kMenu), owner_(o) {
@@ -409,31 +411,21 @@ class Network : public File, public iface::Node {
       }
     }
 
-    bool OnFocus(const RefStack& ref, size_t depth) noexcept override {
-      if (depth+1 != ref.size()) return false;
-
-      auto target = owner_->FindHolder(ref.terms(depth).name());
-      if (!target) return false;
-
+    void Focus(RefStack& self, NodeHolder* target) noexcept {
       for (auto& h : owner_->nodes_) h->Unselect();
       target->Select();
 
       // adjust offset to make the node displayed in center
       canvas_.Offset = (target->pos()*canvas_.Zoom - canvas_size_/2.f)*-1.f;
 
-      // get self path
-      auto path = ref.GetFullPath();
-      path.resize(depth);
-
       // focus the editor
-      const auto id = StringifyPath(path) + kIdSuffix;
+      const auto id = self.Stringify() + kIdSuffix;
       ImGui::SetWindowFocus(id.c_str());
       shown_ = true;
-      return true;
     }
 
-    void Update(RefStack&) noexcept override;
-    void UpdateMenu(RefStack&) noexcept override;
+    void Update(RefStack&, Event&) noexcept;
+    void UpdateMenu(RefStack&) noexcept;
     void UpdateCanvas(RefStack&) noexcept;
 
     // display input popup for creating new IO pins
@@ -729,11 +721,11 @@ void Network::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   ImGui::SetCursorPosY(line);
   ImGui::TextUnformatted("Network");
 }
-void Network::NodeHolder::UpdateWindow(RefStack& ref) noexcept {
+void Network::NodeHolder::UpdateWindow(RefStack& ref, Event& ev) noexcept {
   ref.Push({std::to_string(id_), file_.get()});
   ImGui::PushID(file_.get());
 
-  File::iface<iface::GUI>(*file_, iface::GUI::null()).Update(ref);
+  file_->Update(ref, ev);
 
   ImGui::PopID();
   ref.Pop();
@@ -771,17 +763,22 @@ void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
   ImGui::PopID();
   ref.Pop();
 }
-void Network::GUI::Update(RefStack& ref) noexcept {
+void Network::GUI::Update(RefStack& ref, Event& ev) noexcept {
   for (auto& h : owner_->nodes_) {
-    h->UpdateWindow(ref);
+    if (ev.IsFocused(&h->file())) Focus(ref, h.get());
+    h->UpdateWindow(ref, ev);
   }
 
-  constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+  const auto id = ref.Stringify() + kIdSuffix;
+  if (ev.IsFocused(owner_)) {
+    ImGui::SetWindowFocus(id.c_str());
+    shown_ = true;
+  }
 
   ImGui::SetNextWindowSize(ImVec2 {24.f, 24.f}*ImGui::GetFontSize(),
                            ImGuiCond_FirstUseEver);
 
-  const auto id = ref.Stringify() + kIdSuffix;
+  constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
   if (ImGui::Begin(id.c_str(), &shown_, kFlags)) {
     canvas_size_ = ImGui::GetWindowSize();
     UpdateCanvas(ref);
@@ -1078,11 +1075,11 @@ void Network::History::RemoveNodes(NodeHolderRefList&& h) noexcept {
 }
 
 
-class Ref : public File, public iface::GUI, public iface::Node {
+class Ref : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Ref>(
       "Node/Ref", "allows other nodes to be treated as lambda",
-      {typeid(iface::GUI), typeid(iface::Node)});
+      {typeid(iface::Node)});
 
   using Life = std::weak_ptr<std::monostate>;
 
@@ -1126,7 +1123,7 @@ class Ref : public File, public iface::GUI, public iface::Node {
     return std::make_unique<Ref>(env, path_);
   }
 
-  void Update(RefStack& ref) noexcept override {
+  void Update(RefStack& ref, Event&) noexcept override {
     basepath_ = ref.GetFullPath();
     Watch(&*ref.Resolve(path_));
   }
@@ -1135,7 +1132,7 @@ class Ref : public File, public iface::GUI, public iface::Node {
   void UpdateEntity(RefStack&, File* f) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node, iface::GUI>(t).Select(this);
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:

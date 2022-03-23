@@ -60,7 +60,10 @@ struct Item final {
 
 
 void Push(Item&&) noexcept;
-void UpdateLogger(std::string_view filter = "", bool autoscroll = true) noexcept;
+void UpdateLogger(
+    File::Event&,
+    std::string_view filter     = "",
+    bool             autoscroll = true) noexcept;
 
 
 #define NOTIFY_SRCLOC_ std::source_location src = std::source_location::current()
