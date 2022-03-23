@@ -865,11 +865,16 @@ class KeyInput final : public File, public iface::GUI, public iface::Node {
   }
 
   static std::unique_ptr<File> Deserialize(
-      const msgpack::object&, const std::shared_ptr<Env>& env) {
-    return std::make_unique<KeyInput>(env);
+      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    try {
+      return std::make_unique<KeyInput>(
+          env, msgpack::as_if<std::string>(obj, "(none)"s));
+    } catch (msgpack::type_error&) {
+      throw DeserializeException("broken System/KeyInput");
+    }
   }
   void Serialize(Packer& pk) const noexcept override {
-    pk.pack_nil();
+    pk.pack(key_);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
     return std::make_unique<KeyInput>(env, key_);
@@ -938,6 +943,7 @@ void KeyInput::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::SameLine();
   ImGui::SmallButton(key_.c_str());
 
+  gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
     FetchKeyCode();
     for (auto& p : kKeyMap) {
@@ -949,6 +955,7 @@ void KeyInput::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
     }
     ImGui::EndPopup();
   }
+  gui::NodeCanvasSetZoom();
 
   if (ImNodes::BeginInputSlot("CLK", 1)) {
     gui::NodeSocket();
