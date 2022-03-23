@@ -76,7 +76,7 @@ class Imm final : public File,
 
   void UpdateTree(RefStack&) noexcept override;
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
-  void UpdateTypeChanger(bool small = false) noexcept;
+  void UpdateTypeChanger(bool mini = false) noexcept;
   void UpdateEditor() noexcept;
   template <int D> bool UpdateVec(linalg::vec<double, D>& vec) noexcept;
 
@@ -132,7 +132,7 @@ void Imm::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
     ImNodes::EndSlot();
   }
 }
-void Imm::UpdateTypeChanger(bool small) noexcept {
+void Imm::UpdateTypeChanger(bool mini) noexcept {
   auto& v = *value_;
 
   const char* type =
@@ -143,7 +143,7 @@ void Imm::UpdateTypeChanger(bool small) noexcept {
       v.has<Value::Vec3>()?    "Ve3":
       v.has<Value::Vec4>()?    "Ve4":
       v.has<Value::String>()?  "Str": "XXX";
-  small? ImGui::SmallButton(type): ImGui::Button(type);
+  mini? ImGui::SmallButton(type): ImGui::Button(type);
 
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {

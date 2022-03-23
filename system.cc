@@ -663,7 +663,7 @@ void Logger::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("output log level");
     }
-
+    ImGui::SameLine();
     {
       gui::ResizeGroup _("##resizer", &size_, {8, fh/em}, {32, 4*fh/em}, em);
       ImGui::InputTextMultiline("##msg", &data_->msg, size_*em);
