@@ -90,7 +90,7 @@ target_link_libraries(imgui
 
 FetchContent_Declare(
   imnodes
-  URL "https://github.com/rokups/ImNodes/archive/1a1af86c1f3a4e70898af52d95fc75ba3639f181.zip"
+  URL "https://github.com/rokups/ImNodes/archive/50f845875760517289b27ca265a9ad72057a644c.zip"
 )
 FetchContent_Populate(imnodes)
 

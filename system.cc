@@ -17,6 +17,7 @@
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/keymap.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -684,8 +685,8 @@ void Logger::UpdateLevelCombo(notify::Level* lv) noexcept {
 class MouseInput : public File, public iface::GUI, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<MouseInput>(
-      "System/MouseInput", "retrieves mouse data",
-      {typeid(iface::Node)});
+      "System/MouseInput", "retrieves mouse state",
+      {typeid(iface::GUI), typeid(iface::Node)});
 
   MouseInput(const std::shared_ptr<Env>& env) noexcept :
       File(&type_, env), Node(kNone), data_(std::make_shared<UniversalData>()) {
@@ -816,6 +817,169 @@ void MouseInput::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept
   ImGui::EndGroup();
 }
 void MouseInput::UpdateSocket(const char* s, float w) noexcept {
+  const auto tw = ImGui::CalcTextSize(s).x;
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-tw));
+  ImGui::TextUnformatted(s);
+  ImGui::SameLine();
+  gui::NodeSocket();
+}
+
+
+class KeyInput final : public File, public iface::GUI, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<KeyInput>(
+      "System/KeyInput", "retrieves key state",
+      {typeid(iface::GUI), typeid(iface::Node)});
+
+  KeyInput(const std::shared_ptr<Env>& env, const std::string& key = "(none)") noexcept :
+      File(&type_, env), Node(Node::kNone),
+      data_(std::make_shared<UniversalData>()), key_(key) {
+    out_.emplace_back(new OutSock(this, "down"));
+    out_.emplace_back(new OutSock(this, "press"));
+    out_.emplace_back(new OutSock(this, "repeat"));
+    out_.emplace_back(new OutSock(this, "release"));
+
+    std::weak_ptr<UniversalData> wdata = data_;
+    std::weak_ptr<OutSock>       wd    = out_[0];
+    std::weak_ptr<OutSock>       wp    = out_[1];
+    std::weak_ptr<OutSock>       wrp   = out_[2];
+    std::weak_ptr<OutSock>       wr    = out_[3];
+    auto task = [wdata, wd, wp, wrp, wr](const auto& ctx, auto&&) {
+      auto data = wdata.lock();
+      if (!data) return;
+      const auto state = data->state;
+
+      auto d = wd.lock();
+      if (d && state & State::kDown) d->Send(ctx, {});
+
+      auto p = wp.lock();
+      if (p && state & State::kPress) p->Send(ctx, {});
+
+      auto rp = wrp.lock();
+      if (rp && state & State::kRepeat) rp->Send(ctx, {});
+
+      auto r = wr.lock();
+      if (r && state & State::kRelease) r->Send(ctx, {});
+    };
+    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task)));
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object&, const std::shared_ptr<Env>& env) {
+    return std::make_unique<KeyInput>(env);
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_nil();
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<KeyInput>(env, key_);
+  }
+
+  void Update(RefStack&) noexcept override {
+    FetchKeyCode();
+
+    auto& st = data_->state;
+    st = State::kNone;
+
+    if (keycode_ && !ImGui::IsAnyItemActive()) {
+      if (ImGui::IsKeyDown(*keycode_)) {
+        st = st | kDown;
+      }
+      if (ImGui::IsKeyPressed(*keycode_, false)) {
+        st = st | kPress;
+      } else if (ImGui::IsKeyPressed(*keycode_, true)) {
+        st = st | kRepeat;
+      }
+      if (ImGui::IsKeyReleased(*keycode_)) {
+        st = st | kRelease;
+      }
+    }
+  }
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  static void UpdateSocket(const char*, float) noexcept;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+  }
+
+ private:
+  enum State : uint8_t  {
+    kNone    = 0,
+    kDown    = 1 << 0,
+    kPress   = 1 << 1,
+    kRepeat  = 1 << 2,
+    kRelease = 1 << 3,
+  };
+  struct UniversalData final {
+    uint8_t state = kNone;
+  };
+  std::shared_ptr<UniversalData> data_;
+
+  // permanentized params
+  std::string key_;
+
+  // volatile params
+  std::optional<ImGuiKey> keycode_ = std::nullopt;
+
+
+  void FetchKeyCode() noexcept {
+    if (keycode_) return;
+    auto itr = kKeyMap.find(key_);
+    if (itr != kKeyMap.end()) {
+      keycode_ = itr->second;
+    }
+  }
+};
+void KeyInput::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  const auto em = ImGui::GetFontSize();
+  const auto w  = 4*em;
+
+  ImGui::TextUnformatted("KEY INPUT:");
+  ImGui::SameLine();
+  ImGui::SmallButton(key_.c_str());
+
+  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+    FetchKeyCode();
+    for (auto& p : kKeyMap) {
+      const bool sel = (keycode_ && *keycode_ == p.second);
+      if (ImGui::MenuItem(p.first.c_str(), nullptr, sel)) {
+        key_     = p.first;
+        keycode_ = p.second;
+      }
+    }
+    ImGui::EndPopup();
+  }
+
+  if (ImNodes::BeginInputSlot("CLK", 1)) {
+    gui::NodeSocket();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("CLK")) {
+      Queue::sub().Push([clk = in_[0], ctx]() { clk->Receive(ctx, {}); });
+    }
+    ImNodes::EndSlot();
+  }
+  ImGui::SameLine();
+
+  ImGui::BeginGroup();
+  if (ImNodes::BeginOutputSlot("down", 1)) {
+    UpdateSocket("down", w);
+    ImNodes::EndSlot();
+  }
+  if (ImNodes::BeginOutputSlot("press", 1)) {
+    UpdateSocket("press", w);
+    ImNodes::EndSlot();
+  }
+  if (ImNodes::BeginOutputSlot("repeat", 1)) {
+    UpdateSocket("repeat", w);
+    ImNodes::EndSlot();
+  }
+  if (ImNodes::BeginOutputSlot("release", 1)) {
+    UpdateSocket("release", w);
+    ImNodes::EndSlot();
+  }
+  ImGui::EndGroup();
+}
+void KeyInput::UpdateSocket(const char* s, float w) noexcept {
   const auto tw = ImGui::CalcTextSize(s).x;
   ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-tw));
   ImGui::TextUnformatted(s);
