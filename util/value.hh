@@ -63,6 +63,9 @@ class Value final {
   void Serialize(File::Packer&) const;
   static Value Deserialize(const msgpack::object&);
 
+  const char* StringifyType() const noexcept;
+  std::string Stringify(size_t max = 64) const noexcept;
+
   template <typename T>
   T& getUniq() {
     if (!has<T>()) throw Exception("incompatible Value type");
@@ -121,6 +124,7 @@ class Value final {
 
   Variant v_;
 };
+bool operator==(const Value& a, const Value& b) noexcept;
 
 class Value::Tensor final {
  public:
@@ -148,10 +152,9 @@ class Value::Tensor final {
 
   template <typename T> struct GetTypeOf;
 
-  static std::string_view StringifyType(Type) noexcept;
+  static const char* StringifyType(Type) noexcept;
   static Type ParseType(std::string_view);
   static size_t CountSamples(const std::vector<size_t>&);
-  static Tensor Deserialize(const msgpack::object& obj);
 
   Tensor() = delete;
   Tensor(Type t, const std::vector<size_t>& d) noexcept : Tensor(t, std::vector<size_t>(d)) { }
@@ -162,7 +165,10 @@ class Value::Tensor final {
   Tensor& operator=(const Tensor&) = default;
   Tensor& operator=(Tensor&&) = default;
 
+  static Tensor Deserialize(const msgpack::object& obj);
   void Serialize(File::Packer&) const noexcept;
+
+  std::string StringifyMeta() const noexcept;
 
   Type type() const noexcept { return type_; }
 

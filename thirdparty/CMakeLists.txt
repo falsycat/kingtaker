@@ -42,13 +42,13 @@ set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(glfw)
 
 
-# ---- ImGUI ----
+# ---- ImGUI (docking branch) ----
 # repository: https://github.com/ocornut/imgui/
 # license   : MIT
 
 FetchContent_Declare(
   imgui
-  URL "https://github.com/ocornut/imgui/archive/747f7fdbbaa1fdd46d5115c7333ab0722a7c2afc.zip"
+  URL "https://github.com/ocornut/imgui/archive/9b0c26b0b2adae3ccf66dc9552fae4945d735a0c.zip"
 )
 FetchContent_Populate(imgui)
 
@@ -90,7 +90,7 @@ target_link_libraries(imgui
 
 FetchContent_Declare(
   imnodes
-  URL "https://github.com/rokups/ImNodes/archive/1a1af86c1f3a4e70898af52d95fc75ba3639f181.zip"
+  URL "https://github.com/rokups/ImNodes/archive/50f845875760517289b27ca265a9ad72057a644c.zip"
 )
 FetchContent_Populate(imnodes)
 

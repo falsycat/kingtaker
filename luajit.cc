@@ -12,6 +12,7 @@
 #include <lua.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <ImNodes.h>
 
@@ -286,10 +287,10 @@ class LuaJIT final {
 LuaJIT dev_;
 
 
-class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
+class Script : public File, public iface::GUI, public iface::DirItem {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<LuaJITScript>(
-      "LuaJIT Script", "LuaJIT script",
+  static inline TypeInfo type_ = TypeInfo::New<Script>(
+      "LuaJIT/Script", "compiled object of LuaJIT script",
       {typeid(iface::DirItem), typeid(iface::GUI)});
 
 
@@ -310,14 +311,14 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
   };
 
 
-  static LuaJITScript* Cast(const RefStack& ref) {
-    auto f = dynamic_cast<LuaJITScript*>(&*ref);
+  static Script* Cast(const RefStack& ref) {
+    auto f = dynamic_cast<Script*>(&*ref);
     if (!f) throw Exception("it's not LuaJIT script");
     return f;
   }
 
 
-  LuaJITScript(const std::shared_ptr<Env>& env,
+  Script(const std::shared_ptr<Env>& env,
                const std::string& path = "",
                bool shown          = false,
                bool auto_recompile = false) noexcept :
@@ -328,13 +329,13 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     try {
-      return std::make_unique<LuaJITScript>(
+      return std::make_unique<Script>(
           env,
           msgpack::find(obj, "path"s).as<std::string>(),
           msgpack::find(obj, "shown"s).as<bool>(),
           msgpack::find(obj, "auto_recompile"s).as<bool>());
     } catch (msgpack::type_error&) {
-      throw DeserializeException("broken LuaJIT Script");
+      throw DeserializeException("broken LuaJIT/Script");
     }
   }
   void Serialize(Packer& pk) const noexcept override {
@@ -350,7 +351,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
     pk.pack(auto_recompile_);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<LuaJITScript>(env, path_, shown_, auto_recompile_);
+    return std::make_unique<Script>(env, path_, shown_, auto_recompile_);
   }
 
   void Update(File::RefStack&) noexcept override;
@@ -452,7 +453,7 @@ class LuaJITScript : public File, public iface::GUI, public iface::DirItem {
     dev_.Queue(std::move(task));
   }
 };
-void LuaJITScript::Update(File::RefStack& ref) noexcept {
+void Script::Update(File::RefStack& ref) noexcept {
   if (auto_recompile_) CompileIf(ref);
 
   const auto id = ref.Stringify() + ": LuaJIT Script Compiler";
@@ -467,7 +468,7 @@ void LuaJITScript::Update(File::RefStack& ref) noexcept {
     ImGui::End();
   }
 }
-void LuaJITScript::UpdateMenu(File::RefStack& ref) noexcept {
+void Script::UpdateMenu(File::RefStack& ref) noexcept {
   ImGui::MenuItem("Compiler View", nullptr, &shown_);
   ImGui::Separator();
 
@@ -484,7 +485,7 @@ void LuaJITScript::UpdateMenu(File::RefStack& ref) noexcept {
   }
   ImGui::MenuItem("re-compile automatically", nullptr, &auto_recompile_);
 }
-void LuaJITScript::UpdateCompiler(File::RefStack& ref) noexcept {
+void Script::UpdateCompiler(File::RefStack& ref) noexcept {
   if (ImGui::Button("compile")) Compile(ref);
 
   std::unique_lock<std::mutex> k(data_->mtx);
@@ -496,18 +497,18 @@ void LuaJITScript::UpdateCompiler(File::RefStack& ref) noexcept {
 }
 
 
-class LuaJITNode : public File, public iface::GUI, public iface::Node {
+class Node : public File, public iface::GUI, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<LuaJITNode>(
-      "LuaJIT Node", "Node driven by LuaJIT",
+  static inline TypeInfo type_ = TypeInfo::New<Node>(
+      "LuaJIT/ScriptNode", "Node driven by LuaJIT/Script",
       {typeid(iface::GUI), typeid(iface::Node)});
 
-  LuaJITNode(const std::shared_ptr<Env>& env,
+  Node(const std::shared_ptr<Env>& env,
              std::string_view path = "",
              bool auto_rebuild = false,
              const std::vector<std::string>& in  = {},
              const std::vector<std::string>& out = {}) noexcept :
-      File(&type_, env), Node(kMenu),
+      File(&type_, env), iface::Node(kMenu),
       path_(path), auto_rebuild_(auto_rebuild) {
     life_ = std::make_shared<std::monostate>();
 
@@ -529,17 +530,17 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     std::vector<std::string> in, out;
     try {
-      in  = msgpack::find(msgpack::find(
-              obj, "socks"s), "in"s).as<std::vector<std::string>>();
-      out = msgpack::find(msgpack::find(
-              obj, "socks"s), "out"s).as<std::vector<std::string>>();
+      auto& socks = msgpack::find(obj, "socks"s);
+      in  = msgpack::find(socks, "in"s).as<std::vector<std::string>>();
+      out = msgpack::find(socks, "out"s).as<std::vector<std::string>>();
+      return std::make_unique<Node>(
+          env,
+          msgpack::find(obj, "path"s).as<std::string>(),
+          msgpack::find(obj, "auto_rebuild"s).as<bool>(),
+          in, out);
     } catch (msgpack::type_error&) {
+      throw DeserializeException("broken LuaJIT/Node");
     }
-    return std::make_unique<LuaJITNode>(
-        env,
-        msgpack::find(obj, "path"s).as<std::string>(),
-        msgpack::find(obj, "auto_rebuild"s).as<bool>(),
-        in, out);
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(3);
@@ -564,7 +565,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     }
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<LuaJITNode>(env, path_, auto_rebuild_);
+    return std::make_unique<Node>(env, path_, auto_rebuild_);
   }
 
   void Update(File::RefStack&) noexcept override;
@@ -606,7 +607,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   struct Data final {
     std::recursive_mutex mtx;
 
-    LuaJITNode* self;
+    Node* self;
     std::weak_ptr<std::monostate> life;
 
     std::shared_ptr<LuaJIT::Logger> logger;
@@ -642,7 +643,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   void Build(RefStack& ref) noexcept {
     ++data_->build_try_;
 
-    LuaJITScript* script;
+    Script* script;
     {
       std::unique_lock<std::recursive_mutex> k(data_->mtx);
       if (data_->building) return;
@@ -650,7 +651,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
       data_->msg = "building...";
       try {
         auto script_ref = ref.Resolve(path_);
-        script = LuaJITScript::Cast(script_ref);
+        script = Script::Cast(script_ref);
         script->CompileIf(script_ref);
       } catch (Exception& e) {
         auto str = "build failed\n"+e.msg();
@@ -828,10 +829,10 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
   // InputSocket that calls lua function.
   class LuaInSock : public InSock {
    public:
-    LuaInSock(LuaJITNode* o, std::string_view name) noexcept :
+    LuaInSock(Node* o, std::string_view name) noexcept :
         InSock(o, name), owner_(o), life_(o->life_) {
     }
-    LuaInSock(LuaJITNode* o, const std::shared_ptr<SockMeta>& sock) noexcept :
+    LuaInSock(Node* o, const std::shared_ptr<SockMeta>& sock) noexcept :
         InSock(o, sock->name), owner_(o), life_(o->life_), sock_(sock) {
     }
 
@@ -885,7 +886,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     }
 
    private:
-    LuaJITNode* owner_;
+    Node* owner_;
 
     std::weak_ptr<std::monostate> life_;
 
@@ -1028,7 +1029,7 @@ class LuaJITNode : public File, public iface::GUI, public iface::Node {
     }
   };
 };
-void LuaJITNode::Update(File::RefStack& ref) noexcept {
+void Node::Update(File::RefStack& ref) noexcept {
   if (auto_rebuild_ || force_build_) {
     try {
       auto f = &*ref.Resolve(path_);
@@ -1044,7 +1045,7 @@ void LuaJITNode::Update(File::RefStack& ref) noexcept {
   std::unique_lock<std::mutex> k(logger.mtx);
   logger.path = ref.GetFullPath();
 }
-void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
+void Node::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx) noexcept {
   ImGui::TextUnformatted("LuaJIT");
   const auto em = ImGui::GetFontSize();
 
@@ -1127,7 +1128,7 @@ void LuaJITNode::Update(File::RefStack& ref, const std::shared_ptr<Context>& ctx
     ImGui::EndPopup();
   }
 }
-void LuaJITNode::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+void Node::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   if (ImGui::MenuItem("Rebuild")) Build(ref);
   ImGui::Separator();
 
@@ -1138,6 +1139,191 @@ void LuaJITNode::UpdateMenu(File::RefStack& ref, const std::shared_ptr<Context>&
     ImGui::EndMenu();
   }
   ImGui::MenuItem("rebuild automatically", nullptr, &auto_rebuild_);
+}
+
+
+class InlineNode final : public File, public iface::GUI, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<InlineNode>(
+      "LuaJIT/InlineNode", "inline Node",
+      {typeid(iface::GUI), typeid(iface::Node)});
+
+  InlineNode(const std::shared_ptr<Env>& env,
+             const std::string& expr      = "",
+             bool               multiline = false,
+             ImVec2             size      = {0.f, 0.f}) noexcept :
+      File(&type_, env), Node(kNone),
+      data_(std::make_shared<UniversalData>(expr, multiline)), size_(size) {
+    out_.emplace_back(new OutSock(this, "out"));
+
+    std::weak_ptr<UniversalData> wdata = data_;
+    std::weak_ptr<OutSock>       wout  = out_.back();
+    auto task = [self = this, wdata, wout](const auto& ctx, auto&& v) {
+      Exec(self, wdata, wout, ctx, std::move(v));
+    };
+    in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
+  }
+
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    try {
+      return std::make_unique<InlineNode>(
+          env,
+          msgpack::find(obj, "expr"s).as<std::string>(),
+          msgpack::find(obj, "multiline"s).as<bool>(),
+          msgpack::as_if<ImVec2>(msgpack::find(obj, "size"s), {0.f, 0.f}));
+    } catch (msgpack::type_error&) {
+      throw DeserializeException("broken LuaJIT/InlineNode");
+    }
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    std::unique_lock<std::mutex> k(data_->mtx);
+
+    pk.pack_map(3);
+
+    pk.pack("expr"s);
+    pk.pack(data_->expr);
+
+    pk.pack("multiline"s);
+    pk.pack(data_->multiline);
+
+    pk.pack("size");
+    pk.pack(size_);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    std::unique_lock<std::mutex> k(data_->mtx);
+    return std::make_unique<InlineNode>(env, data_->expr, data_->multiline, size_);
+  }
+
+  void Update(RefStack& ref) noexcept override {
+    data_->path = ref.GetFullPath();
+  }
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+  }
+
+ private:
+  struct UniversalData final {
+   public:
+    UniversalData(const std::string& e, bool m) noexcept :
+        expr(e), multiline(m) {
+    }
+    ~UniversalData() noexcept {
+      auto task = [reg_func = reg_func](auto L) {
+        luaL_unref(L, LUA_REGISTRYINDEX, reg_func);
+      };
+      dev_.Queue(std::move(task));
+    }
+
+    std::mutex mtx;
+
+    std::string expr;
+    bool multiline;
+
+    File::Path path;
+
+    bool modified = false;
+    int  reg_func = LUA_REFNIL;
+  };
+  std::shared_ptr<UniversalData> data_;
+
+  ImVec2 size_;
+
+
+  static std::string WrapCode(const std::string& v, bool multiline) noexcept {
+    static const std::string kPrefix = "local v = ...\n";
+    if (multiline) {
+      return kPrefix+v;
+    }
+    return multiline? kPrefix+v: kPrefix+"return "+v;
+  }
+  static void Exec(InlineNode*                         self,
+                   const std::weak_ptr<UniversalData>& wdata,
+                   const std::weak_ptr<OutSock>&       wout,
+                   std::weak_ptr<Context>              wctx,
+                   Value&&                             v) noexcept {
+    auto task = [self, wdata, wout, wctx, v](auto L) {
+      auto data = wdata.lock();
+      auto out  = wout.lock();
+      auto ctx  = wctx.lock();
+      if (!data || !out || !ctx) return;
+
+      {  // preparation
+        std::unique_lock<std::mutex> k(data->mtx);
+        if (data->modified) {
+          luaL_unref(L, LUA_REGISTRYINDEX, data->reg_func);
+          data->reg_func = LUA_REFNIL;
+          data->modified = false;
+        }
+        if (data->reg_func == LUA_REFNIL) {
+          const auto src = WrapCode(data->expr, data->multiline);
+          if (luaL_loadstring(L, src.c_str()) != 0) {
+            notify::Error(data->path, self, "compile failed\n"s+lua_tostring(L, -1));
+            return;
+          }
+          data->reg_func = luaL_ref(L, LUA_REGISTRYINDEX);
+        }
+      }
+
+      // execution
+      lua_rawgeti(L, LUA_REGISTRYINDEX, data->reg_func);
+      dev_.PushValue(L, v);
+      if (dev_.SandboxCall(L, 1, 1) != 0) {
+        notify::Error(data->path, self, "execution aborted\n"s+lua_tostring(L, -1));
+        return;
+      }
+
+      // output result
+      // TODO support any type of Value
+      std::string ret  = lua_isnil(L, -1)? "": lua_tostring(L, -1);
+      auto task = [wout, wctx, ret = std::move(ret)]() mutable {
+        auto out = wout.lock();
+        auto ctx = wctx.lock();
+        if (out && ctx) out->Send(ctx, std::move(ret));
+      };
+      Queue::sub().Push(std::move(task));
+    };
+    dev_.Queue(std::move(task));
+  }
+};
+void InlineNode::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+  const auto em = ImGui::GetFontSize();
+  const auto fh = ImGui::GetFrameHeight();
+
+  ImGui::TextUnformatted("LuaJIT inline");
+  if (ImNodes::BeginInputSlot("in", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+  ImGui::SameLine();
+
+  ImGui::BeginGroup();
+  {
+    std::unique_lock<std::mutex> k(data_->mtx);
+    if (data_->multiline) {
+      gui::ResizeGroup _("##ResizeGroup", &size_, {8, fh/em}, {16, 8*fh/em}, em);
+      if (ImGui::InputTextMultiline("##MultilineExpr", &data_->expr, size_*em)) {
+        data_->modified = true;
+      }
+    } else {
+      gui::ResizeGroup _("##ResizeGroup", &size_, {8, fh/em}, {16, fh/em}, em);
+      ImGui::SetNextItemWidth(size_.x*em);
+      if (ImGui::InputTextWithHint("##SinglelineExpr", "expr", &data_->expr)) {
+        data_->modified = true;
+      }
+    }
+    if (ImGui::Checkbox("multiline", &data_->multiline)) {
+      data_->expr = "";
+    }
+  }
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
 }
 
 } }  // namespace kingtaker
