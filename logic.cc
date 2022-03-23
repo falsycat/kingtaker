@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <ImNodes.h>
 
+#include "iface/gui.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
@@ -15,7 +16,7 @@
 namespace kingtaker {
 namespace {
 
-class Equal final : public File, public iface::Node {
+class Equal final : public File, public iface::GUI, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Equal>(
       "Logic/Equal", "emits a pulse if all of AND_X is equal to one of OR_X",
@@ -53,10 +54,13 @@ class Equal final : public File, public iface::Node {
   static std::unique_ptr<File> Deserialize(
       const msgpack::object& obj, const std::shared_ptr<Env>& env) {
     try {
-      const auto a = msgpack::find(obj, "and"s).as<size_t>();
-      const auto o = msgpack::find(obj, "or"s).as<size_t>();
-      if (a == 0 || a > kMaxInput || o == 0 || o > kMaxInput) {
-        throw DeserializeException("Logic/Equal socket count overflow");
+      const auto a = msgpack::find(obj, "and"s, 1).as<size_t>();
+      if (a == 0 || a > kMaxInput) {
+        throw DeserializeException("AND count overflow");
+      }
+      const auto o = msgpack::find(obj, "or"s, 1).as<size_t>();
+      if (o == 0 || o > kMaxInput) {
+        throw DeserializeException("OR count overflow");
       }
       return std::make_unique<Equal>(env, a, o);
     } catch (msgpack::type_error&) {
@@ -76,11 +80,14 @@ class Equal final : public File, public iface::Node {
     return std::make_unique<Equal>(env, data_->and_n, data_->or_n);
   }
 
+  void Update(RefStack& ref) noexcept override {
+    data_->path = ref.GetFullPath();
+  }
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
   static bool UpdateSocks(const char*, int*, std::span<std::shared_ptr<InSock>>) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
+    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
   }
 
  private:
@@ -151,8 +158,8 @@ class Equal final : public File, public iface::Node {
     }
     ctxdata->and_.clear();
     ctxdata->or_ .clear();
-    if (a) out_and->Send(ctx, Value::Pulse());
-    if (o) out_or ->Send(ctx, Value::Pulse());
+    if (a) out_and->Send(ctx, {});
+    if (o) out_or ->Send(ctx, {});
   }
 
   // recreates input sockets
@@ -219,26 +226,26 @@ class Equal final : public File, public iface::Node {
   };
 };
 void Equal::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  const auto em = ImGui::GetFontSize();
-
   ImGui::TextUnformatted("EQUAL");
 
   // input sockets
   ImGui::BeginGroup();
   {
     if (ImNodes::BeginInputSlot("CLK", 1)) {
+      ImGui::AlignTextToFramePadding();
       gui::NodeSocket();
       ImGui::SameLine();
-      if (ImGui::SmallButton("CLK")) {
-        Queue::sub().Push([clk = clk_, ctx]() { clk->Receive(ctx, Value::Pulse()); });
+      if (ImGui::Button("CLK")) {
+        Queue::sub().Push([clk = clk_, ctx]() { clk->Receive(ctx, {}); });
       }
       ImNodes::EndSlot();
     }
     if (ImNodes::BeginInputSlot("CLR", 1)) {
+      ImGui::AlignTextToFramePadding();
       gui::NodeSocket();
       ImGui::SameLine();
-      if (ImGui::SmallButton("CLR")) {
-        Queue::sub().Push([clr = clr_, ctx]() { clr->Receive(ctx, Value::Pulse()); });
+      if (ImGui::Button("CLR")) {
+        Queue::sub().Push([clr = clr_, ctx]() { clr->Receive(ctx, {}); });
       }
       ImNodes::EndSlot();
     }
@@ -258,24 +265,21 @@ void Equal::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   }
   ImGui::EndGroup();
 
-  ImGui::SameLine();
-  ImGui::Dummy({1*em, 1});
-  ImGui::SameLine();
-
   // output sockets
+  ImGui::SameLine();
   ImGui::BeginGroup();
   {
     if (ImNodes::BeginOutputSlot("AND", 1)) {
-      if (ImGui::SmallButton("AND")) {
-        out_and_->Send(ctx, Value::Pulse());
+      if (ImGui::Button("AND")) {
+        out_and_->Send(ctx, {});
       }
       ImGui::SameLine();
       gui::NodeSocket();
       ImNodes::EndSlot();
     }
     if (ImNodes::BeginOutputSlot("OR", 1)) {
-      if (ImGui::SmallButton(" OR")) {
-        out_or_->Send(ctx, Value::Pulse());
+      if (ImGui::Button(" OR")) {
+        out_or_->Send(ctx, {});
       }
       ImGui::SameLine();
       gui::NodeSocket();
@@ -288,6 +292,8 @@ bool Equal::UpdateSocks(
     const char* id, int* n, std::span<std::shared_ptr<InSock>> socks) noexcept {
   const auto left = ImGui::GetCursorPosX();
   const auto em   = ImGui::GetFontSize();
+
+  ImGui::Spacing();
 
   ImGui::BeginGroup();
   for (auto& sock : socks) {
@@ -373,7 +379,7 @@ class Satisfy final : public File, public iface::Node {
       File(&type_, env), Node(kNone) {
     data_ = std::make_shared<UniversalData>();
 
-    out_.emplace_back(new OutSock(this, "out"));
+    out_.emplace_back(new OutSock(this, "CLK"));
 
     auto task = [self = this](const auto& ctx, auto&&) {
       auto& conds = ctx->template GetOrNew<ContextData>(self)->conds;
@@ -386,7 +392,15 @@ class Satisfy final : public File, public iface::Node {
 
   static std::unique_ptr<File> Deserialize(
       const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    return std::make_unique<Satisfy>(env, msgpack::as_if<size_t>(obj, 0));
+    try {
+      const auto n = msgpack::as_if<size_t>(obj, 0);
+      if (n > kMaxInput) {
+        throw DeserializeException("input count overflow");
+      }
+      return std::make_unique<Satisfy>(env, n);
+    } catch (msgpack::type_error&) {
+      throw DeserializeException("broken Logic/Satisfy");
+    }
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack(data_->n);
@@ -421,7 +435,7 @@ class Satisfy final : public File, public iface::Node {
     data_->n = n;
 
     in_.clear();
-    if (n) in_.push_back(clr_);
+    in_.push_back(clr_);
     for (auto& sock : in_sats_) in_.push_back(sock);
   }
 
@@ -453,7 +467,7 @@ class Satisfy final : public File, public iface::Node {
 
       conds[idx_] = true;
       for (const auto b : conds) if (!b) return;
-      out->Send(ctx, Value::Pulse());
+      out->Send(ctx, {});
       for (auto b : conds) b = false;
     }
    private:
@@ -472,59 +486,52 @@ void Satisfy::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   auto  ctxdata = ctx->GetOrNew<ContextData>(this);
   auto& conds   = ctxdata->conds;
 
-  ImGui::BeginGroup();
-  {
-    if (in_.size()) {
-      if (ImNodes::BeginInputSlot("CLR", 1)) {
-        gui::NodeSocket();
-        ImGui::SameLine();
-        if (ImGui::SmallButton("CLR")) {
-          Queue::sub().Push([clr = clr_, ctx]() { clr->Receive(ctx, Value::Pulse()); });
-        }
-        ImNodes::EndSlot();
-      }
-    }
-    ImGui::BeginGroup();
-    for (size_t i = 0; i < data_->n; ++i) {
-      const auto& name = in_sats_[i]->name();
-      if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
-        gui::NodeSocket();
-        ImGui::SameLine();
-
-        if (i < conds.size() && conds[i]) {
-          ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 0, 0, 255));
-          ImGui::TextUnformatted(name.c_str());
-          ImGui::PopStyleColor();
-        } else {
-          ImGui::TextUnformatted(name.c_str());
-        }
-        ImNodes::EndSlot();
-      }
-    }
-    ImGui::EndGroup();
-
+  if (ImNodes::BeginInputSlot("CLR", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeSocket();
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(2*em);
-
-    int n = static_cast<int>(data_->n);
-    if (ImGui::DragInt("##InputCount", &n, 1, 0, kMaxInput)) {
-      Queue::main().Push([this, n]() { Rebuild(static_cast<size_t>(n)); });
+    if (ImGui::Button("CLR")) {
+      Queue::sub().Push([clr = clr_, ctx]() { clr->Receive(ctx, {}); });
     }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("number of inputs\n"
-                        "pulse is emitted when all input received something");
-    }
+    ImNodes::EndSlot();
   }
-  ImGui::EndGroup();
 
   ImGui::SameLine();
-  if (ImNodes::BeginOutputSlot("out", 1)) {
-    if (ImGui::SmallButton("out")) {
-      out_[0]->Send(ctx, Value::Pulse());
+  ImGui::SetNextItemWidth(2*em);
+  int n = static_cast<int>(data_->n);
+  if (ImGui::DragInt("##InputCount", &n, 1, 0, kMaxInput)) {
+    Queue::main().Push([this, n]() { Rebuild(static_cast<size_t>(n)); });
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("number of inputs\n"
+                      "pulse is emitted when all input received something");
+  }
+
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("CLK", 1)) {
+    if (ImGui::Button("CLK")) {
+      out_[0]->Send(ctx, {});
     }
     ImGui::SameLine();
     gui::NodeSocket();
     ImNodes::EndSlot();
+  }
+
+  for (size_t i = 0; i < data_->n; ++i) {
+    const auto& name = in_sats_[i]->name();
+    if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
+      gui::NodeSocket();
+      ImGui::SameLine();
+
+      if (i < conds.size() && conds[i]) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 0, 0, 255));
+        ImGui::TextUnformatted(name.c_str());
+        ImGui::PopStyleColor();
+      } else {
+        ImGui::TextUnformatted(name.c_str());
+      }
+      ImNodes::EndSlot();
+    }
   }
 }
 

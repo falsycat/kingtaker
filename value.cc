@@ -49,7 +49,7 @@ class Imm final : public File,
       if (!val || !out) return;
       out->Send(ctx, Value(*val));
     };
-    in_.emplace_back(new LambdaInSock(this, "clk", std::move(receiver)));
+    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(receiver)));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -76,6 +76,7 @@ class Imm final : public File,
 
   void UpdateTree(RefStack&) noexcept override;
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateTypeChanger(bool small = false) noexcept;
   void UpdateEditor() noexcept;
   template <int D> bool UpdateVec(linalg::vec<double, D>& vec) noexcept;
 
@@ -93,43 +94,47 @@ class Imm final : public File,
   Time lastmod_;
 
   ImVec2 size_;
+
+
+  void OnUpdate() noexcept {
+    lastmod_ = Clock::now();
+  }
 };
 void Imm::UpdateTree(RefStack&) noexcept {
+  UpdateTypeChanger();
+  ImGui::SameLine();
   UpdateEditor();
 }
 void Imm::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  ImGui::TextUnformatted("IMM");
+  ImGui::TextUnformatted("IMM:");
+  ImGui::SameLine();
+  UpdateTypeChanger(true);
 
-  if (ImNodes::BeginInputSlot("clk", 1)) {
+  if (ImNodes::BeginInputSlot("CLK", 1)) {
+    ImGui::AlignTextToFramePadding();
     gui::NodeSocket();
+    ImGui::SameLine();
+    if (ImGui::Button("CLK")) {
+      Queue::sub().Push([clk = in_[0], ctx]() { clk->Receive(ctx, {}); });
+    }
     ImNodes::EndSlot();
   }
 
   ImGui::SameLine();
+  ImGui::BeginGroup();
   UpdateEditor();
-  ImGui::SameLine();
-
-  if (ImGui::Button("Z")) {
-    out_[0]->Send(ctx, Value(*value_));
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("emits Value manually");
-  }
+  ImGui::EndGroup();
   ImGui::SameLine();
 
   if (ImNodes::BeginOutputSlot("out", 1)) {
+    ImGui::AlignTextToFramePadding();
     gui::NodeSocket();
     ImNodes::EndSlot();
   }
 }
-void Imm::UpdateEditor() noexcept {
-  const auto em = ImGui::GetFontSize();
-  const auto fh = ImGui::GetFrameHeight();
-  const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
-
+void Imm::UpdateTypeChanger(bool small) noexcept {
   auto& v = *value_;
 
-  bool mod = false;
   const char* type =
       v.has<Value::Integer>()? "Int":
       v.has<Value::Scalar>()?  "Sca":
@@ -138,79 +143,99 @@ void Imm::UpdateEditor() noexcept {
       v.has<Value::Vec3>()?    "Ve3":
       v.has<Value::Vec4>()?    "Ve4":
       v.has<Value::String>()?  "Str": "XXX";
-  ImGui::Button(type);
+  small? ImGui::SmallButton(type): ImGui::Button(type);
 
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
     if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
-      v   = Value::Integer {0};
-      mod = true;
+      v = Value::Integer {0};
+      OnUpdate();
     }
     if (ImGui::MenuItem("scalar", nullptr, v.has<Value::Scalar>())) {
-      v   = Value::Scalar {0};
-      mod = true;
+      v = Value::Scalar {0};
+      OnUpdate();
     }
     if (ImGui::MenuItem("boolean", nullptr, v.has<Value::Boolean>())) {
-      v   = Value::Boolean {false};
-      mod = true;
+      v = Value::Boolean {false};
+      OnUpdate();
     }
     if (ImGui::MenuItem("vec2", nullptr, v.has<Value::Vec2>())) {
-      v   = Value::Vec2 {0., 0.};
-      mod = true;
+      v = Value::Vec2 {0., 0.};
+      OnUpdate();
     }
     if (ImGui::MenuItem("vec3", nullptr, v.has<Value::Vec3>())) {
-      v   = Value::Vec3 {0., 0., 0.};
-      mod = true;
+      v = Value::Vec3 {0., 0., 0.};
+      OnUpdate();
     }
     if (ImGui::MenuItem("vec4", nullptr, v.has<Value::Vec4>())) {
-      v   = Value::Vec4 {0., 0., 0., 0.};
-      mod = true;
+      v = Value::Vec4 {0., 0., 0., 0.};
+      OnUpdate();
     }
     if (ImGui::MenuItem("string", nullptr, v.has<Value::String>())) {
-      v   = ""s;
-      mod = true;
+      v = ""s;
+      OnUpdate();
     }
     ImGui::EndPopup();
   }
   gui::NodeCanvasSetZoom();
+}
+void Imm::UpdateEditor() noexcept {
+  const auto em = ImGui::GetFontSize();
+  const auto fh = ImGui::GetFrameHeight();
+  const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
+
+  auto& v = *value_;
 
   ImGui::SameLine();
   if (v.has<Value::Integer>()) {
-    gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
+    gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(size_.x*em);
-    mod |= ImGui::DragScalar("##InputValue", ImGuiDataType_S64, &v.getUniq<Value::Integer>());
+    if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.getUniq<Value::Integer>())) {
+      OnUpdate();
+    }
 
   } else if (v.has<Value::Scalar>()) {
-    gui::ResizeGroup _("##ResizeGroup", &size_, {4, fh/em}, {12, fh/em}, em);
+    gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(size_.x*em);
-    mod |= ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &v.getUniq<Value::Scalar>());
+    if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.getUniq<Value::Scalar>())) {
+      OnUpdate();
+    }
 
   } else if (v.has<Value::Boolean>()) {
-    mod |= ImGui::Checkbox("##InputValue", &v.getUniq<Value::Boolean>());
+    if (ImGui::Checkbox("##editor", &v.getUniq<Value::Boolean>())) {
+      OnUpdate();
+    }
 
   } else if (v.has<Value::Vec2>()) {
     const auto h = (2*fh + sp)/em;
-    gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
-    mod |= UpdateVec(v.getUniq<Value::Vec2>());
+    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
+    if (UpdateVec(v.getUniq<Value::Vec2>())) {
+      OnUpdate();
+    }
 
   } else if (v.has<Value::Vec3>()) {
     const auto h = (3*fh + 2*sp)/em;
-    gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
-    mod |= UpdateVec(v.getUniq<Value::Vec3>());
+    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
+    if (UpdateVec(v.getUniq<Value::Vec3>())) {
+      OnUpdate();
+    }
 
   } else if (v.has<Value::Vec4>()) {
     const auto h = (4*fh + 3*sp)/em;
-    gui::ResizeGroup _("##ResizeGroup", &size_, {4, h}, {12, h}, em);
-    mod |= UpdateVec(v.getUniq<Value::Vec4>());
+    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
+    if (UpdateVec(v.getUniq<Value::Vec4>())) {
+      OnUpdate();
+    }
 
   } else if (v.has<Value::String>()) {
-    gui::ResizeGroup _("##ResizeGroup", &size_, {4, 4}, {24, 24}, em);
-    mod |= ImGui::InputTextMultiline("##InputValue", &v.getUniq<Value::String>(), size_*em);
+    gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {24, 24}, em);
+    if (ImGui::InputTextMultiline("##editor", &v.getUniq<Value::String>(), size_*em)) {
+      OnUpdate();
+    }
 
   } else {
     ImGui::TextUnformatted("UNKNOWN TYPE X(");
   }
-  if (mod) lastmod_ = Clock::now();
 }
 template <int D>
 bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
@@ -218,7 +243,7 @@ bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
   for (int i = 0; i < D; ++i) {
     ImGui::PushID(&vec[i]);
     ImGui::SetNextItemWidth(size_.x*ImGui::GetFontSize());
-    if (ImGui::DragScalar("##InputValue", ImGuiDataType_Double, &vec[i])) {
+    if (ImGui::DragScalar("##value", ImGuiDataType_Double, &vec[i])) {
       mod = true;
     }
     ImGui::PopID();

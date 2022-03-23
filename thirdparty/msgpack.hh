@@ -10,8 +10,7 @@
 namespace msgpack {
 
 template <typename T>
-inline const object& find(const object_map& map, const T& key) noexcept {
-  static const object nil_;
+inline const object& find(const object_map& map, const T& key, const object& def) noexcept {
   for (size_t i = 0; i < map.size; ++i) {
     const auto& kv = map.ptr[i];
     if constexpr (std::is_same<T, std::string>::value) {
@@ -22,13 +21,20 @@ inline const object& find(const object_map& map, const T& key) noexcept {
       if (kv.key == key) return kv.val;
     }
   }
-  return nil_;
+  return def;
+}
+template <typename T>
+inline object find(const object& map, const T& key, object def) noexcept {
+  return map.type == type::MAP? find(map.via.map, key, def): def;
+}
+template <typename T1, typename T2>
+inline object find(const object& map, const T1& key, T2 def) noexcept {
+  return find(map, key, object {def});
 }
 template <typename T>
 inline const object& find(const object& map, const T& key) noexcept {
   static const object nil_;
-  if (map.type != type::MAP) return nil_;
-  return find(map.via.map, key);
+  return map.type == type::MAP? find(map.via.map, key, nil_): nil_;
 }
 
 template <typename T>

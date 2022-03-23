@@ -560,7 +560,7 @@ class Logger final : public File, public iface::Node, public iface::GUI {
       notify::Push(
           {std::source_location::current(), data->lv, msg, File::Path(data->path), self});
     };
-    in_.emplace_back(new LambdaInSock(this, "clk", std::move(task)));
+    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task)));
   }
 
   static std::unique_ptr<File> Deserialize(
@@ -647,7 +647,8 @@ void Logger::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
 
   ImGui::BeginGroup();
   {
-    if (ImNodes::BeginInputSlot("clk", 1)) {
+    if (ImNodes::BeginInputSlot("CLK", 1)) {
+      ImGui::AlignTextToFramePadding();
       gui::NodeSocket();
       ImNodes::EndSlot();
     }
@@ -719,7 +720,7 @@ class MouseInput : public File, public iface::GUI, public iface::Node {
       auto a = wa.lock();
       if (a) a->Send(ctx, data->gui_active);
     };
-    in_.emplace_back(new LambdaInSock(this, "clk", std::move(task)));
+    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task)));
   }
 
   static std::unique_ptr<File> Deserialize(
@@ -770,14 +771,16 @@ void MouseInput::Update(RefStack&) noexcept {
       ImGui::IsAnyItemHovered() ||
       ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
 }
-void MouseInput::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+void MouseInput::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   const auto w = 4*ImGui::GetFontSize();
 
-  ImGui::TextUnformatted("USER INPUT");
-  if (ImNodes::BeginInputSlot("clk", 1)) {
+  ImGui::TextUnformatted("MOUSE INPUT");
+  if (ImNodes::BeginInputSlot("CLK", 1)) {
     gui::NodeSocket();
     ImGui::SameLine();
-    ImGui::TextUnformatted("clk");
+    if (ImGui::SmallButton("CLK")) {
+      Queue::sub().Push([clk = in_[0], ctx]() { clk->Receive(ctx, {}); });
+    }
     ImNodes::EndSlot();
   }
   ImGui::SameLine();
