@@ -105,9 +105,6 @@ class GenericDir : public File,
     if (itr == items_.end()) return nullptr;
     return itr->second.get();
   }
-  void Scan(std::function<void(std::string_view, File*)> L) const noexcept override {
-    for (auto& p : items_) L(p.first, p.second.get());
-  }
 
   File* Add(std::string_view name, std::unique_ptr<File>&& f) noexcept override {
     assert(f);

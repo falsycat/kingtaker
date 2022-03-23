@@ -141,10 +141,8 @@ class File {
   File& operator=(const File&) = delete;
   File& operator=(File&&) = delete;
 
-  // To make children referrable by path specification,
-  // return them by these methods.
+  // To make children referrable by path specification, returns them.
   virtual File* Find(std::string_view) const noexcept { return nullptr; }
-  virtual void Scan(std::function<void(std::string_view, File*)>) const noexcept { }
 
   virtual void Serialize(Packer&) const noexcept = 0;
   virtual std::unique_ptr<File> Clone(const std::shared_ptr<Env>&) const noexcept = 0;
