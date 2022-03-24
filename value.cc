@@ -14,7 +14,6 @@
 
 #include "iface/dir.hh"
 #include "iface/factory.hh"
-#include "iface/gui.hh"
 #include "iface/node.hh"
 
 #include "util/format.hh"
@@ -80,7 +79,7 @@ class Imm final : public File,
   void UpdateEditor() noexcept;
   template <int D> bool UpdateVec(linalg::vec<double, D>& vec) noexcept;
 
-  Time lastModified() const noexcept override {
+  Time lastmod() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
@@ -254,12 +253,11 @@ bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
 
 class ExternalText final : public File,
     public iface::DirItem,
-    public iface::GUI,
     public iface::Factory<Value> {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ExternalText>(
       "Value/ExternalText", "text data from a native file",
-      {typeid(iface::DirItem), typeid(iface::GUI), typeid(iface::Factory<Value>)});
+      {typeid(iface::DirItem), typeid(iface::Factory<Value>)});
 
   ExternalText(const std::shared_ptr<Env>& env, const std::string& path = "", bool editor_shown = false) noexcept :
       File(&type_, env), DirItem(kMenu),
@@ -293,78 +291,13 @@ class ExternalText final : public File,
     return Value(str_);
   }
 
-  void Update(RefStack& ref) noexcept override {
-    const auto em = ImGui::GetFontSize();
+  void Update(RefStack&, Event&) noexcept override;
+  void UpdateMenu(RefStack&) noexcept override;
 
-    if (editor_shown_) {
-      const auto id = ref.Stringify() + ": Text Editor";
-      ImGui::SetNextWindowSize({16*em, 16*em}, ImGuiCond_FirstUseEver);
-      if (ImGui::Begin(id.c_str(), &editor_shown_, ImGuiWindowFlags_MenuBar)) {
-        if (ImGui::BeginMenuBar()) {
-          if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Save")) {
-              Save();
-            }
-            if (ImGui::BeginMenu("Load")) {
-              constexpr auto kPathFlags = ImGuiInputTextFlags_EnterReturnsTrue;
-              constexpr auto kPathHint  = "path to native file";
-              if (ImGui::InputTextWithHint("##InputPath", kPathHint, &input_path_, kPathFlags)) {
-                if (Load(input_path_)) {
-                  input_path_              = "";
-                  input_path_load_failure_ = false;
-                  ImGui::CloseCurrentPopup();
-                }
-              }
-              ImGui::SetKeyboardFocusHere(-1);
-
-              if (input_path_load_failure_) {
-                ImGui::Bullet();
-                ImGui::TextUnformatted("load failure");
-              }
-              ImGui::EndMenu();
-            }
-            if (ImGui::MenuItem("Reload")) {
-              Load();
-            }
-            ImGui::EndMenu();
-          }
-          if (ImGui::BeginMenu("Edit")) {
-            ImGui::EndMenu();
-          }
-          ImGui::EndMenuBar();
-        }
-
-        if (path_.empty()) {
-          ImGui::TextUnformatted("(New File):");
-        } else {
-          ImGui::Text("%s:", path_.c_str());
-        }
-        if (modified_) {
-          ImGui::SameLine();
-          ImGui::Text("(modified)");
-        }
-        if (save_failure_) {
-          ImGui::SameLine();
-          ImGui::Text("(save error)");
-        }
-
-        if (1 != str_.use_count()) str_ = std::make_shared<std::string>(*str_);
-        if (ImGui::InputTextMultiline("##Editor", str_.get(), {-FLT_MIN, -FLT_MIN})) {
-          lastmod_  = Clock::now();
-          modified_ = true;
-        }
-      }
-      ImGui::End();
-    }
-  }
-  void UpdateMenu(RefStack&) noexcept override {
-    ImGui::MenuItem("Text Editor", nullptr, &editor_shown_);
-  }
-
-  Time lastModified() const noexcept override { return lastmod_; }
+  Time lastmod() const noexcept override { return lastmod_; }
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem, iface::GUI, iface::Factory<Value>>(t).Select(this);
+    return PtrSelector<iface::DirItem, iface::Factory<Value>>(t).Select(this);
   }
 
  private:
@@ -429,6 +362,73 @@ class ExternalText final : public File,
   bool modified_     = false;
   bool save_failure_ = false;
 };
+void ExternalText::Update(RefStack& ref, Event&) noexcept {
+  const auto em = ImGui::GetFontSize();
+
+  if (editor_shown_) {
+    const auto id = ref.Stringify() + ": Text Editor";
+    ImGui::SetNextWindowSize({16*em, 16*em}, ImGuiCond_FirstUseEver);
+    if (ImGui::Begin(id.c_str(), &editor_shown_, ImGuiWindowFlags_MenuBar)) {
+      if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+          if (ImGui::MenuItem("Save")) {
+            Save();
+          }
+          if (ImGui::BeginMenu("Load")) {
+            constexpr auto kPathFlags = ImGuiInputTextFlags_EnterReturnsTrue;
+            constexpr auto kPathHint  = "path to native file";
+            if (ImGui::InputTextWithHint("##InputPath", kPathHint, &input_path_, kPathFlags)) {
+              if (Load(input_path_)) {
+                input_path_              = "";
+                input_path_load_failure_ = false;
+                ImGui::CloseCurrentPopup();
+              }
+            }
+            ImGui::SetKeyboardFocusHere(-1);
+
+            if (input_path_load_failure_) {
+              ImGui::Bullet();
+              ImGui::TextUnformatted("load failure");
+            }
+            ImGui::EndMenu();
+          }
+          if (ImGui::MenuItem("Reload")) {
+            Load();
+          }
+          ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+          ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+      }
+
+      if (path_.empty()) {
+        ImGui::TextUnformatted("(New File):");
+      } else {
+        ImGui::Text("%s:", path_.c_str());
+      }
+      if (modified_) {
+        ImGui::SameLine();
+        ImGui::Text("(modified)");
+      }
+      if (save_failure_) {
+        ImGui::SameLine();
+        ImGui::Text("(save error)");
+      }
+
+      if (1 != str_.use_count()) str_ = std::make_shared<std::string>(*str_);
+      if (ImGui::InputTextMultiline("##Editor", str_.get(), {-FLT_MIN, -FLT_MIN})) {
+        lastmod_  = Clock::now();
+        modified_ = true;
+      }
+    }
+    ImGui::End();
+  }
+}
+void ExternalText::UpdateMenu(RefStack&) noexcept {
+  ImGui::MenuItem("Text Editor", nullptr, &editor_shown_);
+}
 
 
 class Logger final : public File, public iface::Node {

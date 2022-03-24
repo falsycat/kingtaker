@@ -13,7 +13,6 @@
 #include "kingtaker.hh"
 
 #include "iface/dir.hh"
-#include "iface/gui.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
@@ -29,12 +28,11 @@ namespace {
 // A simple implementation of directory file.
 class GenericDir : public File,
     public iface::Dir,
-    public iface::DirItem,
-    public iface::GUI {
+    public iface::DirItem {
  public:
   static inline TypeInfo type_ = TypeInfo::New<GenericDir>(
       "System/GenericDir", "generic impl of directory",
-      {typeid(iface::Dir), typeid(iface::DirItem), typeid(iface::GUI)});
+      {typeid(iface::Dir), typeid(iface::DirItem)});
 
   using ItemList = std::map<std::string, std::unique_ptr<File>>;
 
@@ -105,9 +103,6 @@ class GenericDir : public File,
     if (itr == items_.end()) return nullptr;
     return itr->second.get();
   }
-  void Scan(std::function<void(std::string_view, File*)> L) const noexcept override {
-    for (auto& p : items_) L(p.first, p.second.get());
-  }
 
   File* Add(std::string_view name, std::unique_ptr<File>&& f) noexcept override {
     assert(f);
@@ -132,30 +127,16 @@ class GenericDir : public File,
     return ret;
   }
 
-  void OnSaved(File::RefStack& ref) noexcept override {
-    Iterate(ref, [](auto& ref, auto& gui) { gui.OnSaved(ref); });
-  }
-  bool OnClosing(File::RefStack& ref) noexcept override {
-    bool closing = true;
-    Iterate(ref, [&closing](auto& ref, auto& gui) {
-              closing = gui.OnClosing(ref) && closing;
-            });
-    return closing;
-  }
-  void OnClosed(File::RefStack& ref) noexcept override {
-    Iterate(ref, [](auto& ref, auto& gui) { gui.OnClosed(ref); });
-  }
-
-  void Update(RefStack& ref) noexcept override;
+  void Update(RefStack& ref, Event&) noexcept override;
   void UpdateMenu(RefStack&) noexcept override;
   void UpdateTree(RefStack& ref) noexcept override;
   void UpdateItem(RefStack& ref, File* f) noexcept;
 
-  Time lastModified() const noexcept override {
+  Time lastmod() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Dir, iface::DirItem, iface::GUI>(t).
+    return PtrSelector<iface::Dir, iface::DirItem>(t).
         Select(this);
   }
 
@@ -169,19 +150,13 @@ class GenericDir : public File,
 
   // volatile params
   std::string name_for_new_;
-
-
-  void Iterate(File::RefStack& ref,
-               const std::function<void(File::RefStack&, iface::GUI&)>& f) {
-    for (auto& child : items_) {
-      ref.Push({child.first, child.second.get()});
-      f(ref, File::iface(*child.second, iface::GUI::null()));
-      ref.Pop();
-    }
-  }
 };
-void GenericDir::Update(File::RefStack& ref) noexcept {
-  Iterate(ref, [](auto& ref, auto& gui) { gui.Update(ref); });
+void GenericDir::Update(RefStack& ref, Event& ev) noexcept {
+  for (auto& child : items_) {
+    ref.Push({child.first, child.second.get()});
+    (*ref).Update(ref, ev);
+    ref.Pop();
+  }
   if (!shown_) return;
 
   const auto em = ImGui::GetFontSize();
@@ -197,7 +172,7 @@ void GenericDir::Update(File::RefStack& ref) noexcept {
   }
   ImGui::End();
 }
-void GenericDir::UpdateMenu(File::RefStack&) noexcept {
+void GenericDir::UpdateMenu(RefStack&) noexcept {
   ImGui::PushID(this);
 
   if (ImGui::BeginMenu("New")) {
@@ -249,14 +224,14 @@ void GenericDir::UpdateMenu(File::RefStack&) noexcept {
 
   ImGui::PopID();
 }
-void GenericDir::UpdateTree(File::RefStack& ref) noexcept {
+void GenericDir::UpdateTree(RefStack& ref) noexcept {
   for (auto& child : items_) {
     ref.Push({child.first, child.second.get()});
     UpdateItem(ref, child.second.get());
     ref.Pop();
   }
 }
-void GenericDir::UpdateItem(File::RefStack& ref, File* f) noexcept {
+void GenericDir::UpdateItem(RefStack& ref, File* f) noexcept {
   ImGuiTreeNodeFlags flags =
       ImGuiTreeNodeFlags_NoTreePushOnOpen |
       ImGuiTreeNodeFlags_SpanFullWidth;
@@ -329,7 +304,7 @@ class ImGuiConfig : public File {
 };
 
 
-class LogView : public File, public iface::GUI {
+class LogView : public File {
  public:
   static inline TypeInfo type_ = TypeInfo::New<LogView>(
       "System/LogView", "provides system log viewer", {});
@@ -350,28 +325,21 @@ class LogView : public File, public iface::GUI {
     return std::make_unique<LogView>(env, shown_);
   }
 
-  void Update(RefStack& ref) noexcept override {
+  void Update(RefStack& ref, Event& ev) noexcept override {
     const auto id = ref.Stringify() + kIdSuffix;
+    if (ev.IsFocused(this)) {
+      ImGui::SetWindowFocus(id.c_str());
+      shown_ = true;
+    }
+
     if (ImGui::Begin(id.c_str(), &shown_)) {
       ImGui::InputTextWithHint("##filter", "filter", &filter_);
       ImGui::SameLine();
       ImGui::Checkbox("auto-scroll", &autoscroll_);
 
-      notify::UpdateLogger(filter_, autoscroll_);
+      notify::UpdateLogger(ev, filter_, autoscroll_);
     }
     ImGui::End();
-  }
-  bool OnFocus(const RefStack& ref, size_t depth) noexcept override {
-    if (ref.size() != depth) return false;
-
-    const auto id = ref.Stringify() + kIdSuffix;
-    ImGui::SetWindowFocus(id.c_str());
-    shown_ = true;
-    return true;
-  }
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI>(t).Select(this);
   }
 
  private:
@@ -382,11 +350,11 @@ class LogView : public File, public iface::GUI {
 };
 
 
-class ClockPulseGenerator final : public File, public iface::DirItem, public iface::GUI {
+class ClockPulseGenerator final : public File, public iface::DirItem {
  public:
   static inline TypeInfo type_ = TypeInfo::New<ClockPulseGenerator>(
       "System/ClockPulseGenerator", "emits a pulse into a specific node on each GUI updates",
-      {typeid(iface::DirItem), typeid(iface::GUI)});
+      {typeid(iface::DirItem)});
 
   static inline const auto kIdSuffix = ": ClockPulseGenerator";
 
@@ -432,17 +400,14 @@ class ClockPulseGenerator final : public File, public iface::DirItem, public ifa
     return std::make_unique<ClockPulseGenerator>(env, path_, sock_name_, shown_, enable_);
   }
 
-  bool OnFocus(const RefStack& ref, size_t) noexcept override {
-    const auto id = ref.Stringify() + kIdSuffix;
-    ImGui::SetWindowFocus(id.c_str());
-    shown_ = true;
-    return true;
-  }
-
-  void Update(RefStack& ref) noexcept override {
+  void Update(RefStack& ref, Event& ev) noexcept override {
     if (enable_) Emit(ref);
 
     const auto id = ref.Stringify() + kIdSuffix;
+    if (ev.IsFocused(this)) {
+      ImGui::SetWindowFocus(id.c_str());
+      shown_ = true;
+    }
     if (ImGui::Begin(id.c_str(), &shown_)) {
       UpdateEditor(ref);
     }
@@ -451,7 +416,7 @@ class ClockPulseGenerator final : public File, public iface::DirItem, public ifa
   void UpdateEditor(RefStack&) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem, iface::GUI>(t).Select(this);
+    return PtrSelector<iface::DirItem>(t).Select(this);
   }
 
  private:
@@ -530,11 +495,11 @@ void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
 }
 
 
-class Logger final : public File, public iface::Node, public iface::GUI {
+class Logger final : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Logger>(
       "System/Logger", "prints msg to system log",
-      {typeid(iface::Node), typeid(iface::GUI)});
+      {typeid(iface::Node)});
 
   Logger(const std::shared_ptr<Env>& env,
          notify::Level      lv   = notify::kTrace,
@@ -595,12 +560,12 @@ class Logger final : public File, public iface::Node, public iface::GUI {
     return std::make_unique<Logger>(env, data_->lv, data_->msg, size_);
   }
 
-  void Update(RefStack&) noexcept override;
+  void Update(RefStack&, Event&) noexcept override;
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
   static void UpdateLevelCombo(notify::Level* lv) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:
@@ -637,7 +602,7 @@ class Logger final : public File, public iface::Node, public iface::GUI {
     }
   }
 };
-void Logger::Update(RefStack& ref) noexcept {
+void Logger::Update(RefStack& ref, Event&) noexcept {
   data_->path = ref.GetFullPath();
 }
 void Logger::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
@@ -682,11 +647,11 @@ void Logger::UpdateLevelCombo(notify::Level* lv) noexcept {
 }
 
 
-class MouseInput : public File, public iface::GUI, public iface::Node {
+class MouseInput : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<MouseInput>(
       "System/MouseInput", "retrieves mouse state",
-      {typeid(iface::GUI), typeid(iface::Node)});
+      {typeid(iface::Node)});
 
   MouseInput(const std::shared_ptr<Env>& env) noexcept :
       File(&type_, env), Node(kNone), data_(std::make_shared<UniversalData>()) {
@@ -735,12 +700,12 @@ class MouseInput : public File, public iface::GUI, public iface::Node {
     return std::make_unique<MouseInput>(env);
   }
 
-  void Update(RefStack&) noexcept override;
+  void Update(RefStack&, Event&) noexcept override;
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
   static void UpdateSocket(const char*, float) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:
@@ -760,7 +725,7 @@ class MouseInput : public File, public iface::GUI, public iface::Node {
     if (ImGui::IsMouseDoubleClicked(b)) str = "DOUBLE";
   }
 };
-void MouseInput::Update(RefStack&) noexcept {
+void MouseInput::Update(RefStack&, Event&) noexcept {
   const auto p = ImGui::GetMousePos();
   data_->pos = {p.x, p.y};
 
@@ -825,11 +790,11 @@ void MouseInput::UpdateSocket(const char* s, float w) noexcept {
 }
 
 
-class KeyInput final : public File, public iface::GUI, public iface::Node {
+class KeyInput final : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<KeyInput>(
       "System/KeyInput", "retrieves key state",
-      {typeid(iface::GUI), typeid(iface::Node)});
+      {typeid(iface::Node)});
 
   KeyInput(const std::shared_ptr<Env>& env, const std::string& key = "(none)") noexcept :
       File(&type_, env), Node(Node::kNone),
@@ -880,7 +845,7 @@ class KeyInput final : public File, public iface::GUI, public iface::Node {
     return std::make_unique<KeyInput>(env, key_);
   }
 
-  void Update(RefStack&) noexcept override {
+  void Update(RefStack&, Event&) noexcept override {
     FetchKeyCode();
 
     auto& st = data_->state;
@@ -904,7 +869,7 @@ class KeyInput final : public File, public iface::GUI, public iface::Node {
   static void UpdateSocket(const char*, float) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:

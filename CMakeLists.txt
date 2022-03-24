@@ -13,6 +13,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(KINGTAKER_CXX_FLAGS
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
     -Wall -Werror -pedantic-errors -Wextra -Wconversion -Wsign-conversion>
+  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:
+    -Wno-overloaded-virtual>
   $<$<CXX_COMPILER_ID:MSVC>:
     /W4 /WX>
 )
@@ -57,7 +59,6 @@ target_sources(kingtaker
 
     iface/dir.hh
     iface/factory.hh
-    iface/gui.hh
     iface/history.hh
     iface/node.hh
 

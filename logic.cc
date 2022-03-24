@@ -5,7 +5,6 @@
 #include <imgui.h>
 #include <ImNodes.h>
 
-#include "iface/gui.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
@@ -16,7 +15,7 @@
 namespace kingtaker {
 namespace {
 
-class Equal final : public File, public iface::GUI, public iface::Node {
+class Equal final : public File, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Equal>(
       "Logic/Equal", "emits a pulse if all of AND_X is equal to one of OR_X",
@@ -80,14 +79,14 @@ class Equal final : public File, public iface::GUI, public iface::Node {
     return std::make_unique<Equal>(env, data_->and_n, data_->or_n);
   }
 
-  void Update(RefStack& ref) noexcept override {
+  void Update(RefStack& ref, Event&) noexcept override {
     data_->path = ref.GetFullPath();
   }
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
   static bool UpdateSocks(const char*, int*, std::span<std::shared_ptr<InSock>>) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::GUI, iface::Node>(t).Select(this);
+    return PtrSelector<iface::Node>(t).Select(this);
   }
 
  private:

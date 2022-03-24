@@ -198,14 +198,11 @@ class Node::OutSock : public Sock {
 
   virtual void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
     ctx->ObserveSend(*this, v);
-    for (auto& dst : dst_) {
-      auto ptr = dst.lock();
-      if (!ptr) continue;
-
-      auto task = [ptr, ctx = ctx, v]() mutable {
-        ptr->Receive(ctx, std::move(v));
-        ctx = nullptr;
-        ptr = nullptr;
+    for (auto& wdst : dst_) {
+      if (wdst.expired()) continue;
+      auto task = [wdst, ctx = ctx, v]() mutable {
+        auto dst = wdst.lock();
+        if (dst) dst->Receive(ctx, std::move(v));
       };
       Queue::sub().Push(std::move(task));
     }

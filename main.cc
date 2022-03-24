@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <thread>
 
@@ -13,9 +14,8 @@
 
 #include "kingtaker.hh"
 
+#include "util/notify.hh"
 #include "util/queue.hh"
-
-#include "iface/gui.hh"
 
 // To prevent conflicts because of fucking windows.h, include GLFW last.
 #include <GLFW/glfw3.h>
@@ -28,12 +28,17 @@
 using namespace std::literals;
 using namespace kingtaker;
 
-static constexpr const char* kFileName      = "kingtaker.bin";
-static constexpr size_t      kTasksPerFrame = 1000;
+constexpr const char*           kFileName    = "kingtaker.bin";
+constexpr size_t                kSubTaskUnit = 100;
+constexpr std::chrono::duration kFrameDur    = 1000ms / 30;
 
+
+static std::mutex              main_mtx_;
+static std::condition_variable main_cv_;
+static std::thread             main_worker_;
+static std::atomic<bool>       main_alive_ = true;
 
 static std::optional<std::string> panic_;
-static bool                       alive_;
 
 static SimpleQueue mainq_;
 static SimpleQueue subq_;
@@ -45,13 +50,43 @@ Queue& Queue::cpu() noexcept { return cpuq_; }
 static std::unique_ptr<File> root_;
 File& File::root() noexcept { return *root_; }
 
+struct {
+  File::Event::Status       st = File::Event::kNone;
+  std::unordered_set<File*> focus;
+} next_;
+
+
+class Event final : public File::Event {
+ public:
+  Event() noexcept : File::Event(next_.st, std::move(next_.focus)) {
+    next_.st = closing()? kClosed: kNone;
+  }
+  void CancelClosing(File* f, std::string_view msg) noexcept override {
+    next_.st &= static_cast<Status>(~kClosed);
+    notify::Warn(
+        {}, f, "closing is refused by a file\nreason: "+std::string(msg));
+  }
+  void Focus(File* f) noexcept override {
+    next_.focus.insert(f);
+  }
+};
+
 
 void InitKingtaker() noexcept;
-void Save() noexcept;
-void Update() noexcept;
+
+void Update()        noexcept;
+void UpdatePanic()   noexcept;
+void UpdateAppMenu() noexcept;
+void Save()          noexcept;
+
+void WorkerMain() noexcept;
 
 
 int main(int, char**) {
+  // starts main worker
+  main_alive_ = true;
+  main_worker_ = std::thread(WorkerMain);
+
   // init display
   glfwSetErrorCallback(
       [](int, const char* msg) {
@@ -95,24 +130,28 @@ int main(int, char**) {
 
   // init kingtaker
   InitKingtaker();
-
   glfwShowWindow(window);
-  alive_ = true;
 
   // main loop
-  while (alive_) {
-    glfwPollEvents();
+  bool alive = true;
+  while (alive) {
+    const auto t = File::Clock::now();
 
+    // new frame
+    if (next_.st & File::Event::kClosed) alive = false;
+    glfwPollEvents();
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    Update();
-    if (!alive_) {
-      // call OnClosing event
-      File::RefStack path;
-      alive_ = !File::iface(*root_, iface::GUI::null()).OnClosing(path);
+    {
+      std::unique_lock<std::mutex> k(main_mtx_);
+      main_cv_.wait(k, []() { return !mainq_.pending(); });
+      Update();
+      main_cv_.notify_one();
     }
+
+    // render windows
     ImGui::Render();
 
     int w, h;
@@ -123,12 +162,14 @@ int main(int, char**) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  }
 
-  // call OnClosed event
-  File::RefStack path;
-  File::iface(*root_, iface::GUI::null()).OnClosed(path);
+    // wait
+    const auto dur = File::Clock::now() - t;
+    if (dur < kFrameDur) std::this_thread::sleep_for(kFrameDur - dur);
+  }
+  // request main worker to exit
+  main_alive_ = false;
+  main_cv_.notify_one();
 
   // teardown ImGUI
   ImGui_ImplOpenGL3_Shutdown();
@@ -139,6 +180,10 @@ int main(int, char**) {
   // teardown display
   glfwDestroyWindow(window);
   glfwTerminate();
+
+  // teardown system
+  main_worker_.join();
+  root_ = nullptr;
   return 0;
 }
 
@@ -175,9 +220,68 @@ void InitKingtaker() noexcept {
   }
 }
 
-void Save() noexcept {
+void Update() noexcept {
+  // panic msg
+  if (panic_) {
+    UpdatePanic();
+    return;
+  }
+
+  // update GUI
   File::RefStack path;
-  File::iface(*root_, iface::GUI::null()).OnSaved(path);
+  Event          ev;
+  root_->Update(path, ev);
+  UpdateAppMenu();
+}
+void UpdatePanic() noexcept {
+  static const char*    kWinId    = "PANIC##kingtaker/main.cc";
+  static constexpr auto kWinFlags =
+      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+
+  static constexpr auto kWidth  = 32;  /* em */
+  static constexpr auto kHeight = 8;   /* em */
+
+  const float em = ImGui::GetFontSize();
+  ImGui::SetNextWindowContentSize({kWidth*em, 0});
+
+  if (ImGui::BeginPopupModal(kWinId, nullptr, kWinFlags)) {
+    ImGui::Text("### something went wrong X( ###");
+    ImGui::InputTextMultiline(
+        "##message",
+        panic_->data(), panic_->size(),
+        ImVec2 {kWidth*em, kHeight*em},
+        ImGuiInputTextFlags_ReadOnly);
+
+    if (ImGui::Button("IGNORE")) {
+      panic_ = std::nullopt;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("ABORT")) {
+      std::abort();  // immediate death
+    }
+    ImGui::EndPopup();
+
+  } else if (panic_) {
+    ImGui::OpenPopup(kWinId);
+  }
+}
+void UpdateAppMenu() noexcept {
+  if (ImGui::BeginMainMenuBar()) {
+    if (ImGui::BeginMenu("App")) {
+      if (ImGui::MenuItem("Save")) {
+        mainq_.Push(Save);
+      }
+      if (ImGui::MenuItem("Quit")) {
+        next_.st = File::Event::kClosing;
+      }
+      ImGui::EndMenu();
+    }
+    ImGui::EndMainMenuBar();
+  }
+}
+void Save() noexcept {
+  next_.st |= File::Event::kSaved;
 
   std::ofstream f(kFileName, std::ios::binary);
   if (!f) {
@@ -193,78 +297,34 @@ void Save() noexcept {
   }
 }
 
-void Update() noexcept {
-  // panic msg
-  if (panic_) {
-    static const char*    kWinId    = "PANIC##kingtaker/main.cc";
-    static constexpr auto kWinFlags =
-        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+void WorkerMain() noexcept {
+  std::unique_lock<std::mutex> k(main_mtx_);
+  while (main_alive_) {
+    if (!k) k.lock();
 
-    static constexpr auto kWidth  = 32;  /* em */
-    static constexpr auto kHeight = 8;   /* em */
+    // wait for a request of queuing or exiting
+    main_cv_.wait(k, []() {
+        return !main_alive_ || mainq_.pending() || subq_.pending();
+      });
 
-    const float em = ImGui::GetFontSize();
-    ImGui::SetNextWindowContentSize({kWidth*em, 0});
+    try {
+      // empty mainq_ firstly
+      while (mainq_.Pop());
+      main_cv_.notify_one();
 
-    if (ImGui::BeginPopupModal(kWinId, nullptr, kWinFlags)) {
-      ImGui::Text("### something went wrong X( ###");
-      ImGui::InputTextMultiline(
-          "##message",
-          panic_->data(), panic_->size(),
-          ImVec2 {kWidth*em, kHeight*em},
-          ImGuiInputTextFlags_ReadOnly);
+      for (;;) {
+        // executes some tasks
+        size_t i = 0;
+        while (i < kSubTaskUnit && subq_.Pop()) ++i;
+        if (i < kSubTaskUnit || !main_alive_) break;
 
-      if (ImGui::Button("IGNORE")) {
-        panic_ = std::nullopt;
-        ImGui::CloseCurrentPopup();
+        // if relock fails or mainq is not empty, handle mainq again
+        k.unlock();
+        if (!k.try_lock() || mainq_.pending()) break;
       }
-      ImGui::SameLine();
-      if (ImGui::Button("ABORT")) {
-        std::abort();  // immediate death
-      }
-      ImGui::EndPopup();
 
-    } else if (panic_) {
-      ImGui::OpenPopup(kWinId);
+    } catch (Exception& e) {
+      panic_ = e.Stringify();
     }
-    return;
-  }
-
-  // tick task queues
-  const auto q_tick = SimpleQueue::GetSystemTick();
-  mainq_.Tick(q_tick);
-  subq_ .Tick(q_tick);
-  cpuq_ .Tick(q_tick);
-
-  // application menu
-  if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("App")) {
-      if (ImGui::MenuItem("Save")) {
-        mainq_.Push(Save);
-      }
-      if (ImGui::MenuItem("Quit")) {
-        alive_ = false;
-      }
-      ImGui::EndMenu();
-    }
-    ImGui::EndMainMenuBar();
-  }
-
-  // update GUI
-  auto gui = root_->iface<iface::GUI>();
-  if (!gui) {
-    panic_ = "ROOT doesn't have a GUI interface X(";
-    return;
-  }
-  File::RefStack path;
-  gui->Update(path);
-
-  // execute tasks
-  try {
-    size_t done = 0;
-    while (mainq_.Pop()) ++done;
-    while (done < kTasksPerFrame && subq_.Pop()) ++done;
-  } catch (Exception& e) {
-    panic_ = e.Stringify();
   }
 }

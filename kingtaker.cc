@@ -69,7 +69,6 @@ std::unique_ptr<File> File::Deserialize(std::istream& st, const std::shared_ptr<
   msgpack::unpack(obj, buf.data(), buf.size());
   return Deserialize(obj.get(), env);
 }
-
 void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
   pk.pack_map(2);
   pk.pack("type");
