@@ -132,7 +132,7 @@ class GenericDir : public File,
   void UpdateTree(RefStack& ref) noexcept override;
   void UpdateItem(RefStack& ref, File* f) noexcept;
 
-  Time lastModified() const noexcept override {
+  Time lastmod() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {

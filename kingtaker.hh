@@ -153,7 +153,7 @@ class File {
   virtual void Update(RefStack&, Event&) noexcept { }
 
   // Some features may use this field to detect changes.
-  virtual Time lastModified() const noexcept { return {}; }
+  virtual Time lastmod() const noexcept { return {}; }
 
   // Takes typeinfo of the requested interface and
   // returns a pointer of the implementation or nullptr if not implemented.

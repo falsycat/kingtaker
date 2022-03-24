@@ -176,7 +176,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
-  Time lastModified() const noexcept override {
+  Time lastmod() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
@@ -1155,7 +1155,7 @@ class Ref : public File, public iface::Node {
 
     auto factory = File::iface<iface::Factory<Value>>(f);
     if (factory) {
-      const auto mod = f->lastModified();
+      const auto mod = f->lastmod();
       if (lastmod_ < mod) {
         out_[0]->Send(ctx_, factory->Create());
         lastmod_ = mod;

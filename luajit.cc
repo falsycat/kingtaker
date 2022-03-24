@@ -357,7 +357,7 @@ class Script : public File, public iface::DirItem {
   void UpdateMenu(RefStack&) noexcept override;
   void UpdateCompiler(RefStack&) noexcept;
 
-  Time lastModified() const noexcept override {
+  Time lastmod() const noexcept override {
     std::unique_lock<std::mutex> k(data_->mtx);
     return data_->lastmod;
   }
@@ -375,7 +375,7 @@ class Script : public File, public iface::DirItem {
       if (f == this) throw Exception("self reference");
       {
         std::unique_lock<std::mutex> k(data_->mtx);
-        if (data_->reg_func != LUA_REFNIL && f->lastModified() <= data_->lastmod) {
+        if (data_->reg_func != LUA_REFNIL && f->lastmod() <= data_->lastmod) {
           return;
         }
       }
@@ -420,7 +420,7 @@ class Script : public File, public iface::DirItem {
     if (!factory) throw Exception("no factory interface for Value");
     auto script = factory->Create().get<std::shared_ptr<Value::String>>();
 
-    const auto lastmod = f->lastModified();
+    const auto lastmod = f->lastmod();
 
     // compile the script
     auto task = [
@@ -571,7 +571,7 @@ class Node : public File, public iface::Node {
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
   void UpdateMenu(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
-  Time lastModified() const noexcept override {
+  Time lastmod() const noexcept override {
     std::unique_lock<std::recursive_mutex> k(data_->mtx);
     return data_->lastmod;
   }
@@ -1032,7 +1032,7 @@ void Node::Update(RefStack& ref, Event&) noexcept {
   if (auto_rebuild_ || force_build_) {
     try {
       auto f = &*ref.Resolve(path_);
-      if (force_build_ || f->lastModified() > lastModified()) {
+      if (force_build_ || f->lastmod() > lastmod()) {
         Build(ref);
       }
     } catch (NotFoundException&) {

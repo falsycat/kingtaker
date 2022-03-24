@@ -79,7 +79,7 @@ class Imm final : public File,
   void UpdateEditor() noexcept;
   template <int D> bool UpdateVec(linalg::vec<double, D>& vec) noexcept;
 
-  Time lastModified() const noexcept override {
+  Time lastmod() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
@@ -294,7 +294,7 @@ class ExternalText final : public File,
   void Update(RefStack&, Event&) noexcept override;
   void UpdateMenu(RefStack&) noexcept override;
 
-  Time lastModified() const noexcept override { return lastmod_; }
+  Time lastmod() const noexcept override { return lastmod_; }
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Factory<Value>>(t).Select(this);
