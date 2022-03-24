@@ -91,7 +91,7 @@ class Queue {
   Queue& operator=(const Queue&) = delete;
   Queue& operator=(Queue&&) = delete;
 
-  virtual void Push(Task&&, std::chrono::milliseconds delay = 0ms) noexcept = 0;
+  virtual void Push(Task&&) noexcept = 0;
 };
 
 
