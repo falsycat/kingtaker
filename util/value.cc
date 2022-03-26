@@ -104,6 +104,7 @@ const char* Value::StringifyType() const noexcept {
   if (has<Vec3>())    return "vec3";
   if (has<Vec4>())    return "vec4";
   if (has<Tensor>())  return "tensor";
+  if (has<Data>())    return "data";
   return "unknown";
 }
 
@@ -137,6 +138,9 @@ std::string Value::Stringify(size_t max) const noexcept {
   }
   if (has<Tensor>()) {
     return get<Tensor>().StringifyMeta();
+  }
+  if (has<Data>()) {
+    return get<Data>().type();
   }
   return "???";
 }

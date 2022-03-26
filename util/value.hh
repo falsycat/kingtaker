@@ -26,6 +26,7 @@ class Value final {
   using Vec3    = linalg::double3;
   using Vec4    = linalg::double4;
   class Tensor;
+  class Data;
 
   using Variant = std::variant<
       Pulse,
@@ -36,7 +37,8 @@ class Value final {
       Vec3,
       Vec4,
       std::shared_ptr<String>,
-      std::shared_ptr<Tensor>>;
+      std::shared_ptr<Tensor>,
+      std::shared_ptr<Data>>;
 
   Value() noexcept : Value(Pulse()) { }
   Value(Pulse v) noexcept : v_(v) { }
@@ -54,6 +56,9 @@ class Value final {
   Value(const std::shared_ptr<String>& v) noexcept : v_(v) { }
 
   Value(Tensor&& t) noexcept : v_(std::make_shared<Tensor>(std::move(t))) { }
+
+  Value(const std::shared_ptr<Data>& v) noexcept : v_(v) { }
+  Value(std::shared_ptr<Data>&& v) noexcept : v_(std::move(v)) { }
 
   Value(const Value&) = default;
   Value(Value&&) = default;
@@ -75,8 +80,14 @@ class Value final {
 
     } else if constexpr (IsSharedPtr<T>) {
       auto& ptr = std::get<T>(v_);
-      if (1 != ptr.use_count()) v_ = std::make_unique<T::element_type>(*ptr);
-      return std::get<T>(v_);
+      if (1 != ptr.use_count()) {
+        if constexpr (std::is_same<typename T::element_type, Data>::value) {
+          ptr = ptr->Clone();
+        } else {
+          ptr = std::make_unique<typename T::element_type>(*ptr);
+        }
+      }
+      return ptr;
 
     } else {
       return std::get<T>(v_);
@@ -105,6 +116,8 @@ class Value final {
       return std::shared_ptr<String>();
     } else if constexpr (std::is_same<Tensor, T>::value) {
       return std::shared_ptr<Tensor>();
+    } else if constexpr (std::is_same<Data, T>::value) {
+      return std::shared_ptr<Data>();
     } else {
       return T();
     }
@@ -116,15 +129,19 @@ class Value final {
   static constexpr bool IsSharedType = !std::is_same<RawType<T>, T>::value;
 
   template <typename T>
-  static constexpr auto IsSharedPtr_(int) noexcept -> decltype(T::element_type, bool()) { return true; }
+  static constexpr auto IsSharedPtr_(int) noexcept ->
+      decltype(!std::is_void<typename T::element_type>::value, bool()) {
+    return true;
+  }
   template <typename T>
-  static constexpr auto IsSharedPtr_(int) noexcept -> bool { return false; }
+  static constexpr auto IsSharedPtr_(...) noexcept -> bool { return false; }
   template <typename T>
   static constexpr bool IsSharedPtr = IsSharedPtr_<T>(0);
 
   Variant v_;
 };
 bool operator==(const Value& a, const Value& b) noexcept;
+
 
 class Value::Tensor final {
  public:
@@ -203,7 +220,6 @@ class Value::Tensor final {
   std::vector<size_t>  dim_;
   std::vector<uint8_t> buf_;
 };
-
 template <> struct Value::Tensor::GetTypeOf<int8_t> { static constexpr Type value = I8; };
 template <> struct Value::Tensor::GetTypeOf<int16_t> { static constexpr Type value = I16; };
 template <> struct Value::Tensor::GetTypeOf<int32_t> { static constexpr Type value = I32; };
@@ -214,5 +230,24 @@ template <> struct Value::Tensor::GetTypeOf<uint32_t> { static constexpr Type va
 template <> struct Value::Tensor::GetTypeOf<uint64_t> { static constexpr Type value = U64; };
 template <> struct Value::Tensor::GetTypeOf<float> { static constexpr Type value = F32; };
 template <> struct Value::Tensor::GetTypeOf<double> { static constexpr Type value = F64; };
+
+
+class Value::Data {
+ public:
+  Data() = delete;
+  Data(const char* type) noexcept : type_(type) { }
+  virtual ~Data() = default;
+  Data(const Data&) = default;
+  Data(Data&&) = default;
+  Data& operator=(const Data&) = default;
+  Data& operator=(Data&&) = default;
+
+  virtual std::shared_ptr<Data> Clone() const noexcept = 0;
+
+  const char* type() const noexcept { return type_; }
+
+ private:
+  const char* type_;
+};
 
 }  // namespace kingtaker
