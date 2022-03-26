@@ -50,6 +50,10 @@ void Value::Serialize(File::Packer& pk) const {
     v.Serialize(pk);
     return;
   }
+  if (has<Named>()) {
+    get<Named>().Serialize(pk);
+    return;
+  }
   throw Exception("serialization is not supported on the type");
 }
 Value Value::Deserialize(const msgpack::object& obj) {
@@ -105,6 +109,7 @@ const char* Value::StringifyType() const noexcept {
   if (has<Vec4>())    return "vec4";
   if (has<Tensor>())  return "tensor";
   if (has<Data>())    return "data";
+  if (has<Named>())   return "named";
   return "unknown";
 }
 
@@ -141,6 +146,9 @@ std::string Value::Stringify(size_t max) const noexcept {
   }
   if (has<Data>()) {
     return get<Data>().type();
+  }
+  if (has<Named>()) {
+    return get<Named>().name();
   }
   return "???";
 }
@@ -262,29 +270,23 @@ std::string Value::Tensor::StringifyMeta() const noexcept {
   return ret;
 }
 
-Value::Object Value::Object::Deserialize(const msgpack::object& obj) {
-  if (obj.type != msgpack::type::MAP) {
-    throw DeserializeException("Object must be a map");
+Value::Named Value::Named::Deserialize(const msgpack::object& obj) {
+  try {
+    return Named(
+        msgpack::find(obj, "name"s).as<std::string>(),
+        Value::Deserialize(msgpack::find(obj, "value"s)));
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken Value::Named");
   }
-  auto& map = obj.via.map;
-
-  Object ret;
-  for (size_t i = 0; i < map.size; ++i) {
-    const auto& kv  = map.ptr[i];
-    if (kv.key.type != msgpack::type::STR) {
-      throw DeserializeException("Object key must be a string");
-    }
-    const auto& key = kv.key.via.str;
-    ret[std::string(key.ptr, key.size)] = Value::Deserialize(kv.val);
-  }
-  return ret;
 }
-void Value::Object::Serialize(File::Packer& pk) const noexcept {
-  pk.pack_map(static_cast<uint32_t>(size()));
-  for (auto& p : *this) {
-    pk.pack(p.first);
-    p.second.Serialize(pk);
-  }
+void Value::Named::Serialize(File::Packer& pk) const noexcept {
+  pk.pack_map(2);
+
+  pk.pack("name"s);
+  pk.pack(name_);
+
+  pk.pack("value"s);
+  value_.Serialize(pk);
 }
 
 }  // namespace kingtaker

@@ -5,7 +5,6 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -28,7 +27,7 @@ class Value final {
   using Vec4    = linalg::double4;
   class Tensor;
   class Data;
-  class Object;
+  class Named;
 
   using Variant = std::variant<
       Pulse,
@@ -41,7 +40,7 @@ class Value final {
       std::shared_ptr<String>,
       std::shared_ptr<Tensor>,
       std::shared_ptr<Data>,
-      std::shared_ptr<Object>>;
+      std::shared_ptr<Named>>;
 
   Value() noexcept : Value(Pulse()) { }
   Value(Pulse v) noexcept : v_(v) { }
@@ -65,9 +64,9 @@ class Value final {
   Value(const std::shared_ptr<Data>& d) noexcept : v_(d) { }
   Value(std::shared_ptr<Data>&& d) noexcept : v_(std::move(d)) { }
 
-  Value(Object&& v) noexcept : v_(std::make_shared<Object>(std::move(v))) { }
-  Value(const std::shared_ptr<Object>& v) noexcept : v_(v) { }
-  Value(std::shared_ptr<Object>&& v) noexcept : v_(std::move(v)) { }
+  Value(std::string_view n, Value&& v) noexcept : v_(std::make_shared<Named>(n, std::move(v))) { }
+  Value(const std::shared_ptr<Named>& v) noexcept : v_(v) { }
+  Value(std::shared_ptr<Named>&& v) noexcept : v_(std::move(v)) { }
 
   Value(const Value&) = default;
   Value(Value&&) = default;
@@ -127,6 +126,8 @@ class Value final {
       return std::shared_ptr<Tensor>();
     } else if constexpr (std::is_same<Data, T>::value) {
       return std::shared_ptr<Data>();
+    } else if constexpr (std::is_same<Named, T>::value) {
+      return std::shared_ptr<Named>();
     } else {
       return T();
     }
@@ -260,16 +261,25 @@ class Value::Data {
 };
 
 
-class Value::Object final : public std::unordered_map<std::string, Value> {
+class Value::Named final {
  public:
-  Object() = default;
-  Object(const Object&) = default;
-  Object(Object&&) = default;
-  Object& operator=(const Object&) = default;
-  Object& operator=(Object&&) = default;
+  Named() = delete;
+  Named(std::string_view n, Value&& v) noexcept : name_(n), value_(std::move(v)) { }
+  Named(const Named&) = default;
+  Named(Named&&) = default;
+  Named& operator=(const Named&) = default;
+  Named& operator=(Named&&) = default;
 
-  static Object Deserialize(const msgpack::object&);
+  static Named Deserialize(const msgpack::object&);
   void Serialize(File::Packer&) const noexcept;
+
+  const std::string& name() const noexcept { return name_; }
+  const Value& value() const noexcept { return value_; }
+
+ private:
+  std::string name_;
+
+  Value value_;
 };
 
 }  // namespace kingtaker
