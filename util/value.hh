@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -27,6 +28,7 @@ class Value final {
   using Vec4    = linalg::double4;
   class Tensor;
   class Data;
+  class Object;
 
   using Variant = std::variant<
       Pulse,
@@ -38,7 +40,8 @@ class Value final {
       Vec4,
       std::shared_ptr<String>,
       std::shared_ptr<Tensor>,
-      std::shared_ptr<Data>>;
+      std::shared_ptr<Data>,
+      std::shared_ptr<Object>>;
 
   Value() noexcept : Value(Pulse()) { }
   Value(Pulse v) noexcept : v_(v) { }
@@ -56,9 +59,15 @@ class Value final {
   Value(const std::shared_ptr<String>& v) noexcept : v_(v) { }
 
   Value(Tensor&& t) noexcept : v_(std::make_shared<Tensor>(std::move(t))) { }
+  Value(const std::shared_ptr<Tensor>& t) noexcept : v_(t) { }
+  Value(std::shared_ptr<Tensor>&& t) noexcept : v_(std::move(t)) { }
 
-  Value(const std::shared_ptr<Data>& v) noexcept : v_(v) { }
-  Value(std::shared_ptr<Data>&& v) noexcept : v_(std::move(v)) { }
+  Value(const std::shared_ptr<Data>& d) noexcept : v_(d) { }
+  Value(std::shared_ptr<Data>&& d) noexcept : v_(std::move(d)) { }
+
+  Value(Object&& v) noexcept : v_(std::make_shared<Object>(std::move(v))) { }
+  Value(const std::shared_ptr<Object>& v) noexcept : v_(v) { }
+  Value(std::shared_ptr<Object>&& v) noexcept : v_(std::move(v)) { }
 
   Value(const Value&) = default;
   Value(Value&&) = default;
@@ -248,6 +257,19 @@ class Value::Data {
 
  private:
   const char* type_;
+};
+
+
+class Value::Object final : public std::unordered_map<std::string, Value> {
+ public:
+  Object() = default;
+  Object(const Object&) = default;
+  Object(Object&&) = default;
+  Object& operator=(const Object&) = default;
+  Object& operator=(Object&&) = default;
+
+  static Object Deserialize(const msgpack::object&);
+  void Serialize(File::Packer&) const noexcept;
 };
 
 }  // namespace kingtaker
