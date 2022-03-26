@@ -264,7 +264,7 @@ class LuaJIT final {
       } else {
         []<bool f = false>() { static_assert(f, "unknown type"); }();
       }
-    } catch (Exception& e) {
+    } catch (Exception&) {
       lua_pushnil(L);
       return 1;
     }
@@ -1014,6 +1014,10 @@ class Node : public File, public iface::Node {
 
     // push a table passed to the handler
     struct Event final {
+     public:
+      Event(const Value& v, const std::weak_ptr<Data>& d, const std::weak_ptr<Context>& n) noexcept :
+          value(v), data(d), nctx(n) {
+      }
       Value value;
       std::weak_ptr<Data>    data;
       std::weak_ptr<Context> nctx;
