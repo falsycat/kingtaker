@@ -584,20 +584,17 @@ class Script : public File, public iface::DirItem {
     dev_.Queue(std::move(task));
   }
 };
-void Script::Update(RefStack& ref, Event&) noexcept {
+void Script::Update(RefStack& ref, Event& ev) noexcept {
   if (auto_recompile_) CompileIf(ref);
 
-  const auto id = ref.Stringify() + ": LuaJIT Script Compiler";
-  if (shown_) {
-    if (ImGui::Begin(id.c_str(), &shown_)) {
-      if (ImGui::BeginPopupContextWindow()) {
-        UpdateMenu(ref);
-        ImGui::EndPopup();
-      }
-      UpdateCompiler(ref);
+  if (gui::BeginWindow(this, "LuaJIT Script Compiler", ref, ev, &shown_)) {
+    if (ImGui::BeginPopupContextWindow()) {
+      UpdateMenu(ref);
+      ImGui::EndPopup();
     }
-    ImGui::End();
+    UpdateCompiler(ref);
   }
+  gui::EndWindow();
 }
 void Script::UpdateMenu(RefStack& ref) noexcept {
   ImGui::MenuItem("Compiler View", nullptr, &shown_);

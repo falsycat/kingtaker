@@ -47,6 +47,34 @@ ResizeGroup::~ResizeGroup() noexcept {
 }
 
 
+static bool BeginWindow_end_required_ = false;
+
+bool BeginWindow(
+    File*                 fptr,
+    const char*           name,
+    const File::RefStack& ref,
+    const File::Event&    ev,
+    bool*                 shown,
+    ImGuiWindowFlags      flags) noexcept {
+  BeginWindow_end_required_ = false;
+
+  const auto id = ref.Stringify()+": "s+name;
+  if (ev.IsFocused(fptr)) {
+    ImGui::SetWindowFocus(id.c_str());
+    *shown = true;
+  }
+  if (!*shown) {
+    return false;
+  }
+
+  BeginWindow_end_required_ = true;
+  return ImGui::Begin(id.c_str(), shown, flags);
+}
+void EndWindow() noexcept {
+  if (BeginWindow_end_required_) ImGui::End();
+}
+
+
 void NodeSocket() noexcept {
   auto win = ImGui::GetCurrentWindow();
 

@@ -363,13 +363,14 @@ class ExternalText final : public File,
   bool modified_     = false;
   bool save_failure_ = false;
 };
-void ExternalText::Update(RefStack& ref, Event&) noexcept {
+void ExternalText::Update(RefStack& ref, Event& ev) noexcept {
   const auto em = ImGui::GetFontSize();
 
   if (editor_shown_) {
-    const auto id = ref.Stringify() + ": Text Editor";
     ImGui::SetNextWindowSize({16*em, 16*em}, ImGuiCond_FirstUseEver);
-    if (ImGui::Begin(id.c_str(), &editor_shown_, ImGuiWindowFlags_MenuBar)) {
+
+    constexpr auto kWinFlags = ImGuiWindowFlags_MenuBar;
+    if (gui::BeginWindow(this, "TextEditor", ref, ev, &editor_shown_, kWinFlags)) {
       if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
           if (ImGui::MenuItem("Save")) {
@@ -424,7 +425,7 @@ void ExternalText::Update(RefStack& ref, Event&) noexcept {
         modified_ = true;
       }
     }
-    ImGui::End();
+    gui::EndWindow();
   }
 }
 void ExternalText::UpdateMenu(RefStack&) noexcept {
