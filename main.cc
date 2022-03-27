@@ -14,6 +14,7 @@
 
 #include "kingtaker.hh"
 
+#include "util/gui.hh"
 #include "util/notify.hh"
 #include "util/queue.hh"
 
@@ -269,11 +270,34 @@ void UpdatePanic() noexcept {
 void UpdateAppMenu() noexcept {
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("App")) {
-      if (ImGui::MenuItem("Save")) {
+      if (ImGui::MenuItem("save")) {
         mainq_.Push(Save);
       }
-      if (ImGui::MenuItem("Quit")) {
+      if (ImGui::MenuItem("quit")) {
         next_.st = File::Event::kClosing;
+      }
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("View")) {
+      if (ImGui::MenuItem("focus root")) {
+        next_.focus.insert(&*File::RefStack());
+      }
+      if (ImGui::BeginMenu("focus by path")) {
+        static std::string path, path_editing;
+        File::RefStack ref;
+        if (gui::InputPathMenu(ref, &path_editing, &path)) {
+          next_.focus.insert(&*ref.Resolve(path));
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Info")) {
+      if (ImGui::MenuItem("registered type list")) {
+        // TODO
+      }
+      if (ImGui::MenuItem("version")) {
+        // TODO
       }
       ImGui::EndMenu();
     }
