@@ -207,6 +207,9 @@ class LuaJIT final {
 
         lua_pushcfunction(L, L_GetValueAs<Value::Vec4>);
         lua_setfield(L, -2, "vec4");
+
+        lua_pushcfunction(L, L_GetValueAs<Value::Named>);
+        lua_setfield(L, -2, "named");
       lua_setfield(L, -2, "__index");
 
       PushObjDeleter<Value>(L);
@@ -261,6 +264,12 @@ class LuaJIT final {
         lua_pushnumber(L, v4[3]);
         return 4;
 
+      } else if constexpr (std::is_same<T, Value::Named>::value) {
+        const auto& n = v->get<Value::Named>();
+        lua_pushstring(L, n.name().c_str());
+        PushValue(L, n.value());
+        return 2;
+
       } else {
         []<bool f = false>() { static_assert(f, "unknown type"); }();
       }
@@ -303,6 +312,10 @@ class LuaJIT final {
               luaL_checknumber(L, 2),
               luaL_checknumber(L, 3),
               luaL_checknumber(L, 4)));
+
+    } else if constexpr (std::is_same<T, Value::Named>::value) {
+      PushValue(L, Value(
+              luaL_checkstring(L, 1), GetObj<Value>(L, 2, "Value")));
 
     } else {
       []<bool f = false>() { static_assert(f, "unknown type"); }();
@@ -393,6 +406,9 @@ class LuaJIT final {
 
         lua_pushcfunction(L, L_PushValue<Value::Vec4>);
         lua_setfield(L, -2, "vec4");
+
+        lua_pushcfunction(L, L_PushValue<Value::Named>);
+        lua_setfield(L, -2, "named");
       lua_setfield(L, -2, "value");
     lua_setfield(L, -2, "std");
 
@@ -1324,7 +1340,9 @@ class InlineNode final : public File, public iface::Node {
       // output result
       const auto ret = dev_.GetObjIf<Value>(L, -1, "Value");
       if (!ret) {
-        notify::Warn(data->path, self, "Value is expected, or return nil to do nothing");
+        if (!lua_isnil(L, -1)) {
+          notify::Warn(data->path, self, "Value is expected, or return nil to do nothing");
+        }
         return;
       }
       auto task = [wout, wctx, ret = *ret]() mutable {
