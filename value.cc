@@ -18,6 +18,7 @@
 
 #include "util/format.hh"
 #include "util/gui.hh"
+#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -608,6 +609,156 @@ void Logger::Update(File::RefStack&, const std::shared_ptr<Context>& ctx) noexce
       ImGui::EndTable();
     }
   }
+}
+
+
+class Name final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<Name>(
+      "Value/Name", "names and passes input into output",
+      {typeid(iface::Node)});
+
+  Name(const std::shared_ptr<Env>& env, const std::string& name = "") noexcept :
+      File(&type_, env), Node(kNone),
+      data_(std::make_shared<UniversalData>()) {
+    data_->name = name;
+
+    out_.emplace_back(new OutSock(this, "out"));
+
+    auto task = [self = this, out = out_[0], data = data_](const auto& ctx, auto&& v) {
+      if (data->valid_name) {
+        out->Send(ctx, Value(data->name, std::move(v)));
+      } else {
+        notify::Warn(data->path, self,
+                     "got input but name is invalid, emitting is skipped");
+      }
+    };
+    in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
+  }
+
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    return std::make_unique<Name>(env, obj.as<std::string>());
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(data_->name);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<Name>(env, data_->name);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+
+ private:
+  // permanentized
+  struct UniversalData {
+    Path path;
+
+    std::string name;
+    bool valid_name;
+  };
+  std::shared_ptr<UniversalData> data_;
+};
+void Name::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  data_->path = ref.GetFullPath();
+
+  ImGui::TextUnformatted("NAME");
+
+  if (ImNodes::BeginInputSlot("in", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+  ImGui::SameLine();
+
+  ImGui::SetNextItemWidth(8*ImGui::GetFontSize());
+  ImGui::InputText("##Name", &data_->name);
+
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+
+  const auto msg = Value::Named::ValidateName(data_->name);
+  if (msg) ImGui::Text("%s", msg);
+  data_->valid_name = !msg;
+}
+
+
+class Pick final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<Pick>(
+      "Value/Pick", "passes input into output if name of the value is matched",
+      {typeid(iface::Node)});
+
+  Pick(const std::shared_ptr<Env>& env, const std::string& name = "") noexcept :
+      File(&type_, env), Node(kNone),
+      data_(std::make_shared<UniversalData>()) {
+    data_->name = name;
+
+    out_.emplace_back(new OutSock(this, "out"));
+
+    auto task = [out = out_[0], data = data_](const auto& ctx, Value&& v) {
+      if (!v.has<Value::Named>()) return;
+
+      const auto& n = v.get<Value::Named>();
+      if (n.name() != data->name) return;
+
+      out->Send(ctx, Value(n.value()));
+    };
+    in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
+  }
+
+  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    return std::make_unique<Pick>(env, obj.as<std::string>());
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(data_->name);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<Pick>(env, data_->name);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+
+ private:
+  // permanentized
+  struct UniversalData {
+    std::string name;
+  };
+  std::shared_ptr<UniversalData> data_;
+};
+void Pick::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+  ImGui::TextUnformatted("PICK");
+
+  if (ImNodes::BeginInputSlot("in", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+  ImGui::SameLine();
+
+  ImGui::SetNextItemWidth(8*ImGui::GetFontSize());
+  ImGui::InputText("##Name", &data_->name);
+
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeSocket();
+    ImNodes::EndSlot();
+  }
+
+  const auto msg = Value::Named::ValidateName(data_->name);
+  if (msg) ImGui::Text("%s", msg);
 }
 
 } }  // namespace kingtaker
