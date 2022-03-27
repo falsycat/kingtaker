@@ -270,6 +270,24 @@ std::string Value::Tensor::StringifyMeta() const noexcept {
   return ret;
 }
 
+const char* Value::Named::ValidateName(std::string_view v) noexcept {
+  if (v.empty()) return "empty is not allowed";
+  if (v.size() >= 256) {
+    return "too long (>256)";
+  }
+
+  static const std::string kAllowedChars =
+      "abcdefghijklmnopqrstuvwxyz"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "0123456789_";
+  for (auto c : v) {
+    if (kAllowedChars.find(c) == std::string::npos) {
+      return "forbidden char";
+    }
+  }
+  return nullptr;
+}
+
 Value::Named Value::Named::Deserialize(const msgpack::object& obj) {
   try {
     return Named(

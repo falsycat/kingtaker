@@ -18,6 +18,7 @@
 
 #include "util/format.hh"
 #include "util/gui.hh"
+#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -624,8 +625,13 @@ class Name final : public File, public iface::Node {
 
     out_.emplace_back(new OutSock(this, "out"));
 
-    auto task = [out = out_[0], data = data_](const auto& ctx, auto&& v) {
-      out->Send(ctx, Value(data->name, std::move(v)));
+    auto task = [self = this, out = out_[0], data = data_](const auto& ctx, auto&& v) {
+      if (data->valid_name) {
+        out->Send(ctx, Value(data->name, std::move(v)));
+      } else {
+        notify::Warn(data->path, self,
+                     "got input but name is invalid, emitting is skipped");
+      }
     };
     in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
   }
@@ -649,11 +655,16 @@ class Name final : public File, public iface::Node {
  private:
   // permanentized
   struct UniversalData {
+    Path path;
+
     std::string name;
+    bool valid_name;
   };
   std::shared_ptr<UniversalData> data_;
 };
-void Name::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+void Name::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
+  data_->path = ref.GetFullPath();
+
   ImGui::TextUnformatted("NAME");
 
   if (ImNodes::BeginInputSlot("in", 1)) {
@@ -672,6 +683,10 @@ void Name::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
     gui::NodeSocket();
     ImNodes::EndSlot();
   }
+
+  const auto msg = Value::Named::ValidateName(data_->name);
+  if (msg) ImGui::Text("%s", msg);
+  data_->valid_name = !msg;
 }
 
 
@@ -741,6 +756,9 @@ void Pick::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
     gui::NodeSocket();
     ImNodes::EndSlot();
   }
+
+  const auto msg = Value::Named::ValidateName(data_->name);
+  if (msg) ImGui::Text("%s", msg);
 }
 
 } }  // namespace kingtaker

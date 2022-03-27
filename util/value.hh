@@ -263,6 +263,8 @@ class Value::Data {
 
 class Value::Named final {
  public:
+  static const char* ValidateName(std::string_view) noexcept;
+
   Named() = delete;
   Named(std::string_view n, Value&& v) noexcept : name_(n), value_(std::move(v)) { }
   Named(const Named&) = default;
