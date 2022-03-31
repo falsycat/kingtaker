@@ -157,20 +157,18 @@ void GenericDir::Update(RefStack& ref, Event& ev) noexcept {
     (*ref).Update(ref, ev);
     ref.Pop();
   }
-  if (!shown_) return;
 
   const auto em = ImGui::GetFontSize();
   ImGui::SetNextWindowSize({16*em, 12*em}, ImGuiCond_FirstUseEver);
 
-  const auto id = ref.Stringify()+": GenericDir TreeView";
-  if (ImGui::Begin(id.c_str(), &shown_)) {
+  if (gui::BeginWindow(this, "TreeView", ref, ev, &shown_)) {
     if (ImGui::BeginPopupContextWindow()) {
       UpdateMenu(ref);
       ImGui::EndPopup();
     }
     UpdateTree(ref);
   }
-  ImGui::End();
+  gui::EndWindow();
 }
 void GenericDir::UpdateMenu(RefStack&) noexcept {
   ImGui::PushID(this);
@@ -309,8 +307,6 @@ class LogView : public File {
   static inline TypeInfo type_ = TypeInfo::New<LogView>(
       "System/LogView", "provides system log viewer", {});
 
-  static inline const auto kIdSuffix = ": LogView";
-
   LogView(const std::shared_ptr<Env>& env, bool shown = true) noexcept :
       File(&type_, env), shown_(shown) {
   }
@@ -326,20 +322,14 @@ class LogView : public File {
   }
 
   void Update(RefStack& ref, Event& ev) noexcept override {
-    const auto id = ref.Stringify() + kIdSuffix;
-    if (ev.IsFocused(this)) {
-      ImGui::SetWindowFocus(id.c_str());
-      shown_ = true;
-    }
-
-    if (ImGui::Begin(id.c_str(), &shown_)) {
+    if (gui::BeginWindow(this, "LogView", ref, ev, &shown_)) {
       ImGui::InputTextWithHint("##filter", "filter", &filter_);
       ImGui::SameLine();
       ImGui::Checkbox("auto-scroll", &autoscroll_);
 
       notify::UpdateLogger(ev, filter_, autoscroll_);
     }
-    ImGui::End();
+    gui::EndWindow();
   }
 
  private:
@@ -355,8 +345,6 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
   static inline TypeInfo type_ = TypeInfo::New<ClockPulseGenerator>(
       "System/ClockPulseGenerator", "emits a pulse into a specific node on each GUI updates",
       {typeid(iface::DirItem)});
-
-  static inline const auto kIdSuffix = ": ClockPulseGenerator";
 
   ClockPulseGenerator(const std::shared_ptr<Env>& env,
                       const std::string& path      = "",
@@ -403,15 +391,10 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
   void Update(RefStack& ref, Event& ev) noexcept override {
     if (enable_) Emit(ref);
 
-    const auto id = ref.Stringify() + kIdSuffix;
-    if (ev.IsFocused(this)) {
-      ImGui::SetWindowFocus(id.c_str());
-      shown_ = true;
-    }
-    if (ImGui::Begin(id.c_str(), &shown_)) {
+    if (gui::BeginWindow(this, "ClockPulseGenerator", ref, ev, &shown_)) {
       UpdateEditor(ref);
     }
-    ImGui::End();
+    gui::EndWindow();
   }
   void UpdateEditor(RefStack&) noexcept;
 

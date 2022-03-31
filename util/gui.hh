@@ -25,6 +25,16 @@ class ResizeGroup final {
 };
 
 
+bool BeginWindow(
+    File*,
+    const char*,
+    const File::RefStack&,
+    const File::Event&,
+    bool*,
+    ImGuiWindowFlags = 0) noexcept;
+void EndWindow() noexcept;
+
+
 void NodeSocket() noexcept;
 void NodeCanvasSetZoom() noexcept;
 void NodeCanvasResetZoom() noexcept;

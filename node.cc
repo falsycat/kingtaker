@@ -36,8 +36,6 @@ class Network : public File, public iface::DirItem, public iface::Node {
       "Node/Network", "manages multiple Nodes and connections between them",
       {typeid(iface::DirItem), typeid(iface::History)});
 
-  static inline const std::string kIdSuffix = ": Network Editor";
-
   using IndexMap = std::unordered_map<Node*, size_t>;
   using NodeMap  = std::vector<Node*>;
 
@@ -164,7 +162,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     canvas_.Offset = (target->pos()*canvas_.Zoom - canvas_size_/2.f)*-1.f;
 
     // focus the editor
-    const auto id = ref.Stringify() + kIdSuffix;
+    const auto id = ref.Stringify() + ": NetworkEditor";
     ImGui::SetWindowFocus(id.c_str());
     shown_ = true;
   }
@@ -666,24 +664,18 @@ void Network::Update(RefStack& ref, Event& ev) noexcept {
     h->UpdateWindow(ref, ev);
   }
 
-  const auto id = ref.Stringify() + kIdSuffix;
-  if (ev.IsFocused(this)) {
-    ImGui::SetWindowFocus(id.c_str());
-    shown_ = true;
-  }
-
   const auto size = ImVec2(24.f, 24.f)*ImGui::GetFontSize();
   ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
 
   constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-  if (ImGui::Begin(id.c_str(), &shown_, kFlags)) {
+  if (gui::BeginWindow(this, "NetworkEditor", ref, ev, &shown_, kFlags)) {
     canvas_size_ = ImGui::GetWindowSize();
     UpdateCanvas(ref);
   }
-  ImGui::End();
+  gui::EndWindow();
 }
 void Network::UpdateMenu(RefStack&) noexcept {
-  ImGui::MenuItem("Network Editor", nullptr, &shown_);
+  ImGui::MenuItem("NetworkEditor", nullptr, &shown_);
 }
 void Network::UpdateCanvas(RefStack& ref) noexcept {
   ImNodes::BeginCanvas(&canvas_);
