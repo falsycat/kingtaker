@@ -80,6 +80,8 @@ void UpdatePanic()   noexcept;
 void UpdateAppMenu() noexcept;
 void Save()          noexcept;
 
+std::string GenerateSystemInfoFullText() noexcept;
+
 void WorkerMain() noexcept;
 
 
@@ -236,11 +238,11 @@ void Update() noexcept {
 }
 void UpdatePanic() noexcept {
   static const char*    kWinId    = "PANIC##kingtaker/main.cc";
-  static constexpr auto kWinFlags =
+  constexpr    auto     kWinFlags =
       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
 
-  static constexpr auto kWidth  = 32;  /* em */
-  static constexpr auto kHeight = 8;   /* em */
+  constexpr auto kWidth  = 32;  /* em */
+  constexpr auto kHeight = 8;   /* em */
 
   const float em = ImGui::GetFontSize();
   ImGui::SetNextWindowContentSize({kWidth*em, 0});
@@ -293,11 +295,41 @@ void UpdateAppMenu() noexcept {
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Info")) {
-      if (ImGui::MenuItem("registered type list")) {
-        // TODO
+      if (ImGui::BeginMenu("registered types")) {
+        for (const auto& p : File::registry()) {
+          auto t = p.second;
+          ImGui::MenuItem(t->name().c_str());
+          if (ImGui::IsItemHovered()) {
+            if (t->gui()) {
+              t->UpdateGUI();
+            } else {
+              ImGui::BeginTooltip();
+              ImGui::Text("name   : %s", t->name().c_str());
+              ImGui::Text("desc   : %s", t->desc().c_str());
+              ImGui::Text("factory:");
+              ImGui::Indent();
+              if (t->factory())      { ImGui::Bullet(); ImGui::TextUnformatted("New"); }
+              if (t->assocFactory()) { ImGui::Bullet(); ImGui::TextUnformatted("Association"); }
+              if (t->deserializer()) { ImGui::Bullet(); ImGui::TextUnformatted("Deserialize"); }
+              ImGui::Unindent();
+              ImGui::EndTooltip();
+            }
+          }
+        }
+        ImGui::EndMenu();
       }
-      if (ImGui::MenuItem("version")) {
-        // TODO
+
+      ImGui::MenuItem("system");
+      if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted("KINGTAKER vX.Y.Z (WTFPL)");
+        ImGui::TextUnformatted("no fee, no copyright, no limitation");
+        ImGui::EndTooltip();
+      }
+
+      ImGui::Separator();
+      if (ImGui::MenuItem("copy full info as text")) {
+        ImGui::SetClipboardText(GenerateSystemInfoFullText().c_str());
       }
       ImGui::EndMenu();
     }
@@ -319,6 +351,17 @@ void Save() noexcept {
     panic_ = "failed to write: "s+kFileName;
     return;
   }
+}
+
+std::string GenerateSystemInfoFullText() noexcept {
+  std::string ret =
+      "# KINGTAKER vX.Y.Z (WTFPL)\n"
+      "\n"
+      "## REGISTRY\n";
+  for (auto& p : File::registry()) {
+    ret += "- "s+p.first+"\n";
+  }
+  return ret;
 }
 
 void WorkerMain() noexcept {

@@ -255,6 +255,7 @@ class File::TypeInfo final {
   bool factory() const noexcept { return !!factory_; }
   bool assocFactory() const noexcept { return !!assoc_factory_; }
   bool deserializer() const noexcept { return !!deserializer_; }
+  bool gui() const noexcept { return !!gui_; }
 
  private:
   template <typename T>
