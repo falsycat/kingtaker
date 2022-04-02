@@ -75,14 +75,20 @@ class Queue {
  public:
   using Task = std::function<void()>;
 
-  // task is absolutely processed on each frame.
+  // synchronized with kingtaker filesystem
+  // and all tasks are processed on each GUI update
   static Queue& main() noexcept;
 
-  // task might be skipped when many tasks are queued.
+  // synchronized with kingtaker filesystem
+  // some tasks might not be done if display update is done faster than them
   static Queue& sub() noexcept;
 
-  // task is executed asnyc by other threads
+  // tasks are done in thread independent completely from kingtaker filesystem
   static Queue& cpu() noexcept;
+
+  // synchronized with GUI update but not with filesystem
+  // all tasks are processed with valid GL context on each GUI update
+  static Queue& gl() noexcept;
 
   Queue() = default;
   virtual ~Queue() = default;

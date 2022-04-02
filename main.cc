@@ -43,10 +43,12 @@ static std::optional<std::string> panic_;
 
 static SimpleQueue mainq_;
 static SimpleQueue subq_;
+static SimpleQueue glq_;
 static CpuQueue    cpuq_(2);
 Queue& Queue::main() noexcept { return mainq_; }
 Queue& Queue::sub() noexcept { return subq_; }
 Queue& Queue::cpu() noexcept { return cpuq_; }
+Queue& Queue::gl() noexcept { return glq_; }
 
 static std::unique_ptr<File> root_;
 File& File::root() noexcept { return *root_; }
@@ -165,6 +167,9 @@ int main(int, char**) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
+
+    // handle GL queue
+    while (glq_.Pop());
 
     // wait
     const auto dur = File::Clock::now() - t;
