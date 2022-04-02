@@ -534,4 +534,129 @@ void Satisfy::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   }
 }
 
+
+class SetAndGet final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<SetAndGet>(
+      "Logic/SetAndGet", "set any Value, get anytime",
+      {typeid(iface::Node)});
+
+  SetAndGet(const std::shared_ptr<Env>& env, bool global = false) noexcept :
+      File(&type_, env), Node(kNone),
+      life_(std::make_shared<std::monostate>()), global_(global) {
+    out_.emplace_back(new OutSock(this, "out"));
+    out_.emplace_back(new OutSock(this, "null"));
+
+    std::weak_ptr<std::monostate> life = life_;
+    auto set_task = [this, life](const auto& ctx, auto&& v) {
+      if (life.expired()) return;
+      GetValue(ctx) = std::move(v);
+    };
+    auto unset_task = [this, life](const auto& ctx, auto&&) {
+      if (life.expired()) return;
+      GetValue(ctx) = std::nullopt;
+    };
+    auto get_task = [this, life, out = out_[0], null = out_[1]](const auto& ctx, auto&&) {
+      if (life.expired()) return;
+      const auto& v = GetValue(ctx);
+      if (v) {
+        out->Send(ctx, Value(*v));
+      } else {
+        null->Send(ctx, {});
+      }
+    };
+    in_.emplace_back(new LambdaInSock(this, "set", std::move(set_task)));
+    in_.emplace_back(new LambdaInSock(this, "unset", std::move(unset_task)));
+    in_.emplace_back(new LambdaInSock(this, "get", std::move(get_task)));
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    return std::make_unique<SetAndGet>(env, obj.as<bool>());
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(global_);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<SetAndGet>(env, global_);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+
+ private:
+  std::shared_ptr<std::monostate> life_;
+
+  // permanentized
+  bool global_;
+
+  // volatile
+  std::optional<Value> value_;
+
+
+  std::optional<Value>& GetValue(const std::shared_ptr<Context>& ctx) noexcept {
+    class ContextData final : public Context::Data {
+     public:
+      std::optional<Value> value;
+    };
+    return global_? value_: ctx->GetOrNew<ContextData>(this)->value;
+  }
+};
+void SetAndGet::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  ImGui::TextUnformatted("SET AND GET");
+
+  ImGui::BeginGroup();
+  {
+    if (ImNodes::BeginInputSlot("set", 1)) {
+      gui::NodeSocket();
+      ImGui::SameLine();
+      ImGui::TextUnformatted("set");
+      ImNodes::EndSlot();
+    }
+    if (ImNodes::BeginInputSlot("unset", 1)) {
+      gui::NodeSocket();
+      ImGui::SameLine();
+      if (ImGui::SmallButton("unset")) {
+        Queue::sub().Push([unset = in_[1], ctx]() { unset->Receive(ctx, {}); });
+      }
+      ImNodes::EndSlot();
+    }
+    if (ImNodes::BeginInputSlot("get", 1)) {
+      gui::NodeSocket();
+      ImGui::SameLine();
+      if (ImGui::SmallButton("get")) {
+        Queue::sub().Push([get = in_[2], ctx]() { get->Receive(ctx, {}); });
+      }
+      ImNodes::EndSlot();
+    }
+  }
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+
+  ImGui::BeginGroup();
+  {
+    const auto w = 3*ImGui::GetFontSize();
+
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+w-ImGui::CalcTextSize("out").x);
+    if (ImNodes::BeginOutputSlot("out", 1)) {
+      ImGui::TextUnformatted("out");
+      ImGui::SameLine();
+      gui::NodeSocket();
+      ImNodes::EndSlot();
+    }
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+w-ImGui::CalcTextSize("null").x);
+    if (ImNodes::BeginOutputSlot("null", 1)) {
+      ImGui::TextUnformatted("null");
+      ImGui::SameLine();
+      gui::NodeSocket();
+      ImNodes::EndSlot();
+    }
+  }
+  ImGui::EndGroup();
+}
+
 }}  // namespace kingtaker
