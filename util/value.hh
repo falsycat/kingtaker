@@ -90,7 +90,9 @@ class Value final {
       auto& ptr = std::get<T>(v_);
       if (1 != ptr.use_count()) {
         if constexpr (std::is_same<typename T::element_type, Data>::value) {
-          ptr = ptr->Clone();
+          auto ptr_new = ptr->Clone();
+          if (!ptr_new) throw Exception("data clone failure");
+          ptr = ptr_new;
         } else {
           ptr = std::make_unique<typename T::element_type>(*ptr);
         }
@@ -252,7 +254,7 @@ class Value::Data {
   Data& operator=(const Data&) = default;
   Data& operator=(Data&&) = default;
 
-  virtual std::shared_ptr<Data> Clone() const noexcept = 0;
+  virtual std::shared_ptr<Data> Clone() const noexcept { return nullptr; }
 
   const char* type() const noexcept { return type_; }
 

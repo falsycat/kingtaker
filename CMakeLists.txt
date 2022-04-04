@@ -63,6 +63,7 @@ target_sources(kingtaker
     iface/node.hh
 
     util/format.hh
+    util/gl.hh
     util/gui.hh
     util/gui.cc
     util/keymap.hh
