@@ -136,42 +136,42 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
   auto& v = *value_;
 
   const char* type =
-      v.has<Value::Integer>()? "Int":
-      v.has<Value::Scalar>()?  "Sca":
-      v.has<Value::Boolean>()? "Boo":
-      v.has<Value::Vec2>()?    "Ve2":
-      v.has<Value::Vec3>()?    "Ve3":
-      v.has<Value::Vec4>()?    "Ve4":
-      v.has<Value::String>()?  "Str": "XXX";
+      v.isInteger()? "Int":
+      v.isScalar()?  "Sca":
+      v.isBoolean()? "Boo":
+      v.isVec2()?    "Ve2":
+      v.isVec3()?    "Ve3":
+      v.isVec4()?    "Ve4":
+      v.isString()?  "Str": "XXX";
   mini? ImGui::SmallButton(type): ImGui::Button(type);
 
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-    if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
+    if (ImGui::MenuItem("integer", nullptr, v.isInteger())) {
       v = Value::Integer {0};
       OnUpdate();
     }
-    if (ImGui::MenuItem("scalar", nullptr, v.has<Value::Scalar>())) {
+    if (ImGui::MenuItem("scalar", nullptr, v.isScalar())) {
       v = Value::Scalar {0};
       OnUpdate();
     }
-    if (ImGui::MenuItem("boolean", nullptr, v.has<Value::Boolean>())) {
+    if (ImGui::MenuItem("boolean", nullptr, v.isBoolean())) {
       v = Value::Boolean {false};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec2", nullptr, v.has<Value::Vec2>())) {
+    if (ImGui::MenuItem("vec2", nullptr, v.isVec2())) {
       v = Value::Vec2 {0., 0.};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec3", nullptr, v.has<Value::Vec3>())) {
+    if (ImGui::MenuItem("vec3", nullptr, v.isVec3())) {
       v = Value::Vec3 {0., 0., 0.};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec4", nullptr, v.has<Value::Vec4>())) {
+    if (ImGui::MenuItem("vec4", nullptr, v.isVec4())) {
       v = Value::Vec4 {0., 0., 0., 0.};
       OnUpdate();
     }
-    if (ImGui::MenuItem("string", nullptr, v.has<Value::String>())) {
+    if (ImGui::MenuItem("string", nullptr, v.isString())) {
       v = ""s;
       OnUpdate();
     }
@@ -187,49 +187,49 @@ void Imm::UpdateEditor() noexcept {
   auto& v = *value_;
 
   ImGui::SameLine();
-  if (v.has<Value::Integer>()) {
+  if (v.isInteger()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(size_.x*em);
-    if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.getUniq<Value::Integer>())) {
+    if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.integer())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Scalar>()) {
+  } else if (v.isScalar()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(size_.x*em);
-    if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.getUniq<Value::Scalar>())) {
+    if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.scalar())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Boolean>()) {
-    if (ImGui::Checkbox("##editor", &v.getUniq<Value::Boolean>())) {
+  } else if (v.isBoolean()) {
+    if (ImGui::Checkbox("##editor", &v.boolean())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Vec2>()) {
+  } else if (v.isVec2()) {
     const auto h = (2*fh + sp)/em;
     gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.getUniq<Value::Vec2>())) {
+    if (UpdateVec(v.vec2())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Vec3>()) {
+  } else if (v.isVec3()) {
     const auto h = (3*fh + 2*sp)/em;
     gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.getUniq<Value::Vec3>())) {
+    if (UpdateVec(v.vec3())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Vec4>()) {
+  } else if (v.isVec4()) {
     const auto h = (4*fh + 3*sp)/em;
     gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.getUniq<Value::Vec4>())) {
+    if (UpdateVec(v.vec4())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::String>()) {
+  } else if (v.isString()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {24, 24}, em);
-    if (ImGui::InputTextMultiline("##editor", &v.getUniq<Value::String>(), size_*em)) {
+    if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), size_*em)) {
       OnUpdate();
     }
 

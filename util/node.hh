@@ -64,10 +64,6 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
     }
     return itr->second;
   }
-  template <typename T>
-  const T& in(size_t idx) const {
-    return in(idx).get<T>();
-  }
 
  private:
   std::unordered_map<size_t, Value> in_;

@@ -224,37 +224,37 @@ class LuaJIT final {
     auto v = GetObj<Value>(L, 1, "Value");
     try {
       if constexpr (std::is_same<T, Value::Integer>::value) {
-        lua_pushinteger(L, static_cast<Value::Integer>(v->get<Value::Integer>()));
+        lua_pushinteger(L, static_cast<Value::Integer>(v->integer()));
         return 1;
 
       } else if constexpr (std::is_same<T, Value::Scalar>::value) {
-        lua_pushnumber(L, static_cast<Value::Scalar>(v->get<Value::Scalar>()));
+        lua_pushnumber(L, static_cast<Value::Scalar>(v->scalar()));
         return 1;
 
       } else if constexpr (std::is_same<T, Value::Boolean>::value) {
-        lua_pushboolean(L, v->get<Value::Boolean>());
+        lua_pushboolean(L, v->boolean());
         return 1;
 
       } else if constexpr (std::is_same<T, Value::String>::value) {
-        const auto& str = v->get<Value::String>();
+        const auto& str = v->string();
         lua_pushlstring(L, str.c_str(), str.size());
         return 1;
 
       } else if constexpr (std::is_same<T, Value::Vec2>::value) {
-        const auto& v2 = v->get<Value::Vec2>();
+        const auto& v2 = v->vec2();
         lua_pushnumber(L, v2[0]);
         lua_pushnumber(L, v2[1]);
         return 2;
 
       } else if constexpr (std::is_same<T, Value::Vec3>::value) {
-        const auto& v3 = v->get<Value::Vec3>();
+        const auto& v3 = v->vec3();
         lua_pushnumber(L, v3[0]);
         lua_pushnumber(L, v3[1]);
         lua_pushnumber(L, v3[2]);
         return 3;
 
       } else if constexpr (std::is_same<T, Value::Vec4>::value) {
-        const auto& v4 = v->get<Value::Vec4>();
+        const auto& v4 = v->vec4();
         lua_pushnumber(L, v4[0]);
         lua_pushnumber(L, v4[1]);
         lua_pushnumber(L, v4[2]);
@@ -534,7 +534,7 @@ class Script : public File, public iface::DirItem {
     // fetch script
     auto factory = File::iface<iface::Factory<Value>>(f);
     if (!factory) throw Exception("no factory interface for Value");
-    auto script = factory->Create().get<std::shared_ptr<Value::String>>();
+    auto script = factory->Create().stringPtr();
 
     const auto lastmod = f->lastmod();
 

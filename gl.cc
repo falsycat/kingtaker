@@ -22,7 +22,7 @@ namespace kingtaker {
 static void GetResolution(const Value& v, int32_t& w, int32_t& h) {
   constexpr int32_t kMaxReso = 4096;
 
-  const auto size = v.get<Value::Vec2>();
+  const auto size = v.vec2();
   w = static_cast<int32_t>(size.x);
   h = static_cast<int32_t>(size.y);
   if (w <= 0 || h <= 0 || w > kMaxReso || h > kMaxReso) {
@@ -84,7 +84,7 @@ class TextureFactory final : public LambdaNodeDriver {
       // get format
       GLenum fmt;
       try {
-        const auto idx = gl::ParseFormat<Exception>(in<Value::String>(3));
+        const auto idx = gl::ParseFormat<Exception>(in(3).string());
         fmt = gl::kFormats[idx].gl;
       } catch (Exception& e) {
         throw Exception("invalid format: "+e.msg());
@@ -182,7 +182,7 @@ class RenderbufferFactory final : public LambdaNodeDriver {
       // get format
       GLenum fmt;
       try {
-        const auto idx = gl::ParseFormat<Exception>(in<Value::String>(3));
+        const auto idx = gl::ParseFormat<Exception>(in(3).string());
         fmt = gl::kFormats[idx].gl;
       } catch (Exception& e) {
         throw Exception("invalid format: "+e.msg());
@@ -191,7 +191,7 @@ class RenderbufferFactory final : public LambdaNodeDriver {
       // get samples
       GLsizei samples;
       try {
-        samples = static_cast<GLsizei>(in<Value::Integer>(4));
+        samples = static_cast<GLsizei>(in(4).integer());
         if (samples < 0 || samples >= 32) {
           throw Exception("out of range");
         }
@@ -288,9 +288,9 @@ class FramebufferFactory final : public LambdaNodeDriver {
     for (const auto& at : gl::kAttachments) {
       try {
         const auto& value = in(3+at.idx);
-        if (value.has<Value::Pulse>()) continue;
+        if (value.isPulse()) continue;
 
-        const auto data = value.get<std::shared_ptr<Value::Data>>();
+        const auto& data = value.dataPtr();
 
         // validate tex or rb
         auto tex = std::dynamic_pointer_cast<gl::Texture>(data);
@@ -440,22 +440,20 @@ class ProgramFactory final : public LambdaNodeDriver {
       prog_  = gl::Program::Create(0);
     }
 
-    std::shared_ptr<gl::Shader> shader;
     try {
-      auto data = v.get<std::shared_ptr<Value::Data>>();
-      shader = std::dynamic_pointer_cast<gl::Shader>(data);
-      if (!shader) throw Exception("data is not gl::Shader");
+      const auto shader = v.dataPtr<gl::Shader>();
+
+      auto task = [prog = prog_, shader]() {
+        glAttachShader(prog->id(), shader->id());
+        assert(glGetError() == GL_NO_ERROR);
+      };
+      Queue::gl().Push(std::move(task));
+
     } catch (Exception& e) {
       notify::Warn(owner_->path(), owner_,
                    "skipped attaching shader because of error: "+e.msg());
       return;
     }
-
-    auto task = [prog = prog_, shader]() {
-      glAttachShader(prog->id(), shader->id());
-      assert(glGetError() == GL_NO_ERROR);
-    };
-    Queue::gl().Push(std::move(task));
   }
   void Link() noexcept {
     auto ctx = ctx_.lock();
@@ -545,8 +543,8 @@ class ShaderFactory final : public LambdaNodeDriver {
     auto errr = owner_->out()[1];
 
     try {
-      const auto type = in<Value::String>(2);
-      const auto src  = in<std::shared_ptr<Value::String>>(3);
+      const auto type = in(2).string();
+      const auto src  = in(3).stringPtr();
 
       GLenum t = 0;
       if (type == "vertex")   t = GL_VERTEX_SHADER;
@@ -639,36 +637,23 @@ class DrawArrays final : public LambdaNodeDriver {
 
     try {
       // get objects
-      const auto prog_data = in<std::shared_ptr<Value::Data>>(2);
-      const auto fb_data   = in<std::shared_ptr<Value::Data>>(3);
-      const auto vao_data  = in<std::shared_ptr<Value::Data>>(4);
-
-      auto prog = std::dynamic_pointer_cast<gl::Program>(prog_data);
-      if (!prog) {
-        throw Exception("prog is not an OpenGL program");
-      }
-      auto fb = std::dynamic_pointer_cast<gl::Framebuffer>(fb_data);
-      if (!fb) {
-        throw Exception("fb is not an OpenGL framebuffer");
-      }
-      auto vao = std::dynamic_pointer_cast<gl::VertexArray>(vao_data);
-      if (!vao) {
-        throw Exception("vao is not an OpenGL vertex array");
-      }
+      const auto prog = in(2).dataPtr<gl::Program>();
+      const auto fb   = in(3).dataPtr<gl::Framebuffer>();
+      const auto vao  = in(4).dataPtr<gl::VertexArray>();
 
       // get viewport
-      const Value::Vec4 viewport = in<Value::Vec4>(5);
+      const auto& viewport = in(5).vec4();
 
       // get mode
-      const auto mode  = in<Value::String>(6);
+      const auto& mode  = in(6).string();
       GLenum m = 0;
       if (mode == "triangles") m = GL_TRIANGLES;
       // TODO
       if (m == 0) throw Exception("unknown draw mode: "+mode);
 
       // get vertices
-      const auto first = in<Value::Integer>(7);
-      const auto count = in<Value::Integer>(8);
+      const auto first = in(7).integer();
+      const auto count = in(8).integer();
       try {
         if (first < 0 || count < 0) {
           throw Exception("out of range");
@@ -791,7 +776,7 @@ class Preview final : public File, public iface::DirItem {
     }
     void Exec() {
       try {
-        auto path = File::ParsePath(in<Value::String>(2));
+        auto path = File::ParsePath(in(2).string());
 
         auto target_file = &*RefStack().Resolve(owner_->path()).Resolve(path);
         auto target      = dynamic_cast<Preview*>(target_file);
@@ -799,8 +784,7 @@ class Preview final : public File, public iface::DirItem {
           throw Exception("target is not a preview");
         }
 
-        auto tex_data = in<std::shared_ptr<Value::Data>>(3);
-        auto tex      = std::dynamic_pointer_cast<gl::Texture>(tex_data);
+        auto tex = in(3).dataPtr<gl::Texture>();
         if (!tex || tex->gl() != GL_TEXTURE_2D) {
           throw Exception("tex is not a GL_TEXTURE_2D");
         }

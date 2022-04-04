@@ -6,42 +6,42 @@
 namespace kingtaker {
 
 void Value::Serialize(File::Packer& pk) const {
-  if (has<Integer>()) {
-    pk.pack(get<Integer>());
+  if (isInteger()) {
+    pk.pack(integer());
     return;
   }
-  if (has<Scalar>()) {
-    pk.pack(get<Scalar>());
+  if (isScalar()) {
+    pk.pack(scalar());
     return;
   }
-  if (has<Boolean>()) {
-    pk.pack(get<Boolean>());
+  if (isBoolean()) {
+    pk.pack(boolean());
     return;
   }
-  if (has<String>()) {
-    pk.pack(get<String>());
+  if (isString()) {
+    pk.pack(string());
     return;
   }
-  if (has<Vec2>()) {
-    auto& v = get<Vec2>();
+  if (isVec2()) {
+    auto& v = vec2();
     pk.pack_array(2);
     pk.pack(v.x); pk.pack(v.y);
     return;
   }
-  if (has<Vec3>()) {
-    auto& v = get<Vec3>();
+  if (isVec3()) {
+    auto& v = vec3();
     pk.pack_array(3);
     pk.pack(v.x); pk.pack(v.y); pk.pack(v.z);
     return;
   }
-  if (has<Vec4>()) {
-    auto& v = get<Vec4>();
+  if (isVec4()) {
+    auto& v = vec4();
     pk.pack_array(4);
     pk.pack(v.x); pk.pack(v.y); pk.pack(v.z); pk.pack(v.w);
     return;
   }
-  if (has<Tensor>()) {
-    auto& v = get<Tensor>();
+  if (isTensor()) {
+    auto& v = tensor();
     pk.pack_map(2);
     pk.pack("type"s);
     pk.pack("tensor"s);
@@ -95,80 +95,80 @@ Value Value::Deserialize(const msgpack::object& obj) {
 }
 
 const char* Value::StringifyType() const noexcept {
-  if (has<Pulse>())   return "pulse";
-  if (has<Integer>()) return "integer";
-  if (has<Scalar>())  return "scalar";
-  if (has<Boolean>()) return "boolean";
-  if (has<String>())  return "string";
-  if (has<Vec2>())    return "vec2";
-  if (has<Vec3>())    return "vec3";
-  if (has<Vec4>())    return "vec4";
-  if (has<Tensor>())  return "tensor";
-  if (has<Data>())    return "data";
+  if (isPulse())   return "pulse";
+  if (isInteger()) return "integer";
+  if (isScalar())  return "scalar";
+  if (isBoolean()) return "boolean";
+  if (isString())  return "string";
+  if (isVec2())    return "vec2";
+  if (isVec3())    return "vec3";
+  if (isVec4())    return "vec4";
+  if (isTensor())  return "tensor";
+  if (isData())    return "data";
   return "unknown";
 }
 
 std::string Value::Stringify(size_t max) const noexcept {
-  if (has<Pulse>()) {
+  if (isPulse()) {
     return "Z";
   }
-  if (has<Integer>()) {
-    return std::to_string(get<Integer>());
+  if (isInteger()) {
+    return std::to_string(integer());
   }
-  if (has<Scalar>()) {
-    return std::to_string(get<Scalar>());
+  if (isScalar()) {
+    return std::to_string(scalar());
   }
-  if (has<Boolean>()) {
-    return get<Boolean>()? "T": "F";
+  if (isBoolean()) {
+    return boolean()? "T": "F";
   }
-  if (has<String>()) {
-    return get<String>().substr(0, max);
+  if (isString()) {
+    return string().substr(0, max);
   }
-  if (has<Vec2>()) {
-    auto& v = get<Vec2>();
+  if (isVec2()) {
+    auto& v = vec2();
     return "("+std::to_string(v[0])+", "+std::to_string(v[1])+")";
   }
-  if (has<Vec3>()) {
-    auto& v = get<Vec3>();
+  if (isVec3()) {
+    auto& v = vec3();
     return "("+std::to_string(v[0])+", "+std::to_string(v[1])+", "+std::to_string(v[2])+")";
   }
-  if (has<Vec4>()) {
-    auto& v = get<Vec4>();
+  if (isVec4()) {
+    auto& v = vec4();
     return "("+std::to_string(v[0])+", "+std::to_string(v[1])+", "+std::to_string(v[2])+", "+std::to_string(v[3])+")";
   }
-  if (has<Tensor>()) {
-    return get<Tensor>().StringifyMeta();
+  if (isTensor()) {
+    return tensor().StringifyMeta();
   }
-  if (has<Data>()) {
-    return get<Data>().type();
+  if (isData()) {
+    return data().type();
   }
   return "???";
 }
 
 bool operator==(const Value& a, const Value& b) noexcept {
-  if (a.has<Value::Pulse>() && b.has<Value::Pulse>()) {
+  if (a.isPulse() && b.isPulse()) {
     return true;
   }
-  if (a.has<Value::Integer>() && b.has<Value::Integer>()) {
-    return a.get<Value::Integer>() == b.get<Value::Integer>();
+  if (a.isInteger() && b.isInteger()) {
+    return a.integer() == b.integer();
   }
-  if (b.has<Value::Scalar>() && b.has<Value::Scalar>()) {
-    return a.get<Value::Scalar>() == b.get<Value::Scalar>();
+  if (b.isScalar() && b.isScalar()) {
+    return a.scalar() == b.scalar();
   }
-  if (b.has<Value::Boolean>() && b.has<Value::Boolean>()) {
-    return a.get<Value::Boolean>() == b.get<Value::Boolean>();
+  if (b.isBoolean() && b.isBoolean()) {
+    return a.boolean() == b.boolean();
   }
-  if (b.has<Value::String>() && b.has<Value::String>()) {
-    return a.get<Value::String>() == b.get<Value::String>();
+  if (b.isString() && b.isString()) {
+    return a.string() == b.string();
   }
-  if (b.has<Value::Vec2>() && b.has<Value::Vec2>()) {
-    return a.get<Value::Vec2>() == b.get<Value::Vec2>();
+  if (b.isVec2() && b.isVec2()) {
+    return a.vec2() == b.vec2();
   }
-  if (b.has<Value::Vec3>() && b.has<Value::Vec3>()) {
-    return a.get<Value::Vec3>() == b.get<Value::Vec3>();
+  if (b.isVec3() && b.isVec3()) {
+    return a.vec3() == b.vec3();
   }
-  if (b.has<Value::Vec4>() && b.has<Value::Vec4>()) {
-    return a.get<Value::Vec4>() == b.get<Value::Vec4>();
+  if (b.isVec4() && b.isVec4()) {
+    return a.vec4() == b.vec4();
   }
   return false;
 }

@@ -15,6 +15,14 @@
 
 namespace kingtaker {
 
+class ValueException : public Exception {
+ public:
+  ValueException(std::string_view msg, Loc loc = Loc::current()) noexcept :
+      Exception(msg, loc) {
+  }
+};
+
+
 class Value final {
  public:
   using Pulse   = std::monostate;
@@ -73,75 +81,137 @@ class Value final {
   const char* StringifyType() const noexcept;
   std::string Stringify(size_t max = 64) const noexcept;
 
-  template <typename T>
-  T& getUniq() {
-    if (!has<T>()) throw Exception("incompatible Value type");
+  bool isPulse() const noexcept {
+    return std::holds_alternative<Pulse>(v_);
+  }
 
-    if constexpr (IsSharedType<T>) {
-      return *getUniq<std::shared_ptr<T>>();
+  bool isInteger() const noexcept {
+    return std::holds_alternative<Integer>(v_);
+  }
+  Integer integer() const {
+    if (!isInteger()) throw ValueException("expect Integer but got "s+StringifyType());
+    return std::get<Integer>(v_);
+  }
+  Integer& integer() {
+    if (!isInteger()) throw ValueException("expect Integer but got "s+StringifyType());
+    return std::get<Integer>(v_);
+  }
 
-    } else if constexpr (IsSharedPtr<T>) {
-      auto& ptr = std::get<T>(v_);
-      if (1 != ptr.use_count()) {
-        if constexpr (std::is_same<typename T::element_type, Data>::value) {
-          auto ptr_new = ptr->Clone();
-          if (!ptr_new) throw Exception("data clone failure");
-          ptr = ptr_new;
-        } else {
-          ptr = std::make_unique<typename T::element_type>(*ptr);
-        }
-      }
-      return ptr;
+  bool isScalar() const noexcept {
+    return std::holds_alternative<Scalar>(v_);
+  }
+  Scalar scalar() const {
+    if (!isScalar()) throw ValueException("expect Scalar but got "s+StringifyType());
+    return std::get<Scalar>(v_);
+  }
+  Scalar& scalar() {
+    if (!isScalar()) throw ValueException("expect Scalar but got "s+StringifyType());
+    return std::get<Scalar>(v_);
+  }
 
-    } else {
-      return std::get<T>(v_);
+  bool isBoolean() const noexcept {
+    return std::holds_alternative<Boolean>(v_);
+  }
+  Boolean boolean() const {
+    if (!isBoolean()) throw ValueException("expect Boolean but got "s+StringifyType());
+    return std::get<Boolean>(v_);
+  }
+  Boolean& boolean() {
+    if (!isBoolean()) throw ValueException("expect Boolean but got "s+StringifyType());
+    return std::get<Boolean>(v_);
+  }
+
+  bool isString() const noexcept {
+    return std::holds_alternative<std::shared_ptr<String>>(v_);
+  }
+  const String& string() const {
+    if (!isString()) throw ValueException("expect String but got "s+StringifyType());
+    return *std::get<std::shared_ptr<String>>(v_);
+  }
+  std::shared_ptr<const String> stringPtr() const {
+    if (!isString()) throw ValueException("expect String but got "s+StringifyType());
+    return std::get<std::shared_ptr<String>>(v_);
+  }
+  String& stringUniq() noexcept {
+    return *stringUniqPtr();
+  }
+  const std::shared_ptr<String>& stringUniqPtr() {
+    if (!isString()) throw ValueException("expect String but got "s+StringifyType());
+
+    auto& ptr = std::get<std::shared_ptr<String>>(v_);
+    if (ptr.use_count() != 1) {
+      ptr = std::make_shared<String>(*ptr);
     }
+    return ptr;
   }
 
-  template <typename T>
-  const T& get() const {
-    if (!has<T>()) throw Exception("incompatible Value type");
+  bool isVec2() const noexcept {
+    return std::holds_alternative<Vec2>(v_);
+  }
+  const Vec2& vec2() const {
+    if (!isVec2()) throw ValueException("expect Vec2 but got "s+StringifyType());
+    return std::get<Vec2>(v_);
+  }
+  Vec2& vec2() {
+    if (!isVec2()) throw ValueException("expect Vec2 but got "s+StringifyType());
+    return std::get<Vec2>(v_);
+  }
 
-    if constexpr (IsSharedType<T>) {
-      return *get<std::shared_ptr<T>>();
-    } else {
-      return std::get<T>(v_);
-    }
+  bool isVec3() const noexcept {
+    return std::holds_alternative<Vec3>(v_);
   }
-  template <typename T>
-  bool has() const noexcept {
-    return std::holds_alternative<RawType<T>>(v_);
+  const Vec3& vec3() const {
+    if (!isVec3()) throw ValueException("expect Vec3 but got "s+StringifyType());
+    return std::get<Vec3>(v_);
   }
+  Vec3& vec3() {
+    if (!isVec3()) throw ValueException("expect Vec3 but got "s+StringifyType());
+    return std::get<Vec3>(v_);
+  }
+
+  bool isVec4() const noexcept {
+    return std::holds_alternative<Vec4>(v_);
+  }
+  const Vec4& vec4() const {
+    if (!isVec4()) throw ValueException("expect Vec4 but got "s+StringifyType());
+    return std::get<Vec4>(v_);
+  }
+  Vec4& vec4() {
+    if (!isVec4()) throw ValueException("expect Vec4 but got "s+StringifyType());
+    return std::get<Vec4>(v_);
+  }
+
+  bool isTensor() const noexcept {
+    return std::holds_alternative<std::shared_ptr<Tensor>>(v_);
+  }
+  const Tensor& tensor() const {
+    if (!isTensor()) throw ValueException("expect Tensor but got "s+StringifyType());
+    return *std::get<std::shared_ptr<Tensor>>(v_);
+  }
+  std::shared_ptr<const Tensor> tensorPtr() const {
+    if (!isTensor()) throw ValueException("expect Tensor but got "s+StringifyType());
+    return std::get<std::shared_ptr<Tensor>>(v_);
+  }
+  Tensor& tensorUniq() {
+    return *tensorUniqPtr();
+  }
+  inline const std::shared_ptr<Tensor>& tensorUniqPtr();
+
+  bool isData() const noexcept {
+    return std::holds_alternative<std::shared_ptr<Data>>(v_);
+  }
+  Data& data() const {
+    if (!isData()) throw ValueException("expect Data but got "s+StringifyType());
+    return *std::get<std::shared_ptr<Data>>(v_);
+  }
+  const std::shared_ptr<Data>& dataPtr() const {
+    if (!isData()) throw ValueException("expect Data but got "s+StringifyType());
+    return std::get<std::shared_ptr<Data>>(v_);
+  }
+  template <typename T> T& data() const;
+  template <typename T> std::shared_ptr<T> dataPtr() const;
 
  private:
-  template <typename T>
-  static constexpr auto RawType_() noexcept {
-    if constexpr (std::is_same<String, T>::value) {
-      return std::shared_ptr<String>();
-    } else if constexpr (std::is_same<Tensor, T>::value) {
-      return std::shared_ptr<Tensor>();
-    } else if constexpr (std::is_same<Data, T>::value) {
-      return std::shared_ptr<Data>();
-    } else {
-      return T();
-    }
-  }
-  template <typename T>
-  using RawType = decltype(RawType_<T>());
-
-  template <typename T>
-  static constexpr bool IsSharedType = !std::is_same<RawType<T>, T>::value;
-
-  template <typename T>
-  static constexpr auto IsSharedPtr_(int) noexcept ->
-      decltype(!std::is_void<typename T::element_type>::value, bool()) {
-    return true;
-  }
-  template <typename T>
-  static constexpr auto IsSharedPtr_(...) noexcept -> bool { return false; }
-  template <typename T>
-  static constexpr bool IsSharedPtr = IsSharedPtr_<T>(0);
-
   Variant v_;
 };
 bool operator==(const Value& a, const Value& b) noexcept;
@@ -246,12 +316,40 @@ class Value::Data {
   Data& operator=(const Data&) = default;
   Data& operator=(Data&&) = default;
 
-  virtual std::shared_ptr<Data> Clone() const noexcept { return nullptr; }
-
   const char* type() const noexcept { return type_; }
 
  private:
   const char* type_;
 };
+
+
+const std::shared_ptr<Value::Tensor>& Value::tensorUniqPtr() {
+  if (!isTensor()) throw ValueException("expect Tensor but got "s+StringifyType());
+
+  auto& ptr = std::get<std::shared_ptr<Tensor>>(v_);
+  if (ptr.use_count() != 1) {
+    ptr = std::make_shared<Tensor>(*ptr);
+  }
+  return ptr;
+}
+
+template <typename T>
+T& Value::data() const {
+  static_assert(std::is_base_of<Data, T>::value, "T must be based on Value::Data");
+  auto ptr = dynamic_cast<T*>(&data());
+  if (!ptr) {
+    throw ValueException("expect "s+typeid(T).name()+" but got "+data().type());
+  }
+  return *ptr;
+}
+template <typename T>
+std::shared_ptr<T> Value::dataPtr() const {
+  static_assert(std::is_base_of<Data, T>::value, "T must be based on Value::Data");
+  auto ptr = std::dynamic_pointer_cast<T>(dataPtr());
+  if (!ptr) {
+    throw ValueException("expect "s+typeid(T).name()+" but got "+data().type());
+  }
+  return ptr;
+}
 
 }  // namespace kingtaker
