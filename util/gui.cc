@@ -92,6 +92,31 @@ void NodeSocket() noexcept {
 
   ImGui::Dummy(sz);
 }
+void NodeInSock(const std::string& name) noexcept {
+  gui::NodeSocket();
+  ImGui::SameLine();
+  ImGui::TextUnformatted(name.c_str());
+}
+void NodeInSock(
+    const std::shared_ptr<iface::Node::Context>& ctx,
+    const std::shared_ptr<iface::Node::InSock>&  sock,
+    bool                                         sm) noexcept {
+  if (!sm) ImGui::AlignTextToFramePadding();
+  gui::NodeSocket();
+  ImGui::SameLine();
+
+  const auto press = sm?
+      ImGui::SmallButton(sock->name().c_str()):
+      ImGui::Button(sock->name().c_str());
+  if (press) {
+    Queue::sub().Push([sock, ctx]() { sock->Receive(ctx, {}); });
+  }
+}
+void NodeOutSock(const std::string& name) noexcept {
+  ImGui::TextUnformatted(name.c_str());
+  ImGui::SameLine();
+  gui::NodeSocket();
+}
 
 void NodeCanvasSetZoom() noexcept {
   auto ctx = ImNodes::GetCurrentCanvas();
