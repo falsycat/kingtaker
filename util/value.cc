@@ -50,10 +50,6 @@ void Value::Serialize(File::Packer& pk) const {
     v.Serialize(pk);
     return;
   }
-  if (has<Named>()) {
-    get<Named>().Serialize(pk);
-    return;
-  }
   throw Exception("serialization is not supported on the type");
 }
 Value Value::Deserialize(const msgpack::object& obj) {
@@ -109,7 +105,6 @@ const char* Value::StringifyType() const noexcept {
   if (has<Vec4>())    return "vec4";
   if (has<Tensor>())  return "tensor";
   if (has<Data>())    return "data";
-  if (has<Named>())   return "named";
   return "unknown";
 }
 
@@ -146,9 +141,6 @@ std::string Value::Stringify(size_t max) const noexcept {
   }
   if (has<Data>()) {
     return get<Data>().type();
-  }
-  if (has<Named>()) {
-    return get<Named>().name();
   }
   return "???";
 }
@@ -268,43 +260,6 @@ std::string Value::Tensor::StringifyMeta() const noexcept {
     ret += std::to_string(v);
   }
   return ret;
-}
-
-const char* Value::Named::ValidateName(std::string_view v) noexcept {
-  if (v.empty()) return "empty is not allowed";
-  if (v.size() >= 256) {
-    return "too long (>256)";
-  }
-
-  static const std::string kAllowedChars =
-      "abcdefghijklmnopqrstuvwxyz"
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-      "0123456789_";
-  for (auto c : v) {
-    if (kAllowedChars.find(c) == std::string::npos) {
-      return "forbidden char";
-    }
-  }
-  return nullptr;
-}
-
-Value::Named Value::Named::Deserialize(const msgpack::object& obj) {
-  try {
-    return Named(
-        msgpack::find(obj, "name"s).as<std::string>(),
-        Value::Deserialize(msgpack::find(obj, "value"s)));
-  } catch (msgpack::type_error&) {
-    throw DeserializeException("broken Value::Named");
-  }
-}
-void Value::Named::Serialize(File::Packer& pk) const noexcept {
-  pk.pack_map(2);
-
-  pk.pack("name"s);
-  pk.pack(name_);
-
-  pk.pack("value"s);
-  value_.Serialize(pk);
 }
 
 }  // namespace kingtaker

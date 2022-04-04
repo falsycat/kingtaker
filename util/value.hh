@@ -27,7 +27,6 @@ class Value final {
   using Vec4    = linalg::double4;
   class Tensor;
   class Data;
-  class Named;
 
   using Variant = std::variant<
       Pulse,
@@ -39,8 +38,7 @@ class Value final {
       Vec4,
       std::shared_ptr<String>,
       std::shared_ptr<Tensor>,
-      std::shared_ptr<Data>,
-      std::shared_ptr<Named>>;
+      std::shared_ptr<Data>>;
 
   Value() noexcept : Value(Pulse()) { }
   Value(Pulse v) noexcept : v_(v) { }
@@ -63,10 +61,6 @@ class Value final {
 
   Value(const std::shared_ptr<Data>& d) noexcept : v_(d) { }
   Value(std::shared_ptr<Data>&& d) noexcept : v_(std::move(d)) { }
-
-  Value(std::string_view n, Value&& v) noexcept : v_(std::make_shared<Named>(n, std::move(v))) { }
-  Value(const std::shared_ptr<Named>& v) noexcept : v_(v) { }
-  Value(std::shared_ptr<Named>&& v) noexcept : v_(std::move(v)) { }
 
   Value(const Value&) = default;
   Value(Value&&) = default;
@@ -128,8 +122,6 @@ class Value final {
       return std::shared_ptr<Tensor>();
     } else if constexpr (std::is_same<Data, T>::value) {
       return std::shared_ptr<Data>();
-    } else if constexpr (std::is_same<Named, T>::value) {
-      return std::shared_ptr<Named>();
     } else {
       return T();
     }
@@ -260,30 +252,6 @@ class Value::Data {
 
  private:
   const char* type_;
-};
-
-
-class Value::Named final {
- public:
-  static const char* ValidateName(std::string_view) noexcept;
-
-  Named() = delete;
-  Named(std::string_view n, Value&& v) noexcept : name_(n), value_(std::move(v)) { }
-  Named(const Named&) = default;
-  Named(Named&&) = default;
-  Named& operator=(const Named&) = default;
-  Named& operator=(Named&&) = default;
-
-  static Named Deserialize(const msgpack::object&);
-  void Serialize(File::Packer&) const noexcept;
-
-  const std::string& name() const noexcept { return name_; }
-  const Value& value() const noexcept { return value_; }
-
- private:
-  std::string name_;
-
-  Value value_;
 };
 
 }  // namespace kingtaker
