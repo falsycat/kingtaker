@@ -238,17 +238,8 @@ class FramebufferFactory final : public LambdaNodeDriver {
     { "CLK", "", kPulseButton },
     { "CLR", "", kPulseButton },
 
-    { "reso",    "" },
-    { "color0",  "" },
-    { "color1",  "" },
-    { "color2",  "" },
-    { "color3",  "" },
-    { "color4",  "" },
-    { "color5",  "" },
-    { "color6",  "" },
-    { "color7",  "" },
-    { "depth",   "" },
-    { "stencil", "" },
+    { "attach", "" },
+    { "reso",   "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
     { "out",  "" },
@@ -262,91 +253,115 @@ class FramebufferFactory final : public LambdaNodeDriver {
 
   void Handle(size_t idx, Value&& v) {
     switch (idx) {
-    case 0:  Exec();  return;
-    case 1:  Clear(); return;
+    case 0: Exec();               return;
+    case 1: Clear();              return;
+    case 2: Attach(std::move(v)); return;
     default: Set(idx, std::move(v));
     }
   }
-  void Exec() {
+  void Clear() noexcept {
+    fb_    = nullptr;
+    dirty_ = false;
+    LambdaNodeDriver::Clear();
+  }
+  void Exec() noexcept {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
     auto out  = owner_->out()[0];
     auto errr = owner_->out()[1];
 
-    // get resolution
-    int32_t w, h;
     try {
-      GetResolution(in(2), w, h);
+      if (!fb_) throw Exception("attach something firstly");
+
+      // get resolution
+      int32_t w, h;
+      GetResolution(in(3), w, h);
+
+      // check status and emit result
+      auto task = [owner = owner_, path = owner_->path(), fb = fb_, ctx, out, errr]() {
+        glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
+        const auto stat = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (stat == GL_FRAMEBUFFER_COMPLETE) {
+          out->Send(ctx, std::dynamic_pointer_cast<Value::Data>(fb));
+        } else {
+          notify::Error(path, owner, "broken framebuffer ("+std::to_string(stat)+")");
+          errr->Send(ctx, {});
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      };
+      Queue::gl().Push(std::move(task));
     } catch (Exception& e) {
       notify::Error(owner_->path(), owner_, "invalid reso: "+e.msg());
+      errr->Send(ctx, {});
       return;
     }
+  }
+  void Attach(Value&& v) noexcept {
+    if (!Init()) return;
+    try {
+      const auto& tup = v.tuple();
 
-    // create fb and attach inputs
-    auto fb = gl::Framebuffer::Create(GL_FRAMEBUFFER);
-    for (const auto& at : gl::kAttachments) {
-      try {
-        const auto& value = in(3+at.idx);
-        if (value.isPulse()) continue;
+      const auto  atidx = gl::ParseAttachment<Exception>(tup[0].string());
+      const auto& at    = gl::kAttachments[atidx];
+      const auto& data  = v.tuple()[1].dataPtr();
 
-        const auto& data = value.dataPtr();
-
-        // validate tex or rb
-        auto tex = std::dynamic_pointer_cast<gl::Texture>(data);
-        auto rb  = std::dynamic_pointer_cast<gl::Renderbuffer>(data);
-        if (!tex && !rb) {
-          throw Exception(at.name+" is not pulse, gl::Texture, or gl::Renderbuffer, "
-                         "treated as unspecified");
-        }
-        if (tex && tex->gl() != GL_TEXTURE_2D) {
-          throw Exception(at.name+" is gl::Texture, but not GL_TEXTURE_2D, "
-                         "treated as unspecified");
-        }
-
-        // TODO tex or rb size validation
-        // TODO tex or rb type validation
-
-        // attach to fb
-        auto task = [&at, fb, tex, rb]() {
-          glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
-          if (tex) {
-            glFramebufferTexture2D(GL_FRAMEBUFFER, at.gl, GL_TEXTURE_2D, tex->id(), 0);
-          } else if (rb) {
-            glFramebufferRenderbuffer(GL_FRAMEBUFFER, at.gl, GL_RENDERBUFFER, rb->id());
-          }
-          glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-          assert(glGetError() == GL_NO_ERROR);
-        };
-        Queue::gl().Push(std::move(task));
-
-      } catch (Exception& e) {
-        notify::Warn(owner_->path(), owner_,
-                     "error while handling attachment "+at.name+": "+e.msg());
-        continue;
+      // validate tex or rb
+      auto tex = std::dynamic_pointer_cast<gl::Texture>(data);
+      auto rb  = std::dynamic_pointer_cast<gl::Renderbuffer>(data);
+      if (!tex && !rb) {
+        throw Exception(at.name+" is not pulse, gl::Texture, or gl::Renderbuffer, "
+                       "treated as unspecified");
       }
+      if (tex && tex->gl() != GL_TEXTURE_2D) {
+        throw Exception(at.name+" is gl::Texture, but not GL_TEXTURE_2D, "
+                       "treated as unspecified");
+      }
+
+      // TODO tex or rb size validation
+      // TODO tex or rb type validation
+
+      // attach to fb
+      auto task = [&at, fb = fb_, tex, rb]() {
+        glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
+        if (tex) {
+          glFramebufferTexture2D(GL_FRAMEBUFFER, at.gl, GL_TEXTURE_2D, tex->id(), 0);
+        } else if (rb) {
+          glFramebufferRenderbuffer(GL_FRAMEBUFFER, at.gl, GL_RENDERBUFFER, rb->id());
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        assert(glGetError() == GL_NO_ERROR);
+      };
+      Queue::gl().Push(std::move(task));
+
+    } catch (Exception& e) {
+      notify::Warn(owner_->path(), owner_,
+                   "skipping attach because of error: "+e.msg());
     }
-
-    // check status and emit result
-    auto task = [owner = owner_, path = owner_->path(), fb, ctx, out, errr]() {
-      glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
-      const auto stat = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-      if (stat == GL_FRAMEBUFFER_COMPLETE) {
-        out->Send(ctx, std::dynamic_pointer_cast<Value::Data>(fb));
-      } else {
-        notify::Error(path, owner, "broken framebuffer ("+std::to_string(stat)+")");
-        errr->Send(ctx, {});
-      }
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    };
-    Queue::gl().Push(std::move(task));
   }
 
  private:
   Owner* owner_;
 
   std::weak_ptr<Context> ctx_;
+
+  // params
+  bool dirty_ = true;
+  std::shared_ptr<gl::Framebuffer> fb_;
+
+
+  bool Init() noexcept {
+    if (!fb_) {
+      if (dirty_) {
+        notify::Error(owner_->path(), owner_, "state is dirty, CLR firstly");
+        return false;
+      }
+      fb_    = gl::Framebuffer::Create(GL_FRAMEBUFFER);
+      dirty_ = true;
+    }
+    return true;
+  }
 };
 
 
@@ -404,7 +419,7 @@ class ProgramFactory final : public LambdaNodeDriver {
   static constexpr const char* kTitle = "GL Program Factory";
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "LINK",    "", kPulseButton },
+    { "CLK",     "", kPulseButton },
     { "CLR",     "", kPulseButton },
     { "shaders", "" },
   };
