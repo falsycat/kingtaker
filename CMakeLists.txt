@@ -49,6 +49,7 @@ target_sources(kingtaker
   PRIVATE
     kingtaker.hh
 
+    gl.cc
     kingtaker.cc
     logic.cc
     luajit.cc
@@ -68,6 +69,7 @@ target_sources(kingtaker
     util/gui.cc
     util/keymap.hh
     util/keymap.cc
+    util/node.hh
     util/notify.hh
     util/notify.cc
     util/ptr_selector.hh
