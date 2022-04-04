@@ -252,6 +252,142 @@ bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
 }
 
 
+class TupleN final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<TupleN>(
+      "Value/TupleN", "takes N inputs and emits one tuple",
+      {typeid(iface::Node)});
+
+  static constexpr size_t kMaxInput = 16;
+
+  TupleN(const std::shared_ptr<Env>& env, size_t n = 0) noexcept :
+      File(&type_, env), Node(kNone) {
+    data_ = std::make_shared<UniversalData>();
+
+    out_.emplace_back(new OutSock(this, "out"));
+
+    auto task_clk = [self = this, data = data_, out = out_[0]](const auto& ctx, auto&&) {
+      const auto& v = ctx->template GetOrNew<ContextData>(self)->values;
+      out->Send(ctx, Value::Tuple(v.data(), v.data()+data->n));
+    };
+    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task_clk)));
+
+    auto task_clr = [self = this](const auto& ctx, auto&&) {
+      ctx->template GetOrNew<ContextData>(self)->values.fill({});
+    };
+    in_.emplace_back(new LambdaInSock(this, "CLR", std::move(task_clr)));
+
+    Rebuild(n);
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    try {
+      const auto n = msgpack::as_if<size_t>(obj, 0);
+      if (n > kMaxInput) {
+        throw DeserializeException("input count overflow");
+      }
+      return std::make_unique<TupleN>(env, n);
+    } catch (msgpack::type_error&) {
+      throw DeserializeException("broken Value/TupleN");
+    }
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(data_->n);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<TupleN>(env, data_->n);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+
+ private:
+  struct UniversalData {
+   public:
+    size_t n = 0;
+  };
+  std::shared_ptr<UniversalData> data_;
+
+
+  // recreates input sockets
+  void Rebuild(size_t n) noexcept {
+    in_.resize(2+n);
+    if (data_->n < n) {
+      for (size_t i = data_->n; i < n; ++i) {
+        in_[2+i] = std::make_shared<CustomInSock>(this, i);
+      }
+    }
+    data_->n = n;
+  }
+
+
+  class ContextData final : public Context::Data {
+   public:
+    ContextData() { values.fill({}); }
+
+    std::array<Value, kMaxInput> values;
+  };
+  class CustomInSock final : public InSock {
+   public:
+    CustomInSock(TupleN* o, size_t idx) noexcept :
+        InSock(o, std::to_string(idx)), idx_(idx) {
+    }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+      auto& values = ctx->GetOrNew<ContextData>(&owner())->values;
+      values[idx_] = std::move(v);
+    }
+   private:
+    size_t idx_;
+  };
+};
+void TupleN::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  ImGui::TextUnformatted("TUPLE-N");
+
+  const auto em = ImGui::GetFontSize();
+
+  ImGui::BeginGroup();
+  if (ImNodes::BeginInputSlot("CLK", 1)) {
+    gui::NodeInSock(ctx, in_[0]);
+    ImNodes::EndSlot();
+  }
+  if (ImNodes::BeginInputSlot("CLR", 1)) {
+    gui::NodeInSock(ctx, in_[1]);
+    ImNodes::EndSlot();
+  }
+  for (size_t i = 0; i < data_->n; ++i) {
+    const auto& name = in_[2+i]->name();
+    if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
+      gui::NodeInSock(name);
+      ImNodes::EndSlot();
+    }
+  }
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(2*em);
+  int n = static_cast<int>(data_->n);
+  if (ImGui::DragInt("##InputCount", &n, 1, 0, kMaxInput)) {
+    Queue::main().Push([this, n]() { Rebuild(static_cast<size_t>(n)); });
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("number of inputs");
+  }
+  ImGui::SameLine();
+
+  ImGui::BeginGroup();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeOutSock("out");
+    ImNodes::EndSlot();
+  }
+  ImGui::EndGroup();
+}
+
+
 class ExternalText final : public File,
     public iface::DirItem,
     public iface::Factory<Value> {
