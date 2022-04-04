@@ -35,6 +35,7 @@ class Value final {
   using Vec4    = linalg::double4;
   class Tensor;
   class Data;
+  class Tuple;
 
   using Variant = std::variant<
       Pulse,
@@ -46,7 +47,8 @@ class Value final {
       Vec4,
       std::shared_ptr<String>,
       std::shared_ptr<Tensor>,
-      std::shared_ptr<Data>>;
+      std::shared_ptr<Data>,
+      std::shared_ptr<Tuple>>;
 
   Value() noexcept : Value(Pulse()) { }
   Value(Pulse v) noexcept : v_(v) { }
@@ -69,6 +71,10 @@ class Value final {
 
   Value(const std::shared_ptr<Data>& d) noexcept : v_(d) { }
   Value(std::shared_ptr<Data>&& d) noexcept : v_(std::move(d)) { }
+
+  Value(Tuple&& t) noexcept : v_(std::make_shared<Tuple>(std::move(t))) { }
+  Value(const std::shared_ptr<Tuple>& t) noexcept : v_(t) { }
+  Value(std::shared_ptr<Tuple>&& t) noexcept : v_(std::move(t)) { }
 
   Value(const Value&) = default;
   Value(Value&&) = default;
@@ -211,6 +217,22 @@ class Value final {
   template <typename T> T& data() const;
   template <typename T> std::shared_ptr<T> dataPtr() const;
 
+  bool isTuple() const noexcept {
+    return std::holds_alternative<std::shared_ptr<Tuple>>(v_);
+  }
+  const Tuple& tuple() const {
+    if (!isTuple()) throw ValueException("expect Tuple but got "s+StringifyType());
+    return *std::get<std::shared_ptr<Tuple>>(v_);
+  }
+  std::shared_ptr<const Tuple> tuplePtr() const {
+    if (!isTuple()) throw ValueException("expect Tuple but got "s+StringifyType());
+    return std::get<std::shared_ptr<Tuple>>(v_);
+  }
+  Tuple& tupleUniq() {
+    return *tupleUniqPtr();
+  }
+  inline const std::shared_ptr<Tuple>& tupleUniqPtr();
+
  private:
   Variant v_;
 };
@@ -305,6 +327,16 @@ template <> struct Value::Tensor::GetTypeOf<uint64_t> { static constexpr Type va
 template <> struct Value::Tensor::GetTypeOf<float> { static constexpr Type value = F32; };
 template <> struct Value::Tensor::GetTypeOf<double> { static constexpr Type value = F64; };
 
+const std::shared_ptr<Value::Tensor>& Value::tensorUniqPtr() {
+  if (!isTensor()) throw ValueException("expect Tensor but got "s+StringifyType());
+
+  auto& ptr = std::get<std::shared_ptr<Tensor>>(v_);
+  if (ptr.use_count() != 1) {
+    ptr = std::make_shared<Tensor>(*ptr);
+  }
+  return ptr;
+}
+
 
 class Value::Data {
  public:
@@ -322,17 +354,6 @@ class Value::Data {
   const char* type_;
 };
 
-
-const std::shared_ptr<Value::Tensor>& Value::tensorUniqPtr() {
-  if (!isTensor()) throw ValueException("expect Tensor but got "s+StringifyType());
-
-  auto& ptr = std::get<std::shared_ptr<Tensor>>(v_);
-  if (ptr.use_count() != 1) {
-    ptr = std::make_shared<Tensor>(*ptr);
-  }
-  return ptr;
-}
-
 template <typename T>
 T& Value::data() const {
   static_assert(std::is_base_of<Data, T>::value, "T must be based on Value::Data");
@@ -348,6 +369,50 @@ std::shared_ptr<T> Value::dataPtr() const {
   auto ptr = std::dynamic_pointer_cast<T>(dataPtr());
   if (!ptr) {
     throw ValueException("expect "s+typeid(T).name()+" but got "+data().type());
+  }
+  return ptr;
+}
+
+
+class Value::Tuple final : public std::vector<Value> {
+ public:
+  using vector::vector;
+
+  const Value& operator[](size_t idx) const {
+    if (idx >= size()) {
+      throw ValueException("tuple index out of range"); 
+    }
+    return vector::operator[](idx);
+  }
+  Value& operator[](size_t idx) {
+    if (idx >= size()) {
+      throw ValueException("tuple index out of range"); 
+    }
+    return vector::operator[](idx);
+  }
+
+  void EnforceSize(size_t n) const {
+    if (size() != n) {
+      throw ValueException(
+          "expected tuple size is "+std::to_string(n)+", "
+          "but actually "+std::to_string(size()));
+    }
+  }
+  std::string Stringify() const noexcept {
+    std::string ret;
+    for (const auto& v : *this) {
+      ret += v.StringifyType() + " "s;
+    }
+    return ret;
+  }
+};
+
+const std::shared_ptr<Value::Tuple>& Value::tupleUniqPtr() {
+  if (!isTuple()) throw ValueException("expect Tuple but got "s+StringifyType());
+
+  auto& ptr = std::get<std::shared_ptr<Tuple>>(v_);
+  if (ptr.use_count() != 1) {
+    ptr = std::make_shared<Tuple>(*ptr);
   }
   return ptr;
 }

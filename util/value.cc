@@ -105,6 +105,7 @@ const char* Value::StringifyType() const noexcept {
   if (isVec4())    return "vec4";
   if (isTensor())  return "tensor";
   if (isData())    return "data";
+  if (isTuple())   return "tuple";
   return "unknown";
 }
 
@@ -141,6 +142,9 @@ std::string Value::Stringify(size_t max) const noexcept {
   }
   if (isData()) {
     return data().type();
+  }
+  if (isTuple()) {
+    return tuple().Stringify();
   }
   return "???";
 }
