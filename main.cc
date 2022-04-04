@@ -7,6 +7,8 @@
 #include <optional>
 #include <thread>
 
+#include <GL/glew.h>
+
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
@@ -14,6 +16,7 @@
 
 #include "kingtaker.hh"
 
+#include "util/gl.hh"
 #include "util/gui.hh"
 #include "util/notify.hh"
 #include "util/queue.hh"
@@ -39,7 +42,8 @@ static std::condition_variable main_cv_;
 static std::thread             main_worker_;
 static std::atomic<bool>       main_alive_ = true;
 
-static std::optional<std::string> panic_;
+static std::mutex  panic_mtx_;
+static std::string panic_;
 
 static SimpleQueue mainq_;
 static SimpleQueue subq_;
@@ -78,10 +82,11 @@ class Event final : public File::Event {
 void InitKingtaker() noexcept;
 
 void Update()        noexcept;
-void UpdatePanic()   noexcept;
+bool UpdatePanic()   noexcept;
 void UpdateAppMenu() noexcept;
 void Save()          noexcept;
 
+void Panic(const std::string&) noexcept;
 std::string GenerateSystemInfoFullText() noexcept;
 
 void WorkerMain() noexcept;
@@ -119,6 +124,7 @@ int main(int, char**) {
   if (window == NULL) return 1;
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
+  if (glewInit() != GLEW_OK) return 1;
 
   // init ImGUI
   IMGUI_CHECKVERSION();
@@ -166,10 +172,14 @@ int main(int, char**) {
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    glfwSwapBuffers(window);
+    // handle GL objects
+    try {
+      while (gl::HandleAll(), glq_.Pop());
+    } catch (gl::Exception& e) {
+      Panic(e.Stringify());
+    }
 
-    // handle GL queue
-    while (glq_.Pop());
+    glfwSwapBuffers(window);
 
     // wait
     const auto dur = File::Clock::now() - t;
@@ -221,19 +231,16 @@ void InitKingtaker() noexcept {
     root_ = File::Deserialize(st, env);
 
   } catch (msgpack::unpack_error& e) {
-    panic_ = "MessagePack unpack error: "s+e.what();
+    Panic("MessagePack unpack error: "s+e.what());
 
   } catch (DeserializeException& e) {
-    panic_ = e.Stringify();
+    Panic(e.Stringify());
   }
 }
 
 void Update() noexcept {
   // panic msg
-  if (panic_) {
-    UpdatePanic();
-    return;
-  }
+  if (UpdatePanic()) return;
 
   // update GUI
   File::RefStack path;
@@ -241,13 +248,16 @@ void Update() noexcept {
   root_->Update(path, ev);
   UpdateAppMenu();
 }
-void UpdatePanic() noexcept {
+bool UpdatePanic() noexcept {
   static const char*    kWinId    = "PANIC##kingtaker/main.cc";
   constexpr    auto     kWinFlags =
       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
 
   constexpr auto kWidth  = 32;  /* em */
   constexpr auto kHeight = 8;   /* em */
+
+  std::unique_lock<std::mutex> k(panic_mtx_);
+  if (panic_.empty()) return false;
 
   const float em = ImGui::GetFontSize();
   ImGui::SetNextWindowContentSize({kWidth*em, 0});
@@ -256,12 +266,12 @@ void UpdatePanic() noexcept {
     ImGui::Text("### something went wrong X( ###");
     ImGui::InputTextMultiline(
         "##message",
-        panic_->data(), panic_->size(),
+        panic_.data(), panic_.size(),
         ImVec2 {kWidth*em, kHeight*em},
         ImGuiInputTextFlags_ReadOnly);
 
     if (ImGui::Button("IGNORE")) {
-      panic_ = std::nullopt;
+      panic_ = "";
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -270,9 +280,10 @@ void UpdatePanic() noexcept {
     }
     ImGui::EndPopup();
 
-  } else if (panic_) {
+  } else if (panic_.size()) {
     ImGui::OpenPopup(kWinId);
   }
+  return true;
 }
 void UpdateAppMenu() noexcept {
   if (ImGui::BeginMainMenuBar()) {
@@ -346,18 +357,22 @@ void Save() noexcept {
 
   std::ofstream f(kFileName, std::ios::binary);
   if (!f) {
-    panic_ = "failed to open: "s+kFileName;
+    Panic("failed to open: "s+kFileName);
     return;
   }
 
   msgpack::packer<std::ostream> pk(f);
   root_->SerializeWithTypeInfo(pk);
   if (!f) {
-    panic_ = "failed to write: "s+kFileName;
+    Panic("failed to write: "s+kFileName);
     return;
   }
 }
 
+void Panic(const std::string& msg) noexcept {
+  std::unique_lock<std::mutex> k(panic_mtx_);
+  panic_ += msg + "\n\n####\n\n";
+}
 std::string GenerateSystemInfoFullText() noexcept {
   std::string ret =
       "# KINGTAKER vX.Y.Z (WTFPL)\n"
@@ -396,7 +411,7 @@ void WorkerMain() noexcept {
       }
 
     } catch (Exception& e) {
-      panic_ = e.Stringify();
+      Panic(e.Stringify());
     }
   }
 }
