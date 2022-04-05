@@ -181,4 +181,53 @@ class Await final : public LambdaNodeDriver {
   }
 };
 
+
+class Once final : public LambdaNodeDriver {
+ public:
+  using Owner = LambdaNode<Once>;
+
+  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+      "Logic/Once", "emits pulse one time when got anything, does nothing after that",
+      {typeid(iface::Node)});
+
+  static inline const std::vector<SockMeta> kInSocks = {
+    { "CLR", "", kPulseButton },
+    { "in", "", },
+  };
+  static inline const std::vector<SockMeta> kOutSocks = {
+    { "out", "", },
+  };
+
+  Once() = delete;
+  Once(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+      owner_(o), ctx_(ctx) {
+  }
+
+  std::string title() const noexcept {
+    return triggered_? "ONCE*": "ONCE";
+  }
+
+  void Handle(size_t idx, Value&&) {
+    switch (idx) {
+    case 0:
+      triggered_ = false;
+      return;
+    case 1:
+      if (!triggered_) {
+        owner_->out()[0]->Send(ctx_.lock(), {});
+      }
+      triggered_ = true;
+      return;
+    }
+    assert(false);
+  }
+
+ private:
+  Owner* owner_;
+
+  std::weak_ptr<Context> ctx_;
+
+  bool triggered_ = false;
+};
+
 }}  // namespace kingtaker
