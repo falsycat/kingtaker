@@ -172,18 +172,19 @@ int main(int, char**) {
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    // handle GL objects
-    try {
-      while (gl::HandleAll(), glq_.Pop());
-    } catch (gl::Exception& e) {
-      Panic(e.Stringify());
-    }
-
     glfwSwapBuffers(window);
 
-    // wait
-    const auto dur = File::Clock::now() - t;
-    if (dur < kFrameDur) std::this_thread::sleep_for(kFrameDur - dur);
+    // handle GL queue
+    const auto until = t + kFrameDur;
+    do {
+      try {
+        size_t i = 0;
+        while (i < kSubTaskUnit && (gl::HandleAll(), glq_.Pop())) ++i;
+      } catch (gl::Exception& e) {
+        Panic(e.Stringify());
+      }
+      glq_.WaitUntil(until);
+    } while (File::Clock::now() < until);
   }
   // request main worker to exit
   main_alive_ = false;

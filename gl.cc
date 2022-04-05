@@ -481,7 +481,7 @@ class ProgramFactory final : public LambdaNodeDriver {
         notify::Error(path, owner, buf);
         errr->Send(ctx, {});
       }
-      assert(glGetError() != GL_NO_ERROR);
+      assert(glGetError() == GL_NO_ERROR);
     };
     Queue::gl().Push(std::move(task));
 
@@ -585,6 +585,8 @@ class ShaderFactory final : public LambdaNodeDriver {
       }
     };
     Queue::gl().Push(std::move(task));
+
+    srcs_.clear();
   }
 
  private:
