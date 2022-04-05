@@ -22,12 +22,20 @@ class Exception : public HeavyException {
 };
 
 
-struct Attachment final {
+struct Enum final {
   size_t      idx;
   GLenum      gl;
   std::string name;
 };
-static inline const std::vector<Attachment> kAttachments = {
+template <typename E = DeserializeException>
+const Enum& ParseEnum(const char* name, std::span<const Enum> list, std::string_view v) {
+  for (const auto& e : list) {
+    if (e.name == v) return e;
+  }
+  throw E("unknown OpenGL "s+name+": "+std::string(v));
+}
+
+static inline const std::vector<Enum> kAttachments = {
   { 0, GL_COLOR_ATTACHMENT0,  "color0",  },
   { 1, GL_COLOR_ATTACHMENT1,  "color1",  },
   { 2, GL_COLOR_ATTACHMENT2,  "color2",  },
@@ -40,34 +48,41 @@ static inline const std::vector<Attachment> kAttachments = {
   { 9, GL_STENCIL_ATTACHMENT, "stencil", },
 };
 template <typename E = DeserializeException>
-static inline size_t ParseAttachment(std::string_view v) {
-  for (const auto& at : kAttachments) {
-    if (at.name == v) return at.idx;
-  }
-  throw E("unknown OpenGL attachment: "s+std::string(v));
+const Enum& ParseAttachment(std::string_view name) {
+  return ParseEnum<E>("attachment", kAttachments, name);
 }
 
-struct Format final {
- public:
-  size_t      idx;
-  GLenum      gl;
-  std::string name;
-};
-static inline const std::vector<Format> kFormats = {
+static inline const std::vector<Enum> kFormats = {
   { 0, GL_RGBA8,              "RGBA8"    },
-  { 0, GL_RGB8,               "RGB8"     },
-  { 0, GL_RG8,                "RG8"      },
-  { 0, GL_R8,                 "R8"       },
-  { 0, GL_DEPTH_COMPONENT32F, "depth32f" },
-  { 0, GL_DEPTH_COMPONENT24,  "depth24"  },
-  { 0, GL_DEPTH_COMPONENT16,  "depth16"  },
+  { 1, GL_RGB8,               "RGB8"     },
+  { 2, GL_RG8,                "RG8"      },
+  { 3, GL_R8,                 "R8"       },
+  { 4, GL_DEPTH_COMPONENT32F, "depth32f" },
+  { 5, GL_DEPTH_COMPONENT24,  "depth24"  },
+  { 6, GL_DEPTH_COMPONENT16,  "depth16"  },
 };
 template <typename E = DeserializeException>
-static inline size_t ParseFormat(std::string_view v) {
-  for (const auto& at : kFormats) {
-    if (at.name == v) return at.idx;
-  }
-  throw E("unknown OpenGL format: "s+std::string(v));
+const Enum& ParseFormat(std::string_view name) {
+  return ParseEnum<E>("format", kFormats, name);
+}
+
+static inline const std::vector<Enum> kShaderTypes = {
+  { 0, GL_VERTEX_SHADER,   "vertex"   },
+  { 1, GL_GEOMETRY_SHADER, "geometry" },
+  { 2, GL_FRAGMENT_SHADER, "fragment" },
+};
+template <typename E = DeserializeException>
+const Enum& ParseShaderType(std::string_view name) {
+  return ParseEnum<E>("shader type", kShaderTypes, name);
+}
+
+static inline const std::vector<Enum> kDrawModes = {
+  { 0, GL_TRIANGLES, "triangles" },
+  // TODO
+};
+template <typename E = DeserializeException>
+const Enum& ParseDrawMode(std::string_view name) {
+  return ParseEnum<E>("draw mode", kDrawModes, name);
 }
 
 

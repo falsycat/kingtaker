@@ -102,6 +102,15 @@ class Value final {
     if (!isInteger()) throw ValueException("expect Integer but got "s+StringifyType());
     return std::get<Integer>(v_);
   }
+  template <typename I>
+  I integer(I min = std::numeric_limits<I>::min(),
+            I max = std::numeric_limits<I>::max()) const {
+    static_assert(std::is_integral<I>::value, "I must be an integral");
+    const auto v = integer();
+    if (v < min) throw ValueException("integer underflow");
+    if (v > max) throw ValueException("integer overflow");
+    return static_cast<I>(v);
+  }
 
   bool isScalar() const noexcept {
     return std::holds_alternative<Scalar>(v_);

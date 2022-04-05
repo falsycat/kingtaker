@@ -4,6 +4,7 @@
 
 #include "iface/node.hh"
 
+#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 
 
@@ -24,6 +25,9 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
     kNone        = 0,
     kPulseButton = 1 << 0,
     kFrameHeight = 1 << 1,
+
+    kClockIn  = 1 << 2,
+    kErrorOut = 1 << 3,
   };
   using SockFlags = uint8_t;
 
@@ -46,27 +50,7 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
   LambdaNodeDriver& operator=(const LambdaNodeDriver&) = default;
   LambdaNodeDriver& operator=(LambdaNodeDriver&&) = default;
 
-  // void Handle(size_t idx, Value&&);
-
- protected:
-  void Clear() noexcept {
-    in_.clear();
-  }
-  void Set(size_t idx, Value&& v) noexcept {
-    in_[idx] = std::move(v);
-  }
-
-  const Value& in(size_t idx) const noexcept {
-    auto itr = in_.find(idx);
-    if (itr == in_.end()) {
-      static const Value pulse;
-      return pulse;
-    }
-    return itr->second;
-  }
-
- private:
-  std::unordered_map<size_t, Value> in_;
+  // void Handle(size_t, Value&&);
 };
 
 template <typename Driver>
@@ -75,20 +59,24 @@ class LambdaNode final : public File, public iface::Node {
   LambdaNode(const std::shared_ptr<Env>& env) noexcept :
       File(&Driver::type_, env), Node(Node::kNone),
       life_(std::make_shared<std::monostate>()) {
+    std::shared_ptr<OutSock> err;
     for (size_t i = 0; i < Driver::kOutSocks.size(); ++i) {
       const auto& m = Driver::kOutSocks[i];
       out_.emplace_back(new OutSock(this, m.name));
-    }
 
-    std::weak_ptr<std::monostate> life = life_;
+      if (m.flags & LambdaNodeDriver::kErrorOut) {
+        assert(!err);
+        err = out_.back();
+      }
+    }
     for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
       const auto& m = Driver::kInSocks[i];
 
-      auto task = [this, life, i](auto& ctx, auto&& v) {
-        if (life.expired()) return;
-        GetDriver(ctx)->Handle(i, std::move(v));
-      };
-      in_.emplace_back(new LambdaInSock(this, m.name, std::move(task)));
+      if (m.flags & LambdaNodeDriver::kClockIn) {
+        in_.emplace_back(new ClockInSock(this, m.name, i, err));
+      } else {
+        in_.emplace_back(new CustomInSock(this, m.name, i));
+      }
     }
   }
 
@@ -123,6 +111,63 @@ class LambdaNode final : public File, public iface::Node {
   std::shared_ptr<Driver> GetDriver(const std::shared_ptr<Context>& ctx) noexcept {
     return ctx->GetOrNew<Driver>(this, this, std::weak_ptr<Context>(ctx));
   }
+
+  // InSock for generic inputs
+  class CustomInSock : public InSock {
+   public:
+    CustomInSock(LambdaNode* o, std::string_view name, size_t idx) noexcept:
+        InSock(o, name), owner_(o), life_(o->life_), idx_(idx) {
+    }
+
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+      if (life_.expired()) return;
+      try {
+        owner_->GetDriver(ctx)->Handle(idx_, std::move(v));
+      } catch (Exception& e) {
+        OnCatch(ctx, e);
+      }
+    }
+
+    LambdaNode* owner() const noexcept { return owner_; }
+    size_t idx() const noexcept { return idx_; }
+
+   protected:
+    virtual void OnCatch(const std::shared_ptr<Context>&, Exception& e) noexcept {
+      notify::Warn(owner_->path(), owner_,
+                   "error while handling input ("+name()+"): "s+e.msg());
+    }
+
+   private:
+    LambdaNode* owner_;
+
+    std::weak_ptr<std::monostate> life_;
+
+    size_t idx_;
+  };
+
+  // InSock for clock input
+  class ClockInSock : public CustomInSock {
+   public:
+    ClockInSock(LambdaNode*      o,
+                std::string_view name,
+                size_t           idx,
+                const std::shared_ptr<OutSock>& err) noexcept :
+        CustomInSock(o, name, idx), err_(err) {
+    }
+
+    using CustomInSock::owner;
+    using CustomInSock::name;
+
+   protected:
+    void OnCatch(const std::shared_ptr<Context>& ctx, Exception& e) noexcept {
+      notify::Error(owner()->path(), owner(),
+                    "error while handling input ("+name()+"): "s+e.msg());
+      err_->Send(ctx, {});
+    }
+
+   private:
+    std::shared_ptr<OutSock> err_;
+  };
 };
 template <typename Driver>
 void LambdaNode<Driver>::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
