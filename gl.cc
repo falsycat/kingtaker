@@ -1,5 +1,7 @@
 #include <cassert>
 #include <cinttypes>
+#include <string>
+#include <variant>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -621,6 +623,7 @@ class DrawArrays final : public LambdaNodeDriver {
     { "prog",     "" },
     { "fb",       "" },
     { "vao",      "" },
+    { "uniforms", "" },
     { "viewport", "" },
     { "mode",     "" },
     { "first",    "" },
@@ -633,13 +636,14 @@ class DrawArrays final : public LambdaNodeDriver {
 
   DrawArrays() = delete;
   DrawArrays(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
-      owner_(o), ctx_(ctx) {
+      owner_(o), ctx_(ctx), data_(std::make_shared<Data>()) {
   }
 
   void Handle(size_t idx, Value&& v) {
     switch (idx) {
-    case 0: Exec();  return;
-    case 1: Clear(); return;
+    case 0: Exec();                return;
+    case 1: Clear();               return;
+    case 5: Uniform(std::move(v)); return;
     default: Set(idx, std::move(v));
     }
   }
@@ -657,18 +661,18 @@ class DrawArrays final : public LambdaNodeDriver {
       const auto vao  = in(4).dataPtr<gl::VertexArray>();
 
       // get viewport
-      const auto& viewport = in(5).vec4();
+      const auto& viewport = in(6).vec4();
 
       // get mode
-      const auto& mode  = in(6).string();
+      const auto& mode  = in(7).string();
       GLenum m = 0;
       if (mode == "triangles") m = GL_TRIANGLES;
       // TODO
       if (m == 0) throw Exception("unknown draw mode: "+mode);
 
       // get vertices
-      const auto first = in(7).integer();
-      const auto count = in(8).integer();
+      const auto first = in(8).integer();
+      const auto count = in(9).integer();
       try {
         if (first < 0 || count < 0) {
           throw Exception("out of range");
@@ -678,15 +682,25 @@ class DrawArrays final : public LambdaNodeDriver {
         throw Exception("invalid first/count param: "+e.msg());
       }
 
-      auto task = [prog, fb, vao, viewport, m, first, count, ctx, done]() {
+      auto task = [owner = owner_, path = owner_->path(), data = data_,
+                   prog, fb, vao, viewport, m, first, count, ctx, done]() {
+        std::unique_lock<std::mutex> k(data->mtx);
+
         glUseProgram(prog->id());
         glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
         glBindVertexArray(vao->id());
+
+        for (auto& uni : data->uniform) {
+          const auto msg = GL_SetUniform(prog->id(), uni.first, uni.second);
+          if (msg) notify::Warn(path, owner, *msg);
+        }
+
         glViewport(static_cast<GLint>(viewport[0]),
                    static_cast<GLint>(viewport[1]),
                    static_cast<GLsizei>(viewport[2]),
                    static_cast<GLsizei>(viewport[3]));
         glDrawArrays(m, static_cast<GLint>(first), static_cast<GLsizei>(count));
+
         glBindVertexArray(0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glUseProgram(0);
@@ -702,11 +716,76 @@ class DrawArrays final : public LambdaNodeDriver {
       return;
     }
   }
+  void Clear() noexcept {
+    std::unique_lock<std::mutex> k(data_->mtx);
+
+    LambdaNodeDriver::Clear();
+    data_->uniform.clear();
+  }
+  void Uniform(Value&& v) noexcept {
+    try {
+      std::unique_lock<std::mutex> k(data_->mtx);
+
+      const auto& key = v.tuple()[0];
+      const auto& val = v.tuple()[1];
+
+      IndexOrName idx_or_name;
+      if (key.isInteger()) {
+        const auto idx = key.integer();
+        if (idx < 0) throw Exception("invalid uniform index");
+        idx_or_name = static_cast<GLint>(idx);
+      } else if (key.isString()) {
+        idx_or_name = key.string();
+      } else {
+        throw Exception("integer or string is allowed for uniform key");
+      }
+
+      const bool valid = val.isScalar();
+      if (!valid) {
+        throw Exception("scalar is allowed for uniform value");
+      }
+
+      data_->uniform[idx_or_name] = val;
+
+    } catch (Exception& e) {
+      notify::Warn(owner_->path(), owner_,
+                   "ignored invalid uniform specifier: "+e.msg());
+    }
+  }
 
  private:
+  using IndexOrName = std::variant<GLint, std::string>;
+
   Owner* owner_;
 
   std::weak_ptr<Context> ctx_;
+
+  struct Data {
+    std::mutex mtx;
+    std::unordered_map<IndexOrName, Value> uniform;
+  };
+  std::shared_ptr<Data> data_;
+
+
+  static std::optional<std::string> GL_SetUniform(
+      GLuint prog, const IndexOrName& key, const Value& val) noexcept {
+    GLint idx;
+    if (std::holds_alternative<GLint>(key)) {
+      idx = std::get<GLint>(key);
+    } else {
+      const auto& name = std::get<std::string>(key);
+      idx = glGetUniformLocation(prog, name.c_str());
+      if (idx == -1) {
+        return "unknown uniform name: "+name;
+      }
+    }
+    if (val.isScalar()) {
+      glUniform1f(idx, static_cast<float>(val.scalar()));
+    } else {
+      return "invalid uniform value";
+    }
+    return std::nullopt;
+  }
 };
 
 
