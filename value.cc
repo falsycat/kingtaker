@@ -136,42 +136,42 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
   auto& v = *value_;
 
   const char* type =
-      v.has<Value::Integer>()? "Int":
-      v.has<Value::Scalar>()?  "Sca":
-      v.has<Value::Boolean>()? "Boo":
-      v.has<Value::Vec2>()?    "Ve2":
-      v.has<Value::Vec3>()?    "Ve3":
-      v.has<Value::Vec4>()?    "Ve4":
-      v.has<Value::String>()?  "Str": "XXX";
+      v.isInteger()? "Int":
+      v.isScalar()?  "Sca":
+      v.isBoolean()? "Boo":
+      v.isVec2()?    "Ve2":
+      v.isVec3()?    "Ve3":
+      v.isVec4()?    "Ve4":
+      v.isString()?  "Str": "XXX";
   mini? ImGui::SmallButton(type): ImGui::Button(type);
 
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-    if (ImGui::MenuItem("integer", nullptr, v.has<Value::Integer>())) {
+    if (ImGui::MenuItem("integer", nullptr, v.isInteger())) {
       v = Value::Integer {0};
       OnUpdate();
     }
-    if (ImGui::MenuItem("scalar", nullptr, v.has<Value::Scalar>())) {
+    if (ImGui::MenuItem("scalar", nullptr, v.isScalar())) {
       v = Value::Scalar {0};
       OnUpdate();
     }
-    if (ImGui::MenuItem("boolean", nullptr, v.has<Value::Boolean>())) {
+    if (ImGui::MenuItem("boolean", nullptr, v.isBoolean())) {
       v = Value::Boolean {false};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec2", nullptr, v.has<Value::Vec2>())) {
+    if (ImGui::MenuItem("vec2", nullptr, v.isVec2())) {
       v = Value::Vec2 {0., 0.};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec3", nullptr, v.has<Value::Vec3>())) {
+    if (ImGui::MenuItem("vec3", nullptr, v.isVec3())) {
       v = Value::Vec3 {0., 0., 0.};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec4", nullptr, v.has<Value::Vec4>())) {
+    if (ImGui::MenuItem("vec4", nullptr, v.isVec4())) {
       v = Value::Vec4 {0., 0., 0., 0.};
       OnUpdate();
     }
-    if (ImGui::MenuItem("string", nullptr, v.has<Value::String>())) {
+    if (ImGui::MenuItem("string", nullptr, v.isString())) {
       v = ""s;
       OnUpdate();
     }
@@ -187,49 +187,49 @@ void Imm::UpdateEditor() noexcept {
   auto& v = *value_;
 
   ImGui::SameLine();
-  if (v.has<Value::Integer>()) {
+  if (v.isInteger()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(size_.x*em);
-    if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.getUniq<Value::Integer>())) {
+    if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.integer())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Scalar>()) {
+  } else if (v.isScalar()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(size_.x*em);
-    if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.getUniq<Value::Scalar>())) {
+    if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.scalar())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Boolean>()) {
-    if (ImGui::Checkbox("##editor", &v.getUniq<Value::Boolean>())) {
+  } else if (v.isBoolean()) {
+    if (ImGui::Checkbox("##editor", &v.boolean())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Vec2>()) {
+  } else if (v.isVec2()) {
     const auto h = (2*fh + sp)/em;
     gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.getUniq<Value::Vec2>())) {
+    if (UpdateVec(v.vec2())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Vec3>()) {
+  } else if (v.isVec3()) {
     const auto h = (3*fh + 2*sp)/em;
     gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.getUniq<Value::Vec3>())) {
+    if (UpdateVec(v.vec3())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::Vec4>()) {
+  } else if (v.isVec4()) {
     const auto h = (4*fh + 3*sp)/em;
     gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.getUniq<Value::Vec4>())) {
+    if (UpdateVec(v.vec4())) {
       OnUpdate();
     }
 
-  } else if (v.has<Value::String>()) {
+  } else if (v.isString()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {24, 24}, em);
-    if (ImGui::InputTextMultiline("##editor", &v.getUniq<Value::String>(), size_*em)) {
+    if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), size_*em)) {
       OnUpdate();
     }
 
@@ -249,6 +249,142 @@ bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
     ImGui::PopID();
   }
   return mod;
+}
+
+
+class TupleN final : public File, public iface::Node {
+ public:
+  static inline TypeInfo type_ = TypeInfo::New<TupleN>(
+      "Value/TupleN", "takes N inputs and emits one tuple",
+      {typeid(iface::Node)});
+
+  static constexpr size_t kMaxInput = 16;
+
+  TupleN(const std::shared_ptr<Env>& env, size_t n = 0) noexcept :
+      File(&type_, env), Node(kNone) {
+    data_ = std::make_shared<UniversalData>();
+
+    out_.emplace_back(new OutSock(this, "out"));
+
+    auto task_clk = [self = this, data = data_, out = out_[0]](const auto& ctx, auto&&) {
+      const auto& v = ctx->template GetOrNew<ContextData>(self)->values;
+      out->Send(ctx, Value::Tuple(v.data(), v.data()+data->n));
+    };
+    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task_clk)));
+
+    auto task_clr = [self = this](const auto& ctx, auto&&) {
+      ctx->template GetOrNew<ContextData>(self)->values.fill({});
+    };
+    in_.emplace_back(new LambdaInSock(this, "CLR", std::move(task_clr)));
+
+    Rebuild(n);
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+    try {
+      const auto n = msgpack::as_if<size_t>(obj, 0);
+      if (n > kMaxInput) {
+        throw DeserializeException("input count overflow");
+      }
+      return std::make_unique<TupleN>(env, n);
+    } catch (msgpack::type_error&) {
+      throw DeserializeException("broken Value/TupleN");
+    }
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(data_->n);
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<TupleN>(env, data_->n);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Node>(t).Select(this);
+  }
+
+ private:
+  struct UniversalData {
+   public:
+    size_t n = 0;
+  };
+  std::shared_ptr<UniversalData> data_;
+
+
+  // recreates input sockets
+  void Rebuild(size_t n) noexcept {
+    in_.resize(2+n);
+    if (data_->n < n) {
+      for (size_t i = data_->n; i < n; ++i) {
+        in_[2+i] = std::make_shared<CustomInSock>(this, i);
+      }
+    }
+    data_->n = n;
+  }
+
+
+  class ContextData final : public Context::Data {
+   public:
+    ContextData() { values.fill({}); }
+
+    std::array<Value, kMaxInput> values;
+  };
+  class CustomInSock final : public InSock {
+   public:
+    CustomInSock(TupleN* o, size_t idx) noexcept :
+        InSock(o, std::to_string(idx)), idx_(idx) {
+    }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+      auto& values = ctx->GetOrNew<ContextData>(&owner())->values;
+      values[idx_] = std::move(v);
+    }
+   private:
+    size_t idx_;
+  };
+};
+void TupleN::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+  ImGui::TextUnformatted("TUPLE-N");
+
+  const auto em = ImGui::GetFontSize();
+
+  ImGui::BeginGroup();
+  if (ImNodes::BeginInputSlot("CLK", 1)) {
+    gui::NodeInSock(ctx, in_[0]);
+    ImNodes::EndSlot();
+  }
+  if (ImNodes::BeginInputSlot("CLR", 1)) {
+    gui::NodeInSock(ctx, in_[1]);
+    ImNodes::EndSlot();
+  }
+  for (size_t i = 0; i < data_->n; ++i) {
+    const auto& name = in_[2+i]->name();
+    if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
+      gui::NodeInSock(name);
+      ImNodes::EndSlot();
+    }
+  }
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(2*em);
+  int n = static_cast<int>(data_->n);
+  if (ImGui::DragInt("##InputCount", &n, 1, 0, kMaxInput)) {
+    Queue::main().Push([this, n]() { Rebuild(static_cast<size_t>(n)); });
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("number of inputs");
+  }
+  ImGui::SameLine();
+
+  ImGui::BeginGroup();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeOutSock("out");
+    ImNodes::EndSlot();
+  }
+  ImGui::EndGroup();
 }
 
 
@@ -430,336 +566,6 @@ void ExternalText::Update(RefStack& ref, Event& ev) noexcept {
 }
 void ExternalText::UpdateMenu(RefStack&) noexcept {
   ImGui::MenuItem("Text Editor", nullptr, &editor_shown_);
-}
-
-
-class Logger final : public File, public iface::Node {
- public:
-  static inline TypeInfo type_ = TypeInfo::New<Logger>(
-      "Value/Logger", "log values received from input",
-      {typeid(iface::Node)});
-
-  static constexpr size_t N = 256;  // max log items
-
-  Logger(
-      const std::shared_ptr<Env>& env,
-      ImVec2 size      = {0, 0},
-      bool auto_scroll = true,
-      bool show_elapse = false) noexcept :
-      File(&type_, env), Node(kNone),
-      size_(size), auto_scroll_(auto_scroll), show_elapse_(show_elapse) {
-    auto handler = [self = this](const auto& ctx, auto&& v) {
-      auto data = ctx->template GetOrNew<ValueData>(self);
-      data->updated = true;
-
-      data->items[data->tail] = ValueItem::CreateItem(v);
-      data->tail = (data->tail+1)%N;
-      if (data->tail == data->head) {
-        data->head = (data->head+1)%N;
-      }
-    };
-    in_.emplace_back(new LambdaInSock(this, "in", std::move(handler)));
-  }
-
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    std::tuple<float, float> size;
-    msgpack::find(obj, "size"s).convert(size);
-    return std::make_unique<Logger>(
-        env,
-        ImVec2(std::get<0>(size), std::get<1>(size)),
-        msgpack::find(obj, "auto_scroll"s).as<bool>(),
-        msgpack::find(obj, "show_elapse"s).as<bool>());
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack_map(3);
-
-    pk.pack("size"s);
-    pk.pack(std::make_tuple(size_.x, size_.y));
-
-    pk.pack("auto_scroll");
-    pk.pack(auto_scroll_);
-
-    pk.pack("show_elapse");
-    pk.pack(show_elapse_);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<Logger>(
-        env, size_, auto_scroll_, show_elapse_);
-  }
-
-  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
-  }
-
- private:
-  // permanentized params
-  ImVec2 size_;
-
-  bool auto_scroll_;
-  bool show_elapse_;
-
-
-  struct ValueItem final {
-   public:
-    Time time;
-
-    std::string type;
-    std::string value;
-    std::string tooltip;
-
-    static ValueItem CreateItem(const Value& val) noexcept {
-      ValueItem ret;
-      ret.time    = Clock::now();
-      ret.type    = val.StringifyType();
-      ret.tooltip = val.Stringify();
-      ret.value   = ret.tooltip.substr(0, ret.tooltip.find('\n'));
-      return ret;
-    }
-  };
-  class ValueData final : public Context::Data {
-   public:
-    std::array<ValueItem, N> items;
-    size_t head = 0, tail = 0;
-
-    bool updated = false;
-  };
-};
-void Logger::Update(File::RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  const auto now = Clock::now();
-  const auto em  = ImGui::GetFontSize();
-
-  auto data = ctx->GetOrNew<ValueData>(this);
-
-  ImGui::TextUnformatted("VALUE LOGGER");
-
-  if (ImNodes::BeginInputSlot("in", 1)) {
-    gui::NodeSocket();
-    ImNodes::EndSlot();
-  }
-  ImGui::SameLine();
-
-  {
-    gui::ResizeGroup _("##ResizeGroup", &size_, {20, 12}, {32, 24}, em);
-
-    ImGui::Checkbox("auto-scroll", &auto_scroll_);
-    ImGui::SameLine();
-    ImGui::Checkbox("show-elapse", &show_elapse_);
-
-    constexpr auto kFlags =
-        ImGuiTableFlags_Resizable |
-        ImGuiTableFlags_Hideable  |
-        ImGuiTableFlags_ContextMenuInBody |
-        ImGuiTableFlags_Borders |
-        ImGuiTableFlags_SizingStretchProp |
-        ImGuiTableFlags_ScrollY;
-    const auto table_size = size_*em - ImVec2(0, ImGui::GetFrameHeightWithSpacing());
-    if (ImGui::BeginTable("log", 3, kFlags, table_size)) {
-      ImGui::TableSetupColumn("type");
-      ImGui::TableSetupColumn("value");
-      ImGui::TableSetupColumn("time");
-      ImGui::TableSetupScrollFreeze(0, 1);
-      ImGui::TableHeadersRow();
-
-      for (size_t idx = data->head;; idx = (idx+1)%N) {
-        if (idx == data->tail) {
-          if (data->updated && auto_scroll_) {
-            ImGui::SetScrollHereY();
-            data->updated = false;
-          }
-          break;
-        }
-        const auto& item = data->items[idx];
-
-        const auto elapse    = now - item.time;
-        const auto elapse_ms = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(elapse).count());
-
-        const auto appear  = 1.f-powf(1.f-std::min(static_cast<float>(elapse_ms)/1000.f, 1.f), 2);
-        const auto appear4 = ImVec4(appear, appear, appear, appear);
-
-        const auto bg   = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBg);
-        const auto bg_h = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
-        const auto bg_c = (bg-bg_h)*appear4 + bg_h;
-
-        ImGui::TableNextRow();
-        ImGui::TableSetBgColor(
-            ImGuiTableBgTarget_RowBg0, ImGui::ColorConvertFloat4ToU32(bg_c));
-
-        if (ImGui::TableSetColumnIndex(0)) {
-          constexpr auto kSelectableFlags =
-              ImGuiSelectableFlags_SpanAllColumns |
-              ImGuiSelectableFlags_AllowItemOverlap;
-          ImGui::Selectable(item.type.c_str(), false, kSelectableFlags);
-        }
-        if (ImGui::TableNextColumn()) {
-          ImGui::TextUnformatted(item.value.c_str());
-          if (item.tooltip.size() && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", item.tooltip.c_str());
-          }
-        }
-        if (ImGui::TableNextColumn()) {
-          if (show_elapse_) {
-            ImGui::TextUnformatted(StringifyDuration(elapse).c_str());
-          } else {
-            ImGui::TextUnformatted(StringifyTime(item.time).c_str());
-          }
-        }
-      }
-      ImGui::EndTable();
-    }
-  }
-}
-
-
-class Name final : public File, public iface::Node {
- public:
-  static inline TypeInfo type_ = TypeInfo::New<Name>(
-      "Value/Name", "names and passes input into output",
-      {typeid(iface::Node)});
-
-  Name(const std::shared_ptr<Env>& env, const std::string& name = "") noexcept :
-      File(&type_, env), Node(kNone),
-      data_(std::make_shared<UniversalData>()) {
-    data_->name = name;
-
-    out_.emplace_back(new OutSock(this, "out"));
-
-    auto task = [self = this, out = out_[0], data = data_](const auto& ctx, auto&& v) {
-      if (data->valid_name) {
-        out->Send(ctx, Value(data->name, std::move(v)));
-      } else {
-        notify::Warn(data->path, self,
-                     "got input but name is invalid, emitting is skipped");
-      }
-    };
-    in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
-  }
-
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    return std::make_unique<Name>(env, obj.as<std::string>());
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack(data_->name);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<Name>(env, data_->name);
-  }
-
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
-  }
-
- private:
-  // permanentized
-  struct UniversalData {
-    Path path;
-
-    std::string name;
-    bool valid_name;
-  };
-  std::shared_ptr<UniversalData> data_;
-};
-void Name::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
-  data_->path = ref.GetFullPath();
-
-  ImGui::TextUnformatted("NAME");
-
-  if (ImNodes::BeginInputSlot("in", 1)) {
-    ImGui::AlignTextToFramePadding();
-    gui::NodeSocket();
-    ImNodes::EndSlot();
-  }
-  ImGui::SameLine();
-
-  ImGui::SetNextItemWidth(8*ImGui::GetFontSize());
-  ImGui::InputText("##Name", &data_->name);
-
-  ImGui::SameLine();
-  if (ImNodes::BeginOutputSlot("out", 1)) {
-    ImGui::AlignTextToFramePadding();
-    gui::NodeSocket();
-    ImNodes::EndSlot();
-  }
-
-  const auto msg = Value::Named::ValidateName(data_->name);
-  if (msg) ImGui::Text("%s", msg);
-  data_->valid_name = !msg;
-}
-
-
-class Pick final : public File, public iface::Node {
- public:
-  static inline TypeInfo type_ = TypeInfo::New<Pick>(
-      "Value/Pick", "passes input into output if name of the value is matched",
-      {typeid(iface::Node)});
-
-  Pick(const std::shared_ptr<Env>& env, const std::string& name = "") noexcept :
-      File(&type_, env), Node(kNone),
-      data_(std::make_shared<UniversalData>()) {
-    data_->name = name;
-
-    out_.emplace_back(new OutSock(this, "out"));
-
-    auto task = [out = out_[0], data = data_](const auto& ctx, Value&& v) {
-      if (!v.has<Value::Named>()) return;
-
-      const auto& n = v.get<Value::Named>();
-      if (n.name() != data->name) return;
-
-      out->Send(ctx, Value(n.value()));
-    };
-    in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
-  }
-
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    return std::make_unique<Pick>(env, obj.as<std::string>());
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack(data_->name);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<Pick>(env, data_->name);
-  }
-
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
-  }
-
- private:
-  // permanentized
-  struct UniversalData {
-    std::string name;
-  };
-  std::shared_ptr<UniversalData> data_;
-};
-void Pick::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
-  ImGui::TextUnformatted("PICK");
-
-  if (ImNodes::BeginInputSlot("in", 1)) {
-    ImGui::AlignTextToFramePadding();
-    gui::NodeSocket();
-    ImNodes::EndSlot();
-  }
-  ImGui::SameLine();
-
-  ImGui::SetNextItemWidth(8*ImGui::GetFontSize());
-  ImGui::InputText("##Name", &data_->name);
-
-  ImGui::SameLine();
-  if (ImNodes::BeginOutputSlot("out", 1)) {
-    ImGui::AlignTextToFramePadding();
-    gui::NodeSocket();
-    ImNodes::EndSlot();
-  }
-
-  const auto msg = Value::Named::ValidateName(data_->name);
-  if (msg) ImGui::Text("%s", msg);
 }
 
 } }  // namespace kingtaker

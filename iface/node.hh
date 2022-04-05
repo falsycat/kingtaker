@@ -25,7 +25,6 @@ class Node {
 
   class Sock;
   class InSock;
-  class CachedInSock;
   class LambdaInSock;
   class OutSock;
 
@@ -152,24 +151,6 @@ class Node::InSock : public Sock {
 
  private:
   std::vector<std::weak_ptr<OutSock>> src_;
-};
-class Node::CachedInSock : public InSock {
- public:
-  CachedInSock(Node* o, std::string_view n, std::optional<Value>&& v) noexcept :
-      InSock(o, n), value_(std::move(v)) {
-  }
-
-  void Receive(const std::shared_ptr<Context>&, Value&& v) noexcept override {
-    value_ = std::move(v);
-  }
-  void Clear() noexcept {
-    value_ = std::nullopt;
-  }
-
-  const std::optional<Value>& value() const noexcept { return value_; }
-
- private:
-  std::optional<Value> value_;
 };
 class Node::LambdaInSock final : public InSock {
  public:

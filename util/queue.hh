@@ -43,6 +43,16 @@ class SimpleQueue : public Queue {
     std::unique_lock<std::mutex> k(mtx_);
     cv_.wait(k);
   }
+  template <typename Dur>
+  void WaitFor(const Dur& dur) noexcept {
+    std::unique_lock<std::mutex> k(mtx_);
+    cv_.wait_for(k, dur);
+  }
+  template <typename Time>
+  void WaitUntil(const Time& t) noexcept {
+    std::unique_lock<std::mutex> k(mtx_);
+    cv_.wait_until(k, t);
+  }
   void Wake() noexcept {
     cv_.notify_all();
   }
