@@ -41,7 +41,7 @@ class TextureFactory final : public LambdaNodeDriver {
       "GL/TextureFactory", "A node that creates renderbuffer object",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "GL Tex Factory";
+  static std::string title() noexcept { return "GL Texture"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR", "", kPulseButton },
@@ -141,7 +141,7 @@ class RenderbufferFactory final : public LambdaNodeDriver {
       "GL/RenderbufferFactory", "A node that creates renderbuffer object",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "GL RB Factory";
+  static std::string title() noexcept { return "GL Renderbuffer"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR", "", kPulseButton },
@@ -233,7 +233,7 @@ class FramebufferFactory final : public LambdaNodeDriver {
       "GL/FramebufferFactory", "A node that creates framebuffer object",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "FB Factory";
+  static std::string title() noexcept { return "GL Framebuffer"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR", "", kPulseButton },
@@ -361,7 +361,7 @@ class VertexArrayFactory final : public LambdaNodeDriver {
       "GL/VertexArrayFactory", "A node that creates vertex array object",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "GL VAO Factory";
+  static std::string title() noexcept { return "GL VAO"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLK", "", kPulseButton | kClockIn },
@@ -409,7 +409,7 @@ class ProgramFactory final : public LambdaNodeDriver {
       "GL/ProgramFactory", "A node that links program object",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "GL Program Factory";
+  static std::string title() noexcept { return "GL Program"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR",     "", kPulseButton },
@@ -505,7 +505,7 @@ class ShaderFactory final : public LambdaNodeDriver {
       "GL/ShaderFactory", "A node that compiles shader",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "GL Shader Factory";
+  static std::string title() noexcept { return "GL Shader"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR",  "", kPulseButton },
@@ -608,7 +608,7 @@ class DrawArrays final : public LambdaNodeDriver {
       "GL/DrawArrays", "A node that call glDrawArrays",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "glDrawArrays";
+  static std::string title() noexcept { return "glDrawArrays"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR", "", kPulseButton },
@@ -844,7 +844,7 @@ class Preview final : public File, public iface::DirItem {
         "GL/Preview/Show", "Shows received texture in a preview",
         {typeid(iface::Node)});
 
-    static constexpr const char* kTitle = "GL/Preview/Show";
+    static std::string title() noexcept { return "GL Preview"; }
 
     static inline const std::vector<SockMeta> kInSocks = {
       { "CLR", "", kPulseButton },

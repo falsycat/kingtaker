@@ -247,8 +247,6 @@ class SetAndGet final : public LambdaNodeDriver {
       "Logic/SetAndGet", "set any Value, get anytime",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "SETnGET";
-
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR", "", kPulseButton },
     { "set", "", },
@@ -262,6 +260,14 @@ class SetAndGet final : public LambdaNodeDriver {
   SetAndGet() = delete;
   SetAndGet(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
       owner_(o), ctx_(ctx) {
+  }
+
+  std::string title() const noexcept {
+    if (value_) {
+      return "SETnGET*";
+    } else {
+      return "SETnGET";
+    }
   }
 
   void Handle(size_t idx, Value&& v) {
@@ -300,8 +306,6 @@ class Await final : public LambdaNodeDriver {
       "Logic/Await", "emits pulse when got as many values as number of connections",
       {typeid(iface::Node)});
 
-  static constexpr const char* kTitle = "AWAIT";
-
   static inline const std::vector<SockMeta> kInSocks = {
     { "CLR", "", kPulseButton },
     { "in", "", },
@@ -315,13 +319,17 @@ class Await final : public LambdaNodeDriver {
       owner_(o), ctx_(ctx) {
   }
 
+  std::string title() const noexcept {
+    return "AWAIT ("+std::to_string(count_)+"/"+std::to_string(expect())+")";
+  }
+
   void Handle(size_t idx, Value&&) {
     switch (idx) {
     case 0:
       count_ = 0;
       return;
     case 1:
-      if (++count_ >= owner_->in(1)->src().size()) {
+      if (++count_ >= expect()) {
         owner_->out()[0]->Send(ctx_.lock(), {});
         count_ = 0;
       }
@@ -336,6 +344,10 @@ class Await final : public LambdaNodeDriver {
   std::weak_ptr<Context> ctx_;
 
   size_t count_ = 0;
+
+  size_t expect() const noexcept {
+    return owner_->in(1)->src().size();
+  }
 };
 
 }}  // namespace kingtaker

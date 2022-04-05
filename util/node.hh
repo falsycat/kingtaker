@@ -50,6 +50,8 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
   LambdaNodeDriver& operator=(const LambdaNodeDriver&) = default;
   LambdaNodeDriver& operator=(LambdaNodeDriver&&) = default;
 
+  // std::string title() const noexcept;
+
   // void Handle(size_t, Value&&);
 };
 
@@ -171,7 +173,8 @@ class LambdaNode final : public File, public iface::Node {
 };
 template <typename Driver>
 void LambdaNode<Driver>::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  ImGui::TextUnformatted(Driver::kTitle);
+  const auto driver = ctx->GetOrNew<Driver>(this, this, ctx);
+  ImGui::TextUnformatted(driver->title().c_str());
 
   ImGui::BeginGroup();
   for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
