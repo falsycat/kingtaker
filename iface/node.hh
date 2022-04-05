@@ -58,6 +58,9 @@ class Node {
   std::span<const std::shared_ptr<InSock>> in() noexcept { return in_; }
   std::span<const std::shared_ptr<OutSock>> out() noexcept { return out_; }
 
+  const std::shared_ptr<InSock>& in(size_t i) const noexcept { return in_[i]; }
+  const std::shared_ptr<OutSock>& out(size_t i) const noexcept { return out_[i]; }
+
   Flags flags() const noexcept { return flags_; }
 
  protected:

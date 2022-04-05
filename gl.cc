@@ -86,8 +86,8 @@ class TextureFactory final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out  = owner_->out()[0];
-    auto errr = owner_->out()[1];
+    auto out  = owner_->out(0);
+    auto errr = owner_->out(1);
 
     if (w_ == 0 || h_ == 0) {
       throw Exception("resolution is unspecified");
@@ -191,8 +191,8 @@ class RenderbufferFactory final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out  = owner_->out()[0];
-    auto errr = owner_->out()[1];
+    auto out  = owner_->out(0);
+    auto errr = owner_->out(1);
 
     if (w_ == 0 || h_ == 0) {
       throw Exception("resolution is unspecified");
@@ -319,8 +319,8 @@ class FramebufferFactory final : public LambdaNodeDriver {
       throw Exception("attach something firstly");
     }
 
-    auto out  = owner_->out()[0];
-    auto errr = owner_->out()[1];
+    auto out  = owner_->out(0);
+    auto errr = owner_->out(1);
 
     // check status and emit result
     auto task = [owner = owner_, path = owner_->path(), fb = fb_, ctx, out, errr]() {
@@ -385,7 +385,7 @@ class VertexArrayFactory final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out = owner_->out()[0];
+    auto out = owner_->out(0);
 
     auto vao  = gl::VertexArray::Create(0);
     auto task = [vao, ctx, out]() {
@@ -460,8 +460,8 @@ class ProgramFactory final : public LambdaNodeDriver {
 
     if (!prog_) throw Exception("attach shaders firstly");
 
-    auto out  = owner_->out()[0];
-    auto errr = owner_->out()[1];
+    auto out  = owner_->out(0);
+    auto errr = owner_->out(1);
 
     // link program and check status
     auto task = [owner = owner_, path = owner_->path(),
@@ -555,8 +555,8 @@ class ShaderFactory final : public LambdaNodeDriver {
       throw Exception("src is unspecified");
     }
 
-    auto out  = owner_->out()[0];
-    auto errr = owner_->out()[1];
+    auto out  = owner_->out(0);
+    auto errr = owner_->out(1);
 
     auto shader = gl::Shader::Create(t_);
     auto task = [owner = owner_, path = owner_->path(),
@@ -684,7 +684,7 @@ class DrawArrays final : public LambdaNodeDriver {
 
     // TODO validate vertex count
 
-    const auto& done = owner_->out()[0];
+    const auto& done = owner_->out(0);
 
     auto task = [owner = owner_, path = owner_->path(), ctx, done,
                  prog     = prog_,
