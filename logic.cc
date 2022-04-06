@@ -138,8 +138,7 @@ class Await final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "clear", "", kPulseButton },
-    { "in",    "", },
+    { "in", "", },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
     { "out", "", },
@@ -157,9 +156,6 @@ class Await final : public LambdaNodeDriver {
   void Handle(size_t idx, Value&&) {
     switch (idx) {
     case 0:
-      count_ = 0;
-      return;
-    case 1:
       if (++count_ >= expect()) {
         owner_->out()[0]->Send(ctx_.lock(), {});
         count_ = 0;
@@ -177,7 +173,7 @@ class Await final : public LambdaNodeDriver {
   size_t count_ = 0;
 
   size_t expect() const noexcept {
-    return owner_->in(1)->src().size();
+    return owner_->in(0)->src().size();
   }
 };
 
