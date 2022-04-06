@@ -59,7 +59,7 @@ template <typename Driver>
 class LambdaNode final : public File, public iface::Node {
  public:
   LambdaNode(const std::shared_ptr<Env>& env) noexcept :
-      File(&Driver::type_, env), Node(Node::kNone),
+      File(&Driver::kType, env), Node(Node::kNone),
       life_(std::make_shared<std::monostate>()) {
     std::shared_ptr<OutSock> err;
     for (size_t i = 0; i < Driver::kOutSocks.size(); ++i) {

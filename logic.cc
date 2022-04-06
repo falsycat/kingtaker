@@ -18,12 +18,12 @@ namespace {
 
 class Passthru final : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Passthru>(
+  static inline TypeInfo kType = TypeInfo::New<Passthru>(
       "Logic/Passthru", "passes all inputs into output directly",
       {typeid(iface::Node)});
 
   Passthru(const std::shared_ptr<Env>& env) noexcept :
-      File(&type_, env), Node(kNone) {
+      File(&kType, env), Node(kNone) {
     out_.emplace_back(new OutSock(this, "out"));
 
     std::weak_ptr<OutSock> wout = out_[0];
@@ -74,7 +74,7 @@ class SetAndGet final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<SetAndGet>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "Logic/SetAndGet", "set any Value, get anytime",
       {typeid(iface::Node)});
 
@@ -133,7 +133,7 @@ class Await final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<Await>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "Logic/Await", "emits pulse when got as many values as number of connections",
       {typeid(iface::Node)});
 
@@ -186,7 +186,7 @@ class Once final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<Once>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "Logic/Once", "emits pulse one time when got anything, does nothing after that",
       {typeid(iface::Node)});
 

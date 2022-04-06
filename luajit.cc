@@ -404,7 +404,7 @@ LuaJIT dev_;
 
 class Script : public File, public iface::DirItem {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Script>(
+  static inline TypeInfo kType = TypeInfo::New<Script>(
       "LuaJIT/Script", "compiled object of LuaJIT script",
       {typeid(iface::DirItem)});
 
@@ -437,7 +437,7 @@ class Script : public File, public iface::DirItem {
                const std::string& path = "",
                bool shown          = false,
                bool auto_recompile = false) noexcept :
-      File(&type_, env), DirItem(kMenu),
+      File(&kType, env), DirItem(kMenu),
       path_(path), shown_(shown), auto_recompile_(auto_recompile) {
     data_ = std::make_shared<Data>();
   }
@@ -611,7 +611,7 @@ void Script::UpdateCompiler(RefStack& ref) noexcept {
 
 class Node : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Node>(
+  static inline TypeInfo kType = TypeInfo::New<Node>(
       "LuaJIT/ScriptNode", "Node driven by LuaJIT/Script",
       {typeid(iface::Node)});
 
@@ -620,7 +620,7 @@ class Node : public File, public iface::Node {
              bool auto_rebuild = false,
              const std::vector<std::string>& in  = {},
              const std::vector<std::string>& out = {}) noexcept :
-      File(&type_, env), iface::Node(kMenu),
+      File(&kType, env), iface::Node(kMenu),
       path_(path), auto_rebuild_(auto_rebuild) {
     life_ = std::make_shared<std::monostate>();
 
@@ -1188,7 +1188,7 @@ void Node::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
 
 class InlineNode final : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<InlineNode>(
+  static inline TypeInfo kType = TypeInfo::New<InlineNode>(
       "LuaJIT/InlineNode", "inline Node",
       {typeid(iface::Node)});
 
@@ -1196,7 +1196,7 @@ class InlineNode final : public File, public iface::Node {
              const std::string& expr      = "",
              bool               multiline = false,
              ImVec2             size      = {0.f, 0.f}) noexcept :
-      File(&type_, env), Node(kNone),
+      File(&kType, env), Node(kNone),
       data_(std::make_shared<UniversalData>(expr, multiline)), size_(size) {
     out_.emplace_back(new OutSock(this, "out"));
 

@@ -32,7 +32,7 @@ namespace {
 
 class Network : public File, public iface::DirItem, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Network>(
+  static inline TypeInfo kType = TypeInfo::New<Network>(
       "Node/Network", "manages multiple Nodes and connections between them",
       {typeid(iface::DirItem), typeid(iface::History)});
 
@@ -122,7 +122,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
           Time lastmod = Clock::now(),
           NodeHolderList&& nodes = {},
           size_t next = 0) noexcept :
-      File(&type_, env), DirItem(DirItem::kMenu), Node(Node::kNone),
+      File(&kType, env), DirItem(DirItem::kMenu), Node(Node::kNone),
       ctx_(std::make_shared<Context>()),
       lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
       history_(this) {
@@ -342,11 +342,11 @@ class Network : public File, public iface::DirItem, public iface::Node {
   // A Node that emits input provided to Network
   class InputNode : public AbstractIONode<InSock> {
    public:
-    static inline TypeInfo type_ = TypeInfo::New<InputNode>(
+    static inline TypeInfo kType = TypeInfo::New<InputNode>(
         "Node/Network/Input", "input emitter in Node/Network", {});
 
     InputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
-        AbstractIONode(&type_, env, name) {
+        AbstractIONode(&kType, env, name) {
       out_.emplace_back(new OutSock(this, "out"));
     }
 
@@ -389,11 +389,11 @@ class Network : public File, public iface::DirItem, public iface::Node {
   // A Node that receives an output for Network
   class OutputNode : public AbstractIONode<OutSock> {
    public:
-    static inline TypeInfo type_ = TypeInfo::New<OutputNode>(
+    static inline TypeInfo kType = TypeInfo::New<OutputNode>(
         "Node/Network/Output", "output receiver in Node/Network", {});
 
     OutputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
-        AbstractIONode(&type_, env, name), life_(std::make_shared<std::monostate>()) {
+        AbstractIONode(&kType, env, name), life_(std::make_shared<std::monostate>()) {
       std::weak_ptr<std::monostate> wlife = life_;
       auto handler = [this, wlife, name = name_](const auto& ctx, auto&& v) {
         if (wlife.expired() || !owner_) return;
@@ -1065,7 +1065,7 @@ void Network::History::RemoveNodes(NodeHolderRefList&& h) noexcept {
 
 class Ref : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Ref>(
+  static inline TypeInfo kType = TypeInfo::New<Ref>(
       "Node/Ref", "allows other nodes to be treated as lambda",
       {typeid(iface::Node)});
 
@@ -1075,7 +1075,7 @@ class Ref : public File, public iface::Node {
           std::string_view path = "",
           const std::vector<std::string>& in  = {},
           const std::vector<std::string>& out = {}) noexcept :
-      File(&type_, env), Node(kMenu),
+      File(&kType, env), Node(kMenu),
       path_(path),
       life_(std::make_shared<std::monostate>()),
       ctx_(std::make_shared<Context>()) {

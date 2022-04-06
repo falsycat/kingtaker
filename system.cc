@@ -30,7 +30,7 @@ class GenericDir : public File,
     public iface::Dir,
     public iface::DirItem {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<GenericDir>(
+  static inline TypeInfo kType = TypeInfo::New<GenericDir>(
       "System/GenericDir", "generic impl of directory",
       {typeid(iface::Dir), typeid(iface::DirItem)});
 
@@ -40,7 +40,7 @@ class GenericDir : public File,
              ItemList&& items   = {},
              Time       lastmod = Clock::now(),
              bool       shown   = false) :
-      File(&type_, env), DirItem(kTree | kMenu),
+      File(&kType, env), DirItem(kTree | kMenu),
       items_(std::move(items)), lastmod_(lastmod), shown_(shown) {
   }
 
@@ -276,11 +276,11 @@ void GenericDir::UpdateItem(RefStack& ref, File* f) noexcept {
 // Saves and restores permanentized parameters of ImGui.
 class ImGuiConfig : public File {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<ImGuiConfig>(
+  static inline TypeInfo kType = TypeInfo::New<ImGuiConfig>(
       "System/ImGuiConfig", "saves and restores ImGui config", {});
 
   ImGuiConfig(const std::shared_ptr<Env>& env) noexcept :
-      File(&type_, env) {
+      File(&kType, env) {
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -304,11 +304,11 @@ class ImGuiConfig : public File {
 
 class LogView : public File {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<LogView>(
+  static inline TypeInfo kType = TypeInfo::New<LogView>(
       "System/LogView", "provides system log viewer", {});
 
   LogView(const std::shared_ptr<Env>& env, bool shown = true) noexcept :
-      File(&type_, env), shown_(shown) {
+      File(&kType, env), shown_(shown) {
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -342,7 +342,7 @@ class LogView : public File {
 
 class ClockPulseGenerator final : public File, public iface::DirItem {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<ClockPulseGenerator>(
+  static inline TypeInfo kType = TypeInfo::New<ClockPulseGenerator>(
       "System/ClockPulseGenerator", "emits a pulse into a specific node on each GUI updates",
       {typeid(iface::DirItem)});
 
@@ -351,7 +351,7 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
                       const std::string& sock_name = "",
                       bool               shown     = false,
                       bool               enable    = false) noexcept :
-      File(&type_, env), DirItem(kNone),
+      File(&kType, env), DirItem(kNone),
       nctx_(std::make_shared<iface::Node::Context>()),
       path_(path), sock_name_(sock_name), shown_(shown), enable_(enable) {
   }
@@ -480,7 +480,7 @@ void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
 
 class Logger final : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Logger>(
+  static inline TypeInfo kType = TypeInfo::New<Logger>(
       "System/Logger", "prints msg to system log",
       {typeid(iface::Node)});
 
@@ -488,7 +488,7 @@ class Logger final : public File, public iface::Node {
          notify::Level      lv   = notify::kTrace,
          const std::string& msg  = "",
          ImVec2             size = {0, 0}) noexcept :
-      File(&type_, env), Node(kNone),
+      File(&kType, env), Node(kNone),
       data_(std::make_shared<UniversalData>(lv, msg)), size_(size) {
     std::weak_ptr<UniversalData> wdata = data_;
     auto task = [self = this, wdata](const auto&, auto&& v) {
@@ -632,12 +632,12 @@ void Logger::UpdateLevelCombo(notify::Level* lv) noexcept {
 
 class MouseInput : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<MouseInput>(
+  static inline TypeInfo kType = TypeInfo::New<MouseInput>(
       "System/MouseInput", "retrieves mouse state",
       {typeid(iface::Node)});
 
   MouseInput(const std::shared_ptr<Env>& env) noexcept :
-      File(&type_, env), Node(kNone), data_(std::make_shared<UniversalData>()) {
+      File(&kType, env), Node(kNone), data_(std::make_shared<UniversalData>()) {
     out_.emplace_back(new OutSock(this, "pos"));
     out_.emplace_back(new OutSock(this, "left"));
     out_.emplace_back(new OutSock(this, "middle"));
@@ -775,12 +775,12 @@ void MouseInput::UpdateSocket(const char* s, float w) noexcept {
 
 class KeyInput final : public File, public iface::Node {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<KeyInput>(
+  static inline TypeInfo kType = TypeInfo::New<KeyInput>(
       "System/KeyInput", "retrieves key state",
       {typeid(iface::Node)});
 
   KeyInput(const std::shared_ptr<Env>& env, const std::string& key = "(none)") noexcept :
-      File(&type_, env), Node(Node::kNone),
+      File(&kType, env), Node(Node::kNone),
       data_(std::make_shared<UniversalData>()), key_(key) {
     out_.emplace_back(new OutSock(this, "down"));
     out_.emplace_back(new OutSock(this, "press"));

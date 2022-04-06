@@ -37,7 +37,7 @@ class TextureFactory final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<TextureFactory>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "GL/TextureFactory", "A node that creates renderbuffer object",
       {typeid(iface::Node)});
 
@@ -137,7 +137,7 @@ class RenderbufferFactory final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<RenderbufferFactory>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "GL/RenderbufferFactory", "A node that creates renderbuffer object",
       {typeid(iface::Node)});
 
@@ -229,7 +229,7 @@ class FramebufferFactory final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<FramebufferFactory>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "GL/FramebufferFactory", "A node that creates framebuffer object",
       {typeid(iface::Node)});
 
@@ -357,7 +357,7 @@ class VertexArrayFactory final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<VertexArrayFactory>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "GL/VertexArrayFactory", "A node that creates vertex array object",
       {typeid(iface::Node)});
 
@@ -405,7 +405,7 @@ class ProgramFactory final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<ProgramFactory>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "GL/ProgramFactory", "A node that links program object",
       {typeid(iface::Node)});
 
@@ -501,7 +501,7 @@ class ShaderFactory final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<ShaderFactory>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "GL/ShaderFactory", "A node that compiles shader",
       {typeid(iface::Node)});
 
@@ -604,7 +604,7 @@ class DrawArrays final : public LambdaNodeDriver {
  public:
   using Owner = LambdaNode<DrawArrays>;
 
-  static inline TypeInfo type_ = TypeInfo::New<Owner>(
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "GL/DrawArrays", "A node that call glDrawArrays",
       {typeid(iface::Node)});
 
@@ -789,12 +789,12 @@ class DrawArrays final : public LambdaNodeDriver {
 
 class Preview final : public File, public iface::DirItem {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Preview>(
+  static inline TypeInfo kType = TypeInfo::New<Preview>(
       "GL/Preview", "provides OpenGL texture preview window",
       {typeid(iface::DirItem)});
 
   Preview(const std::shared_ptr<Env>& env, bool shown = false) noexcept :
-      File(&type_, env), DirItem(DirItem::kNone), shown_(shown) {
+      File(&kType, env), DirItem(DirItem::kNone), shown_(shown) {
   }
 
   static std::unique_ptr<File> Deserialize(
@@ -840,7 +840,7 @@ class Preview final : public File, public iface::DirItem {
    public:
     using Owner = LambdaNode<Show>;
 
-    static inline TypeInfo type_ = TypeInfo::New<Owner>(
+    static inline TypeInfo kType = TypeInfo::New<Owner>(
         "GL/Preview/Show", "Shows received texture in a preview",
         {typeid(iface::Node)});
 
