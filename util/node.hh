@@ -166,7 +166,7 @@ class LambdaNode final : public File, public iface::Node {
     void OnCatch(const std::shared_ptr<Context>& ctx, Exception& e) noexcept {
       notify::Error(owner()->path(), owner(),
                     "error while handling input ("+name()+"): "s+e.msg());
-      err_->Send(ctx, {});
+      if (err_) err_->Send(ctx, {});
     }
 
    private:
