@@ -1073,9 +1073,9 @@ class Call final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR",  "", kPulseButton },
-    { "path", "", },
-    { "send", "", },
+    { "clear", "", kPulseButton },
+    { "path",  "", },
+    { "send",  "", },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
     { "recv", "", },

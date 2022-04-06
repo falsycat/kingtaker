@@ -28,7 +28,7 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
     kPulseButton = 1 << 0,
     kFrameHeight = 1 << 1,
 
-    kClockIn  = 1 << 2,
+    kExecIn   = 1 << 2,
     kErrorOut = 1 << 3,
   };
   using SockFlags = uint8_t;
@@ -76,7 +76,7 @@ class LambdaNode final : public File, public iface::Node {
     for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
       const auto& m = Driver::kInSocks[i];
 
-      if (m.flags & LambdaNodeDriver::kClockIn) {
+      if (m.flags & LambdaNodeDriver::kExecIn) {
         in_.emplace_back(new ClockInSock(this, m.name, i, err));
       } else {
         in_.emplace_back(new CustomInSock(this, m.name, i));

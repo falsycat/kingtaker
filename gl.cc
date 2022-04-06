@@ -33,31 +33,31 @@ static void GetResolution(const Value& v, int32_t& w, int32_t& h) {
 }
 
 
-class TextureFactory final : public LambdaNodeDriver {
+class Texture final : public LambdaNodeDriver {
  public:
-  using Owner = LambdaNode<TextureFactory>;
+  using Owner = LambdaNode<Texture>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "GL/TextureFactory", "A node that creates renderbuffer object",
+      "GL/Texture", "A node that creates renderbuffer object",
       {typeid(iface::Node)});
 
   static std::string title() noexcept { return "GL Texture"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR", "", kPulseButton },
+    { "clear", "", kPulseButton },
 
     { "reso",    "" },
     { "format",  "" },
 
-    { "CLK", "", kPulseButton | kClockIn },
+    { "exec", "", kPulseButton | kExecIn },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "out",  "" },
-    { "errr", "", kErrorOut },
+    { "out",   "" },
+    { "error", "", kErrorOut },
   };
 
-  TextureFactory() = delete;
-  TextureFactory(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+  Texture() = delete;
+  Texture(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
       owner_(o), ctx_(ctx) {
   }
 
@@ -86,8 +86,8 @@ class TextureFactory final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out  = owner_->out(0);
-    auto errr = owner_->out(1);
+    auto out   = owner_->out(0);
+    auto error = owner_->out(1);
 
     if (w_ == 0 || h_ == 0) {
       throw Exception("resolution is unspecified");
@@ -133,32 +133,32 @@ class TextureFactory final : public LambdaNodeDriver {
 };
 
 
-class RenderbufferFactory final : public LambdaNodeDriver {
+class Renderbuffer final : public LambdaNodeDriver {
  public:
-  using Owner = LambdaNode<RenderbufferFactory>;
+  using Owner = LambdaNode<Renderbuffer>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "GL/RenderbufferFactory", "A node that creates renderbuffer object",
+      "GL/Renderbuffer", "A node that creates renderbuffer object",
       {typeid(iface::Node)});
 
   static std::string title() noexcept { return "GL Renderbuffer"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR", "", kPulseButton },
+    { "clear", "", kPulseButton },
 
     { "reso",    "" },
     { "format",  "" },
     { "samples", "" },
 
-    { "CLK", "", kPulseButton | kClockIn },
+    { "exec", "", kPulseButton | kExecIn },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "out",  "" },
-    { "errr", "", kErrorOut },
+    { "out",   "" },
+    { "error", "", kErrorOut },
   };
 
-  RenderbufferFactory() = delete;
-  RenderbufferFactory(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+  Renderbuffer() = delete;
+  Renderbuffer(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
       owner_(o), ctx_(ctx) {
   }
 
@@ -191,8 +191,8 @@ class RenderbufferFactory final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out  = owner_->out(0);
-    auto errr = owner_->out(1);
+    auto out   = owner_->out(0);
+    auto error = owner_->out(1);
 
     if (w_ == 0 || h_ == 0) {
       throw Exception("resolution is unspecified");
@@ -225,31 +225,31 @@ class RenderbufferFactory final : public LambdaNodeDriver {
 };
 
 
-class FramebufferFactory final : public LambdaNodeDriver {
+class Framebuffer final : public LambdaNodeDriver {
  public:
-  using Owner = LambdaNode<FramebufferFactory>;
+  using Owner = LambdaNode<Framebuffer>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "GL/FramebufferFactory", "A node that creates framebuffer object",
+      "GL/Framebuffer", "A node that creates framebuffer object",
       {typeid(iface::Node)});
 
   static std::string title() noexcept { return "GL Framebuffer"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR", "", kPulseButton },
+    { "clear", "", kPulseButton },
 
     { "reso",   "" },
     { "attach", "" },
 
-    { "CLK", "", kPulseButton | kClockIn },
+    { "exec", "", kPulseButton | kExecIn },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "out",  "" },
-    { "errr", "", kErrorOut },
+    { "out",   "" },
+    { "error", "", kErrorOut },
   };
 
-  FramebufferFactory() = delete;
-  FramebufferFactory(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+  Framebuffer() = delete;
+  Framebuffer(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
       owner_(o), ctx_(ctx) {
   }
 
@@ -319,18 +319,18 @@ class FramebufferFactory final : public LambdaNodeDriver {
       throw Exception("attach something firstly");
     }
 
-    auto out  = owner_->out(0);
-    auto errr = owner_->out(1);
+    auto out   = owner_->out(0);
+    auto error = owner_->out(1);
 
     // check status and emit result
-    auto task = [owner = owner_, path = owner_->path(), fb = fb_, ctx, out, errr]() {
+    auto task = [owner = owner_, path = owner_->path(), fb = fb_, ctx, out, error]() {
       glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
       const auto stat = glCheckFramebufferStatus(GL_FRAMEBUFFER);
       if (stat == GL_FRAMEBUFFER_COMPLETE) {
         out->Send(ctx, std::dynamic_pointer_cast<Value::Data>(fb));
       } else {
         notify::Error(path, owner, "broken framebuffer ("+std::to_string(stat)+")");
-        errr->Send(ctx, {});
+        error->Send(ctx, {});
       }
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -353,25 +353,25 @@ class FramebufferFactory final : public LambdaNodeDriver {
 };
 
 
-class VertexArrayFactory final : public LambdaNodeDriver {
+class VertexArray final : public LambdaNodeDriver {
  public:
-  using Owner = LambdaNode<VertexArrayFactory>;
+  using Owner = LambdaNode<VertexArray>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "GL/VertexArrayFactory", "A node that creates vertex array object",
+      "GL/VertexArray", "A node that creates vertex array object",
       {typeid(iface::Node)});
 
   static std::string title() noexcept { return "GL VAO"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLK", "", kPulseButton | kClockIn },
+    { "exec", "", kPulseButton | kExecIn },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
     { "out", "" },
   };
 
-  VertexArrayFactory() = delete;
-  VertexArrayFactory(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+  VertexArray() = delete;
+  VertexArray(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
       owner_(o), ctx_(ctx) {
   }
 
@@ -401,28 +401,28 @@ class VertexArrayFactory final : public LambdaNodeDriver {
 };
 
 
-class ProgramFactory final : public LambdaNodeDriver {
+class Program final : public LambdaNodeDriver {
  public:
-  using Owner = LambdaNode<ProgramFactory>;
+  using Owner = LambdaNode<Program>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "GL/ProgramFactory", "A node that links program object",
+      "GL/Program", "A node that links program object",
       {typeid(iface::Node)});
 
   static std::string title() noexcept { return "GL Program"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR",     "", kPulseButton },
+    { "clear",   "", kPulseButton },
     { "shaders", "" },
-    { "CLK",     "", kPulseButton | kClockIn },
+    { "exec",    "", kPulseButton | kExecIn },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "out",  "" },
-    { "errr", "", kErrorOut },
+    { "out",   "" },
+    { "error", "", kErrorOut },
   };
 
-  ProgramFactory() = delete;
-  ProgramFactory(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+  Program() = delete;
+  Program(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
       owner_(o), ctx_(ctx) {
   }
 
@@ -460,12 +460,12 @@ class ProgramFactory final : public LambdaNodeDriver {
 
     if (!prog_) throw Exception("attach shaders firstly");
 
-    auto out  = owner_->out(0);
-    auto errr = owner_->out(1);
+    auto out   = owner_->out(0);
+    auto error = owner_->out(1);
 
     // link program and check status
     auto task = [owner = owner_, path = owner_->path(),
-                 prog = prog_, ctx, out, errr]() {
+                 prog = prog_, ctx, out, error]() {
       const auto id = prog->id();
       glLinkProgram(id);
 
@@ -479,7 +479,7 @@ class ProgramFactory final : public LambdaNodeDriver {
         glGetProgramInfoLog(id, sizeof(buf), &len, buf);
 
         notify::Error(path, owner, buf);
-        errr->Send(ctx, {});
+        error->Send(ctx, {});
       }
       assert(glGetError() == GL_NO_ERROR);
     };
@@ -497,29 +497,29 @@ class ProgramFactory final : public LambdaNodeDriver {
 };
 
 
-class ShaderFactory final : public LambdaNodeDriver {
+class Shader final : public LambdaNodeDriver {
  public:
-  using Owner = LambdaNode<ShaderFactory>;
+  using Owner = LambdaNode<Shader>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "GL/ShaderFactory", "A node that compiles shader",
+      "GL/Shader", "A node that compiles shader",
       {typeid(iface::Node)});
 
   static std::string title() noexcept { return "GL Shader"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR",  "", kPulseButton },
-    { "type", "" },
-    { "src",  "" },
-    { "CLK",  "", kPulseButton | kClockIn },
+    { "clear", "", kPulseButton },
+    { "type",  ""  },
+    { "src",   ""  },
+    { "exec",  "", kPulseButton | kExecIn },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "out",  "" },
-    { "errr", "", kErrorOut },
+    { "out",   ""  },
+    { "error", "", kErrorOut },
   };
 
-  ShaderFactory() = delete;
-  ShaderFactory(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+  Shader() = delete;
+  Shader(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
       owner_(o), ctx_(ctx) {
   }
 
@@ -555,12 +555,12 @@ class ShaderFactory final : public LambdaNodeDriver {
       throw Exception("src is unspecified");
     }
 
-    auto out  = owner_->out(0);
-    auto errr = owner_->out(1);
+    auto out   = owner_->out(0);
+    auto error = owner_->out(1);
 
     auto shader = gl::Shader::Create(t_);
     auto task = [owner = owner_, path = owner_->path(),
-                 shader, srcs = srcs_, ctx, out, errr]() {
+                 shader, srcs = srcs_, ctx, out, error]() {
       const auto id = shader->id();
 
       std::vector<GLchar*> ptrs;
@@ -581,7 +581,7 @@ class ShaderFactory final : public LambdaNodeDriver {
         glGetShaderInfoLog(id, sizeof(buf), &len, buf);
 
         notify::Error(path, owner, buf);
-        errr->Send(ctx, {});
+        error->Send(ctx, {});
       }
     };
     Queue::gl().Push(std::move(task));
@@ -611,7 +611,7 @@ class DrawArrays final : public LambdaNodeDriver {
   static std::string title() noexcept { return "glDrawArrays"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR", "", kPulseButton },
+    { "clear", "", kPulseButton },
     { "prog",     "" },
     { "fb",       "" },
     { "vao",      "" },
@@ -620,11 +620,11 @@ class DrawArrays final : public LambdaNodeDriver {
     { "mode",     "" },
     { "first",    "" },
     { "count",    "" },
-    { "CLK", "", kPulseButton | kClockIn },
+    { "exec", "", kPulseButton | kExecIn },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "done", "" },
-    { "errr", "", kErrorOut },
+    { "done",  "" },
+    { "error", "", kErrorOut },
   };
 
   DrawArrays() = delete;
@@ -847,12 +847,12 @@ class Preview final : public File, public iface::DirItem {
     static std::string title() noexcept { return "GL Preview"; }
 
     static inline const std::vector<SockMeta> kInSocks = {
-      { "CLR", "", kPulseButton },
+      { "clear", "", kPulseButton },
 
       { "path", "" },
       { "tex",  "" },
 
-      { "CLK", "", kPulseButton | kClockIn },
+      { "exec", "", kPulseButton | kExecIn },
     };
     static inline const std::vector<SockMeta> kOutSocks = {};
 

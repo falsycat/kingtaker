@@ -79,9 +79,9 @@ class SetAndGet final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR", "", kPulseButton },
-    { "set", "", },
-    { "get", "", kPulseButton },
+    { "clear", "", kPulseButton },
+    { "set",   "", },
+    { "get",   "", kPulseButton },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
     { "out",  "", },
@@ -138,8 +138,8 @@ class Await final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR", "", kPulseButton },
-    { "in", "", },
+    { "clear", "", kPulseButton },
+    { "in",    "", },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
     { "out", "", },
@@ -191,8 +191,8 @@ class Once final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "CLR", "", kPulseButton },
-    { "in", "", },
+    { "clear", "", kPulseButton },
+    { "in",    "", },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
     { "out", "", },
