@@ -198,15 +198,6 @@ class LuaJIT final {
 
         lua_pushcfunction(L, L_GetValueAs<Value::String>);
         lua_setfield(L, -2, "string");
-
-        lua_pushcfunction(L, L_GetValueAs<Value::Vec2>);
-        lua_setfield(L, -2, "vec2");
-
-        lua_pushcfunction(L, L_GetValueAs<Value::Vec3>);
-        lua_setfield(L, -2, "vec3");
-
-        lua_pushcfunction(L, L_GetValueAs<Value::Vec4>);
-        lua_setfield(L, -2, "vec4");
       lua_setfield(L, -2, "__index");
 
       PushObjDeleter<Value>(L);
@@ -240,27 +231,6 @@ class LuaJIT final {
         lua_pushlstring(L, str.c_str(), str.size());
         return 1;
 
-      } else if constexpr (std::is_same<T, Value::Vec2>::value) {
-        const auto& v2 = v->vec2();
-        lua_pushnumber(L, v2[0]);
-        lua_pushnumber(L, v2[1]);
-        return 2;
-
-      } else if constexpr (std::is_same<T, Value::Vec3>::value) {
-        const auto& v3 = v->vec3();
-        lua_pushnumber(L, v3[0]);
-        lua_pushnumber(L, v3[1]);
-        lua_pushnumber(L, v3[2]);
-        return 3;
-
-      } else if constexpr (std::is_same<T, Value::Vec4>::value) {
-        const auto& v4 = v->vec4();
-        lua_pushnumber(L, v4[0]);
-        lua_pushnumber(L, v4[1]);
-        lua_pushnumber(L, v4[2]);
-        lua_pushnumber(L, v4[3]);
-        return 4;
-
       } else {
         []<bool f = false>() { static_assert(f, "unknown type"); }();
       }
@@ -285,24 +255,6 @@ class LuaJIT final {
 
     } else if constexpr (std::is_same<T, Value::String>::value) {
       PushValue(L, std::string(luaL_checkstring(L, 1)));
-
-    } else if constexpr (std::is_same<T, Value::Vec2>::value) {
-      PushValue(L, Value::Vec2(
-              luaL_checknumber(L, 1),
-              luaL_checknumber(L, 2)));
-
-    } else if constexpr (std::is_same<T, Value::Vec3>::value) {
-      PushValue(L, Value::Vec3(
-              luaL_checknumber(L, 1),
-              luaL_checknumber(L, 2),
-              luaL_checknumber(L, 3)));
-
-    } else if constexpr (std::is_same<T, Value::Vec4>::value) {
-      PushValue(L, Value::Vec4(
-              luaL_checknumber(L, 1),
-              luaL_checknumber(L, 2),
-              luaL_checknumber(L, 3),
-              luaL_checknumber(L, 4)));
 
     } else {
       []<bool f = false>() { static_assert(f, "unknown type"); }();
@@ -384,15 +336,6 @@ class LuaJIT final {
 
         lua_pushcfunction(L, L_PushValue<Value::String>);
         lua_setfield(L, -2, "string");
-
-        lua_pushcfunction(L, L_PushValue<Value::Vec2>);
-        lua_setfield(L, -2, "vec2");
-
-        lua_pushcfunction(L, L_PushValue<Value::Vec3>);
-        lua_setfield(L, -2, "vec3");
-
-        lua_pushcfunction(L, L_PushValue<Value::Vec4>);
-        lua_setfield(L, -2, "vec4");
       lua_setfield(L, -2, "value");
     lua_setfield(L, -2, "std");
 

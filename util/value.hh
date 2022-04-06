@@ -30,9 +30,6 @@ class Value final {
   using Scalar  = double;
   using Boolean = bool;
   using String  = std::string;
-  using Vec2    = linalg::double2;
-  using Vec3    = linalg::double3;
-  using Vec4    = linalg::double4;
   class Tensor;
   class Data;
   class Tuple;
@@ -42,9 +39,6 @@ class Value final {
       Integer,
       Scalar,
       Boolean,
-      Vec2,
-      Vec3,
-      Vec4,
       std::shared_ptr<String>,
       std::shared_ptr<Tensor>,
       std::shared_ptr<Data>,
@@ -55,10 +49,6 @@ class Value final {
   Value(Integer v) noexcept : v_(v) { }
   Value(Scalar v) noexcept : v_(v) { }
   Value(Boolean v) noexcept : v_(v) { }
-
-  Value(const Vec2& v) noexcept : v_(v) { }
-  Value(const Vec3& v) noexcept : v_(v) { }
-  Value(const Vec4& v) noexcept : v_(v) { }
 
   Value(const char* v) noexcept : Value(std::string(v)) { }
   Value(String&& v) noexcept : v_(std::make_shared<String>(std::move(v))) { }
@@ -103,9 +93,8 @@ class Value final {
     return std::get<Integer>(v_);
   }
   template <typename I>
-  I integer(I min = std::numeric_limits<I>::min(),
+  I integer(I min = std::numeric_limits<I>::lowest(),
             I max = std::numeric_limits<I>::max()) const {
-    static_assert(std::is_integral<I>::value, "I must be an integral");
     const auto v = integer();
     if (v < min) throw ValueException("integer underflow");
     if (v > max) throw ValueException("integer overflow");
@@ -122,6 +111,14 @@ class Value final {
   Scalar& scalar() {
     if (!isScalar()) throw ValueException("expect Scalar but got "s+StringifyType());
     return std::get<Scalar>(v_);
+  }
+  template <typename N>
+  N scalar(N min = std::numeric_limits<N>::lowest(),
+           N max = std::numeric_limits<N>::max()) const {
+    const auto v = scalar();
+    if (v < min) throw ValueException("scalar underflow");
+    if (v > max) throw ValueException("scalar overflow");
+    return static_cast<N>(v);
   }
 
   bool isBoolean() const noexcept {
@@ -158,42 +155,6 @@ class Value final {
       ptr = std::make_shared<String>(*ptr);
     }
     return ptr;
-  }
-
-  bool isVec2() const noexcept {
-    return std::holds_alternative<Vec2>(v_);
-  }
-  const Vec2& vec2() const {
-    if (!isVec2()) throw ValueException("expect Vec2 but got "s+StringifyType());
-    return std::get<Vec2>(v_);
-  }
-  Vec2& vec2() {
-    if (!isVec2()) throw ValueException("expect Vec2 but got "s+StringifyType());
-    return std::get<Vec2>(v_);
-  }
-
-  bool isVec3() const noexcept {
-    return std::holds_alternative<Vec3>(v_);
-  }
-  const Vec3& vec3() const {
-    if (!isVec3()) throw ValueException("expect Vec3 but got "s+StringifyType());
-    return std::get<Vec3>(v_);
-  }
-  Vec3& vec3() {
-    if (!isVec3()) throw ValueException("expect Vec3 but got "s+StringifyType());
-    return std::get<Vec3>(v_);
-  }
-
-  bool isVec4() const noexcept {
-    return std::holds_alternative<Vec4>(v_);
-  }
-  const Vec4& vec4() const {
-    if (!isVec4()) throw ValueException("expect Vec4 but got "s+StringifyType());
-    return std::get<Vec4>(v_);
-  }
-  Vec4& vec4() {
-    if (!isVec4()) throw ValueException("expect Vec4 but got "s+StringifyType());
-    return std::get<Vec4>(v_);
   }
 
   bool isTensor() const noexcept {
@@ -415,6 +376,31 @@ class Value::Tuple final : public std::vector<Value> {
     }
     return ret;
   }
+
+  linalg::float2 float2() const {
+    EnforceSize(2);
+    return {
+      operator[](0).scalar<float>(),
+      operator[](1).scalar<float>(),
+    };
+  }
+  linalg::float3 float3() const {
+    EnforceSize(3);
+    return {
+      operator[](0).scalar<float>(),
+      operator[](1).scalar<float>(),
+      operator[](2).scalar<float>(),
+    };
+  }
+  linalg::float4 float4() const {
+    EnforceSize(4);
+    return {
+      operator[](0).scalar<float>(),
+      operator[](1).scalar<float>(),
+      operator[](2).scalar<float>(),
+      operator[](3).scalar<float>(),
+    };
+  }
 };
 
 const std::shared_ptr<Value::Tuple>& Value::tupleUniqPtr() {
@@ -428,10 +414,7 @@ const std::shared_ptr<Value::Tuple>& Value::tupleUniqPtr() {
 }
 const Value::Tuple& Value::tuple(size_t n) const {
   const auto& tup = tuple();
-  if (tup.size() != n) {
-    throw ValueException("expect "+std::to_string(n)+"-Tuple "
-                         "but got "+std::to_string(tup.size()));
-  }
+  tup.EnforceSize(n);
   return tup;
 }
 

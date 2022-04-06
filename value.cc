@@ -80,7 +80,6 @@ class Imm final : public File,
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
   void UpdateTypeChanger(bool mini = false) noexcept;
   void UpdateEditor() noexcept;
-  template <int D> bool UpdateVec(linalg::vec<double, D>& vec) noexcept;
 
   Time lastmod() const noexcept override {
     return lastmod_;
@@ -141,9 +140,6 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
       v.isInteger()? "Int":
       v.isScalar()?  "Sca":
       v.isBoolean()? "Boo":
-      v.isVec2()?    "Ve2":
-      v.isVec3()?    "Ve3":
-      v.isVec4()?    "Ve4":
       v.isString()?  "Str": "XXX";
   mini? ImGui::SmallButton(type): ImGui::Button(type);
 
@@ -161,18 +157,6 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
       v = Value::Boolean {false};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec2", nullptr, v.isVec2())) {
-      v = Value::Vec2 {0., 0.};
-      OnUpdate();
-    }
-    if (ImGui::MenuItem("vec3", nullptr, v.isVec3())) {
-      v = Value::Vec3 {0., 0., 0.};
-      OnUpdate();
-    }
-    if (ImGui::MenuItem("vec4", nullptr, v.isVec4())) {
-      v = Value::Vec4 {0., 0., 0., 0.};
-      OnUpdate();
-    }
     if (ImGui::MenuItem("string", nullptr, v.isString())) {
       v = ""s;
       OnUpdate();
@@ -184,7 +168,6 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
 void Imm::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
-  const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
 
   auto& v = *value_;
 
@@ -208,27 +191,6 @@ void Imm::UpdateEditor() noexcept {
       OnUpdate();
     }
 
-  } else if (v.isVec2()) {
-    const auto h = (2*fh + sp)/em;
-    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.vec2())) {
-      OnUpdate();
-    }
-
-  } else if (v.isVec3()) {
-    const auto h = (3*fh + 2*sp)/em;
-    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.vec3())) {
-      OnUpdate();
-    }
-
-  } else if (v.isVec4()) {
-    const auto h = (4*fh + 3*sp)/em;
-    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.vec4())) {
-      OnUpdate();
-    }
-
   } else if (v.isString()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {24, 24}, em);
     if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), size_*em)) {
@@ -238,19 +200,6 @@ void Imm::UpdateEditor() noexcept {
   } else {
     ImGui::TextUnformatted("UNKNOWN TYPE X(");
   }
-}
-template <int D>
-bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
-  bool mod = false;
-  for (int i = 0; i < D; ++i) {
-    ImGui::PushID(&vec[i]);
-    ImGui::SetNextItemWidth(size_.x*ImGui::GetFontSize());
-    if (ImGui::DragScalar("##value", ImGuiDataType_Double, &vec[i])) {
-      mod = true;
-    }
-    ImGui::PopID();
-  }
-  return mod;
 }
 
 

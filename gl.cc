@@ -24,7 +24,7 @@ namespace kingtaker {
 static void GetResolution(const Value& v, int32_t& w, int32_t& h) {
   constexpr int32_t kMaxReso = 4096;
 
-  const auto size = v.vec2();
+  const auto size = v.tuple().float2();
   w = static_cast<int32_t>(size.x);
   h = static_cast<int32_t>(size.y);
   if (w <= 0 || h <= 0 || w > kMaxReso || h > kMaxReso) {
@@ -650,7 +650,7 @@ class DrawArrays final : public LambdaNodeDriver {
       Uniform(std::move(v));
       return;
     case 5:
-      viewport_ = v.vec4();
+      viewport_ = v.tuple().float4();
       return;
     case 6:
       mode_ = gl::ParseDrawMode(v.string()).gl;
@@ -759,7 +759,7 @@ class DrawArrays final : public LambdaNodeDriver {
 
   std::unordered_map<IndexOrName, Value> uniforms_;
 
-  Value::Vec4 viewport_ = {0, 0, 0, 0};
+  linalg::float4 viewport_ = {0, 0, 0, 0};
   GLenum  mode_ = 0;
   GLint   first_ = 0;
   GLsizei count_ = 0;

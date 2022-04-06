@@ -22,24 +22,6 @@ void Value::Serialize(File::Packer& pk) const {
     pk.pack(string());
     return;
   }
-  if (isVec2()) {
-    auto& v = vec2();
-    pk.pack_array(2);
-    pk.pack(v.x); pk.pack(v.y);
-    return;
-  }
-  if (isVec3()) {
-    auto& v = vec3();
-    pk.pack_array(3);
-    pk.pack(v.x); pk.pack(v.y); pk.pack(v.z);
-    return;
-  }
-  if (isVec4()) {
-    auto& v = vec4();
-    pk.pack_array(4);
-    pk.pack(v.x); pk.pack(v.y); pk.pack(v.z); pk.pack(v.w);
-    return;
-  }
   if (isTensor()) {
     auto& v = tensor();
     pk.pack_map(2);
@@ -65,21 +47,6 @@ Value Value::Deserialize(const msgpack::object& obj) {
     case msgpack::type::STR:
       return Value(
           std::string(obj.via.str.ptr, obj.via.str.size));
-    case msgpack::type::ARRAY:
-      switch (obj.via.array.size) {
-      case 2: {
-        const auto v = obj.as<std::array<double, 2>>();
-        return Vec2(v[0], v[1]);
-      }
-      case 3: {
-        const auto v = obj.as<std::array<double, 3>>();
-        return Vec3(v[0], v[1], v[2]);
-      }
-      case 4: {
-        const auto v = obj.as<std::array<double, 4>>();
-        return Vec4(v[0], v[1], v[2], v[3]);
-      } }
-      break;
     case msgpack::type::MAP: {
       const auto  type  = msgpack::find(obj, "type"s).as<std::string>();
       const auto& param = msgpack::find(obj, "param"s);
@@ -100,9 +67,6 @@ const char* Value::StringifyType() const noexcept {
   if (isScalar())  return "scalar";
   if (isBoolean()) return "boolean";
   if (isString())  return "string";
-  if (isVec2())    return "vec2";
-  if (isVec3())    return "vec3";
-  if (isVec4())    return "vec4";
   if (isTensor())  return "tensor";
   if (isData())    return "data";
   if (isTuple())   return "tuple";
@@ -124,18 +88,6 @@ std::string Value::Stringify(size_t max) const noexcept {
   }
   if (isString()) {
     return string().substr(0, max);
-  }
-  if (isVec2()) {
-    auto& v = vec2();
-    return "("+std::to_string(v[0])+", "+std::to_string(v[1])+")";
-  }
-  if (isVec3()) {
-    auto& v = vec3();
-    return "("+std::to_string(v[0])+", "+std::to_string(v[1])+", "+std::to_string(v[2])+")";
-  }
-  if (isVec4()) {
-    auto& v = vec4();
-    return "("+std::to_string(v[0])+", "+std::to_string(v[1])+", "+std::to_string(v[2])+", "+std::to_string(v[3])+")";
   }
   if (isTensor()) {
     return tensor().StringifyMeta();
@@ -164,15 +116,6 @@ bool operator==(const Value& a, const Value& b) noexcept {
   }
   if (b.isString() && b.isString()) {
     return a.string() == b.string();
-  }
-  if (b.isVec2() && b.isVec2()) {
-    return a.vec2() == b.vec2();
-  }
-  if (b.isVec3() && b.isVec3()) {
-    return a.vec3() == b.vec3();
-  }
-  if (b.isVec4() && b.isVec4()) {
-    return a.vec4() == b.vec4();
   }
   return false;
 }

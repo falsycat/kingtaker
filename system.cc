@@ -569,7 +569,7 @@ class MouseInput : public File, public iface::Node {
       if (!data) return;
 
       auto p = wp.lock();
-      if (p) p->Send(ctx, data->pos);
+      if (p) p->Send(ctx, Value::Tuple { data->pos.x, data->pos.y });
 
       auto l = wl.lock();
       if (l) l->Send(ctx, data->l);
@@ -607,7 +607,7 @@ class MouseInput : public File, public iface::Node {
 
  private:
   struct UniversalData {
-    Value::Vec2 pos;
+    linalg::float2 pos;
     std::string l, m, r;
     bool gui_active;
   };
