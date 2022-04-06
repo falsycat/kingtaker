@@ -1111,6 +1111,8 @@ class Call final : public LambdaNodeDriver {
   }
   void Send(Value&& v) {
     auto f = &*RefStack().Resolve(owner_->path()).Resolve(path_);
+    if (f == owner_) throw Exception("self reference");
+
     auto n = File::iface<iface::Node>(f);
     if (!n) throw Exception("target doesn't have Node interface");
 
