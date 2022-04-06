@@ -23,6 +23,7 @@
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -1063,312 +1064,121 @@ void Network::History::RemoveNodes(NodeHolderRefList&& h) noexcept {
 }
 
 
-class Ref : public File, public iface::Node {
+class Call final : public LambdaNodeDriver {
  public:
-  static inline TypeInfo kType = TypeInfo::New<Ref>(
-      "Node/Ref", "allows other nodes to be treated as lambda",
+  using Owner = LambdaNode<Call>;
+
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
+      "Node/Call", "redirect input to a specific node on filesystem with sub context",
       {typeid(iface::Node)});
 
-  using Life = std::weak_ptr<std::monostate>;
+  static inline const std::vector<SockMeta> kInSocks = {
+    { "CLR",  "", kPulseButton },
+    { "path", "", },
+    { "send", "", },
+  };
+  static inline const std::vector<SockMeta> kOutSocks = {
+    { "recv", "", },
+  };
 
-  Ref(const std::shared_ptr<Env>& env,
-          std::string_view path = "",
-          const std::vector<std::string>& in  = {},
-          const std::vector<std::string>& out = {}) noexcept :
-      File(&kType, env), Node(kMenu),
-      path_(path),
-      life_(std::make_shared<std::monostate>()),
-      ctx_(std::make_shared<Context>()) {
-    in_.reserve(in.size());
-    out_.reserve(out.size());
-
-    const auto p = ParsePath(path);
-    for (auto& v : in) in_.push_back(std::make_shared<Input>(this, v));
-    for (auto& v : out) out_.push_back(std::make_shared<OutSock>(this, v));
+  Call() = delete;
+  Call(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+      owner_(o), octx_(ctx) {
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    auto str = msgpack::find(obj, "path"s).as<std::string>();
-    auto in  = msgpack::find(obj, "in"s).as<std::vector<std::string>>();
-    auto out = msgpack::find(obj, "out"s).as<std::vector<std::string>>();
-    return std::make_unique<Ref>(env, str, std::move(in), std::move(out));
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack_map(3);
-
-    pk.pack("in"s);
-    pk.pack_array(static_cast<uint32_t>(in_.size()));
-    for (auto& e : in_) pk.pack(e->name());
-
-    pk.pack("out"s);
-    pk.pack_array(static_cast<uint32_t>(out_.size()));
-    for (auto& e : out_) pk.pack(e->name());
-
-    pk.pack("path"s);
-    pk.pack(path_);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<Ref>(env, path_);
+  std::string title() const noexcept {
+    return ictx_? "CALL*": "CALL";
   }
 
-  void Update(RefStack& ref, Event&) noexcept override {
-    basepath_ = ref.GetFullPath();
-    Watch(&*ref.Resolve(path_));
+  void Handle(size_t idx, Value&& v) {
+    switch (idx) {
+    case 0:
+      Clear();
+      return;
+    case 1:
+      path_ = File::ParsePath(v.string());
+      return;
+    case 2:
+      Send(std::move(v));
+      return;
+    }
+    assert(false);
   }
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
-  void UpdateMenu(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
-  void UpdateEntity(RefStack&, File* f) noexcept;
+  void Clear() noexcept {
+    if (ictx_) ictx_->Detach();
+    ictx_ = nullptr;
+    path_ = {};
+  }
+  void Send(Value&& v) {
+    auto f = &*RefStack().Resolve(owner_->path()).Resolve(path_);
+    auto n = File::iface<iface::Node>(f);
+    if (!n) throw Exception("target doesn't have Node interface");
 
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
+    const auto& tup   = v.tuple(2);
+    const auto& name  = tup[0].string();
+    const auto& value = tup[1];
+
+    auto sock = n->FindIn(name);
+    if (!sock) throw Exception("unknown input: "+name);
+
+    if (ictx_ && ictx_->target() != n) {
+      ictx_->Detach();
+      ictx_ = nullptr;
+    }
+    if (!ictx_) {
+      ictx_ = std::make_unique<InnerContext>(n, owner_->out(0), octx_.lock());
+    }
+
+    auto task = [sock, ictx = ictx_, v = value]() mutable {
+      sock->Receive(ictx, std::move(v));
+    };
+    Queue::sub().Push(std::move(task));
   }
 
  private:
-  // permanentized params
-  std::string path_;
+  Owner* owner_;
 
-  // volatile params
-  std::shared_ptr<std::monostate> life_;
-  std::shared_ptr<Context>        ctx_;
-  File::Path                      basepath_;
+  std::weak_ptr<Context> octx_;
 
-  bool        synced_ = false;
-  std::string path_editing_;
-  Time        lastmod_;
+  File::Path path_;
+
+  class InnerContext;
+  std::shared_ptr<InnerContext> ictx_;
 
 
-  // detects changes of the entity
-  void Watch(File* f) noexcept {
-    if (f == this) return;
-    if (!synced_) SyncSocks(f);
-
-    auto node = File::iface<Node>(f);
-    if (node) return;
-
-    auto factory = File::iface<iface::Factory<Value>>(f);
-    if (factory) {
-      const auto mod = f->lastmod();
-      if (lastmod_ < mod) {
-        out_[0]->Send(ctx_, factory->Create());
-        lastmod_ = mod;
-      }
-      return;
-    }
-  }
-
-  // synchronize IO socket list
-  // T must be a InSock or OutSock
-  template <typename T>
-  static void Sync(std::vector<std::shared_ptr<T>>& dst,
-                   const std::span<const std::shared_ptr<T>>& src,
-                   std::function<std::shared_ptr<T>(std::string_view)>&& f) noexcept {
-    std::unordered_map<std::string, std::shared_ptr<T>> m;
-    for (auto& e : dst) m[e->name()] = e;
-
-    dst.clear();
-    for (auto& e : src) {
-      auto itr = m.find(e->name());
-      if (itr != m.end()) {
-        dst.push_back(itr->second);
-      } else {
-        dst.push_back(f(e->name()));
-      }
-    }
-  }
-  void SyncSocks(File* f) noexcept {
-    synced_ = true;
-
-    // self reference is illegal
-    if (f == this) {
-      in_.clear();
-      out_.clear();
-      return;
-    }
-
-    auto node = File::iface<Node>(f);
-    if (node) {
-      Sync<InSock>(in_, node->in(), [this](auto str) {
-             return std::make_shared<Input>(this, str);
-           });
-      Sync<OutSock>(out_, node->out(), [this](auto str) {
-             return std::make_shared<OutSock>(this, str);
-           });
-      return;
-    }
-
-    auto factory = File::iface<iface::Factory<Value>>(f);
-    if (factory) {
-      in_.clear();
-      const auto itr = std::find_if(
-          out_.begin(), out_.end(), [](auto& e) { return e->name() == "out"; });
-      if (itr != out_.end()) {
-        std::swap(out_[0], *itr);
-        out_.resize(1);
-      } else {
-        out_ = { std::make_shared<OutSock>(this, "out") };
-      }
-      return;
-    }
-  }
-  void SyncSocks(const std::string& base) noexcept {
-    try {
-      SyncSocks(&*RefStack().Resolve(base).Resolve(path_));
-    } catch (NotFoundException&) {
-      in_.clear();
-      out_.clear();
-    }
-  }
-
-
-  // A watcher for a context of lambda execution
-  class LambdaContext final : public Context {
+  class InnerContext final : public Context {
    public:
-    LambdaContext(Ref* o, Node* node, const std::shared_ptr<Context>& outctx) :
-        owner_(o), life_(o->life_), node_(node), outctx_(outctx) {
+    InnerContext(Node* target,
+                 const std::weak_ptr<OutSock>& out,
+                 const std::weak_ptr<Context>& octx) noexcept :
+        target_(target), out_(out), octx_(octx) {
     }
-    void ObserveSend(const OutSock& sock, const Value& v) noexcept override {
-      if (life_.expired()) return;
 
-      auto outctx = outctx_.lock();
-      if (!outctx) return;
+    void Detach() noexcept {
+      target_ = nullptr;
+      out_.reset();
+      octx_.reset();
+    }
 
-      if (&sock.owner() == node_) {
-        auto dst = owner_->FindOut(sock.name());
-        if (dst) dst->Send(outctx, Value(v));
+    Node* target() const noexcept { return target_; }
+
+    void ObserveSend(const OutSock& sock, const Value& v) noexcept {
+      if (&sock.owner() == target_) {
+        auto out  = out_.lock();
+        auto octx = octx_.lock();
+        if (out && octx) {
+          out->Send(octx, Value::Tuple { sock.name(), Value(v) });
+        }
       }
     }
 
    private:
-    Ref* owner_;
+    Node* target_;
 
-    std::weak_ptr<std::monostate> life_;
+    std::weak_ptr<OutSock> out_;
 
-    Node* node_;
-
-    std::weak_ptr<Context> outctx_;
-  };
-
-
-  // An input pin which redirects to the entity
-  class Input : public InSock {
-   public:
-    Input(Ref* o, std::string_view n) :
-        InSock(o, n), owner_(o), life_(o->life_) {
-    }
-    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-      if (life_.expired()) return;
-
-      try {
-        auto node = File::iface<Node>(
-            *RefStack().Resolve(owner_->basepath_).Resolve(owner_->path_));
-        if (!node) throw Exception("missing entity");
-
-        auto dst = node->FindIn(name());
-        if (!dst) throw Exception("socket mismatch");
-
-        auto data = ctx->GetOrNew<Data>(owner_, owner_, node, ctx);
-        dst->Receive(data->ctx(), std::move(v));
-
-      } catch (Exception& e) {
-        notify::Error(owner_->basepath_, owner_, e.msg());
-      }
-    }
-
-   private:
-    Ref* owner_;
-
-    std::weak_ptr<std::monostate> life_;
-
-
-    // one Data per one lambda execution
-    class Data final : public Context::Data {
-     public:
-      Data() = delete;
-      Data(Ref* o, Node* node, const std::shared_ptr<Context>& ctx) noexcept :
-          ctx_(std::make_unique<LambdaContext>(o, node, ctx)) {
-      }
-
-      const std::shared_ptr<LambdaContext>& ctx() noexcept { return ctx_; }
-
-     private:
-      std::shared_ptr<LambdaContext> ctx_;
-    };
+    std::weak_ptr<Context> octx_;
   };
 };
-void Ref::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
-  ImGui::TextUnformatted("REF");
-
-  const auto line = ImGui::GetCursorPosY();
-  ImGui::SetCursorPosY(line + ImGui::GetFrameHeightWithSpacing());
-
-  auto f = &*ref.Resolve(path_);
-  ImGui::BeginGroup();
-  if (f == this || ref.size() > 256) {
-    ImGui::TextDisabled("recursive reference");
-    in_.clear();
-    out_.clear();
-  } else {
-    ref.Push({"@", f});
-    ImGui::PushID(f);
-    UpdateEntity(ref, f);
-    ImGui::PopID();
-    ref.Pop();
-  }
-  ImGui::EndGroup();
-
-  ImGui::SetCursorPosY(line);
-  ImGui::Button(("-> "s+(path_.size()? path_: "(empty)"s)).c_str(),
-                {ImGui::GetItemRectSize().x, 0});
-  if (path_.size() && ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("%s", path_.c_str());
-  }
-
-  gui::NodeCanvasResetZoom();
-  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-    UpdateMenu(ref, ctx_);
-    ImGui::EndPopup();
-  }
-  gui::NodeCanvasSetZoom();
-}
-void Ref::UpdateMenu(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
-  if (ImGui::MenuItem("Re-sync")) {
-    Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
-  }
-  ImGui::Separator();
-  if (ImGui::BeginMenu("path")) {
-    if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
-      Queue::main().Push([this, p = ref.Stringify()]() { SyncSocks(p); });
-    }
-    ImGui::EndMenu();
-  }
-}
-void Ref::UpdateEntity(RefStack& ref, File* f) noexcept {
-  if (f == this) return;
-  const auto em = ImGui::GetFontSize();
-
-  auto node = File::iface<Node>(f);
-  if (node) {
-    node->Update(ref, ctx_);
-    return;
-  }
-
-  auto factory = File::iface<iface::Factory<Value>>(f);
-  if (factory) {
-    static const char* kTitle = "Value Factory";
-
-    const auto w = ImGui::CalcTextSize(kTitle).x;
-    ImGui::TextUnformatted(kTitle);
-
-    const auto wt = ImGui::CalcTextSize("out").x + em;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+w-wt);
-    ImGui::TextUnformatted("out");
-    ImGui::SameLine();
-    if (ImNodes::BeginOutputSlot("out", 1)) {
-      gui::NodeSocket();
-      ImNodes::EndSlot();
-    }
-    return;
-  }
-}
 
 } }  // namespace kingtaker

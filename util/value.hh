@@ -241,6 +241,7 @@ class Value final {
     return *tupleUniqPtr();
   }
   inline const std::shared_ptr<Tuple>& tupleUniqPtr();
+  inline const Tuple& tuple(size_t n) const;
 
  private:
   Variant v_;
@@ -424,6 +425,14 @@ const std::shared_ptr<Value::Tuple>& Value::tupleUniqPtr() {
     ptr = std::make_shared<Tuple>(*ptr);
   }
   return ptr;
+}
+const Value::Tuple& Value::tuple(size_t n) const {
+  const auto& tup = tuple();
+  if (tup.size() != n) {
+    throw ValueException("expect "+std::to_string(n)+"-Tuple "
+                         "but got "+std::to_string(tup.size()));
+  }
+  return tup;
 }
 
 }  // namespace kingtaker

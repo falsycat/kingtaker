@@ -15,9 +15,11 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
  public:
   using TypeInfo = File::TypeInfo;
   using RefStack = File::RefStack;
-  using Packer   = File::Packer;
+  using Path     = File::Path;
   using Node     = iface::Node;
-  using Context  = iface::Node::Context;
+  using InSock   = Node::InSock;
+  using OutSock  = Node::OutSock;
+  using Context  = Node::Context;
 
   // static constexpr char* kTitle = "";
 
