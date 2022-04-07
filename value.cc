@@ -325,6 +325,7 @@ class TuplePop final : public LambdaNodeDriver {
 
   void Handle(size_t idx, Value&& v) {
     assert(idx == 0);
+    (void) idx;
 
     auto  ctx = ctx_.lock();
     auto& tup = v.tupleUniq();
