@@ -678,13 +678,29 @@ class DrawArrays final : public LambdaNodeDriver {
     first_ = 0;
     count_ = 0;
   }
-  void Exec() noexcept {
+  void Exec() {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
+    if (!prog_) {
+      throw Exception("prog is not specified");
+    }
+    if (!fb_) {
+      throw Exception("framebuffer is not specified");
+    }
+    if (!vao_) {
+      throw Exception("vao is not specified");
+    }
+    if (mode_ == 0) {
+      throw Exception("mode is not specified");
+    }
     // TODO validate vertex count
 
     const auto& done = owner_->out(0);
+    if (count_ == 0) {
+      done->Send(ctx, {});
+      return;
+    }
 
     auto task = [owner = owner_, path = owner_->path(), ctx, done,
                  prog     = prog_,
