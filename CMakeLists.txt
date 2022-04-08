@@ -69,6 +69,8 @@ target_sources(kingtaker
     util/gui.cc
     util/keymap.hh
     util/keymap.cc
+    util/luajit.hh
+    util/luajit.cc
     util/node.hh
     util/notify.hh
     util/notify.cc
