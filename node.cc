@@ -1105,7 +1105,7 @@ class Call final : public LambdaNodeDriver {
     assert(false);
   }
   void Clear() noexcept {
-    if (ictx_) ictx_->Detach();
+    if (ictx_) ictx_->Attach(nullptr);
     ictx_ = nullptr;
     path_ = {};
   }
@@ -1124,11 +1124,11 @@ class Call final : public LambdaNodeDriver {
     if (!sock) throw Exception("unknown input: "+name);
 
     if (ictx_ && ictx_->target() != n) {
-      ictx_->Detach();
+      ictx_->Attach(nullptr);
       ictx_ = nullptr;
     }
     if (!ictx_) {
-      ictx_ = std::make_unique<InnerContext>(n, owner_->out(0), octx_.lock());
+      ictx_ = std::make_unique<RedirectContext>(owner_->out(0), octx_.lock(), n);
     }
 
     auto task = [sock, ictx = ictx_, v = value]() mutable {
@@ -1144,43 +1144,7 @@ class Call final : public LambdaNodeDriver {
 
   File::Path path_;
 
-  class InnerContext;
-  std::shared_ptr<InnerContext> ictx_;
-
-
-  class InnerContext final : public Context {
-   public:
-    InnerContext(Node* target,
-                 const std::weak_ptr<OutSock>& out,
-                 const std::weak_ptr<Context>& octx) noexcept :
-        target_(target), out_(out), octx_(octx) {
-    }
-
-    void Detach() noexcept {
-      target_ = nullptr;
-      out_.reset();
-      octx_.reset();
-    }
-
-    Node* target() const noexcept { return target_; }
-
-    void ObserveSend(const OutSock& sock, const Value& v) noexcept {
-      if (&sock.owner() == target_) {
-        auto out  = out_.lock();
-        auto octx = octx_.lock();
-        if (out && octx) {
-          out->Send(octx, Value::Tuple { sock.name(), Value(v) });
-        }
-      }
-    }
-
-   private:
-    Node* target_;
-
-    std::weak_ptr<OutSock> out_;
-
-    std::weak_ptr<Context> octx_;
-  };
+  std::shared_ptr<Node::RedirectContext> ictx_;
 };
 
 } }  // namespace kingtaker

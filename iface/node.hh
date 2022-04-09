@@ -25,8 +25,10 @@ class Node {
 
   class Sock;
   class InSock;
-  class LambdaInSock;
   class OutSock;
+
+  class RedirectContext;
+  class LambdaInSock;
 
   using InSockList  = std::vector<std::shared_ptr<InSock>>;
   using OutSockList = std::vector<std::shared_ptr<OutSock>>;
@@ -155,21 +157,6 @@ class Node::InSock : public Sock {
  private:
   std::vector<std::weak_ptr<OutSock>> src_;
 };
-class Node::LambdaInSock final : public InSock {
- public:
-  using Receiver = std::function<void(const std::shared_ptr<Context>&, Value&&)>;
-
-  LambdaInSock(Node* o, std::string_view n, Receiver&& f) noexcept :
-      InSock(o, n), lambda_(std::move(f)) {
-  }
-
-  void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-    lambda_(ctx, std::move(v));
-  }
- private:
-  Receiver lambda_;
-};
-
 
 // A Node socket that emits value to input sockets
 // all operations must be done from main thread
@@ -203,6 +190,54 @@ class Node::OutSock : public Sock {
 
  private:
   std::vector<std::weak_ptr<InSock>> dst_;
+};
+
+
+// An implementation of Context that redirects an output of target node to a
+// specific socket.
+class Node::RedirectContext final : public Node::Context {
+ public:
+  RedirectContext(const std::weak_ptr<OutSock>& dst,
+                  const std::weak_ptr<Context>& ctx,
+                  Node*                         target = nullptr) noexcept :
+      dst_(dst), ctx_(ctx), target_(target) {
+  }
+
+  void Attach(Node* target) noexcept {
+    target_ = target;
+  }
+
+  void ObserveSend(const OutSock& src, const Value& v) noexcept override {
+    if (&src.owner() != target_) return;
+
+    auto dst = dst_.lock();
+    auto ctx = ctx_.lock();
+    if (dst && ctx) {
+      dst->Send(ctx, Value::Tuple { src.name(), Value(v) });
+    }
+  }
+
+ private:
+  std::weak_ptr<OutSock> dst_;
+  std::weak_ptr<Context> ctx_;
+
+  Node* target_;
+};
+
+// An implemetation of InSock that executes lambda when received something
+class Node::LambdaInSock final : public InSock {
+ public:
+  using Receiver = std::function<void(const std::shared_ptr<Context>&, Value&&)>;
+
+  LambdaInSock(Node* o, std::string_view n, Receiver&& f) noexcept :
+      InSock(o, n), lambda_(std::move(f)) {
+  }
+
+  void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
+    lambda_(ctx, std::move(v));
+  }
+ private:
+  Receiver lambda_;
 };
 
 
