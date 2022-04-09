@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <fstream>
+#include <memory>
 #include <optional>
 
 #include <imgui.h>
@@ -18,6 +19,7 @@
 
 #include "util/format.hh"
 #include "util/gui.hh"
+#include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -49,7 +51,7 @@ class Imm final : public File,
       if (!val || !out) return;
       out->Send(ctx, Value(*val));
     };
-    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(receiver)));
+    in_.emplace_back(new NodeLambdaInSock(this, "CLK", std::move(receiver)));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -78,7 +80,6 @@ class Imm final : public File,
   void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
   void UpdateTypeChanger(bool mini = false) noexcept;
   void UpdateEditor() noexcept;
-  template <int D> bool UpdateVec(linalg::vec<double, D>& vec) noexcept;
 
   Time lastmod() const noexcept override {
     return lastmod_;
@@ -139,9 +140,6 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
       v.isInteger()? "Int":
       v.isScalar()?  "Sca":
       v.isBoolean()? "Boo":
-      v.isVec2()?    "Ve2":
-      v.isVec3()?    "Ve3":
-      v.isVec4()?    "Ve4":
       v.isString()?  "Str": "XXX";
   mini? ImGui::SmallButton(type): ImGui::Button(type);
 
@@ -159,18 +157,6 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
       v = Value::Boolean {false};
       OnUpdate();
     }
-    if (ImGui::MenuItem("vec2", nullptr, v.isVec2())) {
-      v = Value::Vec2 {0., 0.};
-      OnUpdate();
-    }
-    if (ImGui::MenuItem("vec3", nullptr, v.isVec3())) {
-      v = Value::Vec3 {0., 0., 0.};
-      OnUpdate();
-    }
-    if (ImGui::MenuItem("vec4", nullptr, v.isVec4())) {
-      v = Value::Vec4 {0., 0., 0., 0.};
-      OnUpdate();
-    }
     if (ImGui::MenuItem("string", nullptr, v.isString())) {
       v = ""s;
       OnUpdate();
@@ -182,7 +168,6 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
 void Imm::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
-  const auto sp = ImGui::GetStyle().ItemSpacing.y - .4f;
 
   auto& v = *value_;
 
@@ -206,27 +191,6 @@ void Imm::UpdateEditor() noexcept {
       OnUpdate();
     }
 
-  } else if (v.isVec2()) {
-    const auto h = (2*fh + sp)/em;
-    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.vec2())) {
-      OnUpdate();
-    }
-
-  } else if (v.isVec3()) {
-    const auto h = (3*fh + 2*sp)/em;
-    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.vec3())) {
-      OnUpdate();
-    }
-
-  } else if (v.isVec4()) {
-    const auto h = (4*fh + 3*sp)/em;
-    gui::ResizeGroup _("##resizer", &size_, {4, h}, {12, h}, em);
-    if (UpdateVec(v.vec4())) {
-      OnUpdate();
-    }
-
   } else if (v.isString()) {
     gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {24, 24}, em);
     if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), size_*em)) {
@@ -237,155 +201,146 @@ void Imm::UpdateEditor() noexcept {
     ImGui::TextUnformatted("UNKNOWN TYPE X(");
   }
 }
-template <int D>
-bool Imm::UpdateVec(linalg::vec<double, D>& vec) noexcept {
-  bool mod = false;
-  for (int i = 0; i < D; ++i) {
-    ImGui::PushID(&vec[i]);
-    ImGui::SetNextItemWidth(size_.x*ImGui::GetFontSize());
-    if (ImGui::DragScalar("##value", ImGuiDataType_Double, &vec[i])) {
-      mod = true;
-    }
-    ImGui::PopID();
-  }
-  return mod;
-}
 
 
-class TupleN final : public File, public iface::Node {
+class Tuple1 final : public LambdaNodeDriver {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<TupleN>(
-      "Value/TupleN", "takes N inputs and emits one tuple",
+  using Owner = LambdaNode<Tuple1>;
+
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
+      "Value/Tuple1", "creates 1 element tuple",
       {typeid(iface::Node)});
 
-  static constexpr size_t kMaxInput = 16;
+  static inline const std::vector<SockMeta> kInSocks = {
+    { "item", "", },
+  };
+  static inline const std::vector<SockMeta> kOutSocks = {
+    { "tuple", "", },
+  };
 
-  TupleN(const std::shared_ptr<Env>& env, size_t n = 0) noexcept :
-      File(&type_, env), Node(kNone) {
-    data_ = std::make_shared<UniversalData>();
-
-    out_.emplace_back(new OutSock(this, "out"));
-
-    auto task_clk = [self = this, data = data_, out = out_[0]](const auto& ctx, auto&&) {
-      const auto& v = ctx->template GetOrNew<ContextData>(self)->values;
-      out->Send(ctx, Value::Tuple(v.data(), v.data()+data->n));
-    };
-    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task_clk)));
-
-    auto task_clr = [self = this](const auto& ctx, auto&&) {
-      ctx->template GetOrNew<ContextData>(self)->values.fill({});
-    };
-    in_.emplace_back(new LambdaInSock(this, "CLR", std::move(task_clr)));
-
-    Rebuild(n);
+  Tuple1(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+      owner_(o), ctx_(ctx) {
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    try {
-      const auto n = msgpack::as_if<size_t>(obj, 0);
-      if (n > kMaxInput) {
-        throw DeserializeException("input count overflow");
-      }
-      return std::make_unique<TupleN>(env, n);
-    } catch (msgpack::type_error&) {
-      throw DeserializeException("broken Value/TupleN");
+  std::string title() const noexcept {
+    return "TUPLE1";
+  }
+
+  void Handle(size_t idx, Value&& v) {
+    switch (idx) {
+    case 0:
+      owner_->out(0)->Send(ctx_.lock(), Value::Tuple { std::move(v) });
+      return;
     }
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack(data_->n);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<TupleN>(env, data_->n);
-  }
-
-  void Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept override;
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
+    assert(false);
   }
 
  private:
-  struct UniversalData {
-   public:
-    size_t n = 0;
-  };
-  std::shared_ptr<UniversalData> data_;
+  Owner* owner_;
 
-
-  // recreates input sockets
-  void Rebuild(size_t n) noexcept {
-    in_.resize(2+n);
-    if (data_->n < n) {
-      for (size_t i = data_->n; i < n; ++i) {
-        in_[2+i] = std::make_shared<CustomInSock>(this, i);
-      }
-    }
-    data_->n = n;
-  }
-
-
-  class ContextData final : public Context::Data {
-   public:
-    ContextData() { values.fill({}); }
-
-    std::array<Value, kMaxInput> values;
-  };
-  class CustomInSock final : public InSock {
-   public:
-    CustomInSock(TupleN* o, size_t idx) noexcept :
-        InSock(o, std::to_string(idx)), idx_(idx) {
-    }
-    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-      auto& values = ctx->GetOrNew<ContextData>(&owner())->values;
-      values[idx_] = std::move(v);
-    }
-   private:
-    size_t idx_;
-  };
+  std::weak_ptr<Context> ctx_;
 };
-void TupleN::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  ImGui::TextUnformatted("TUPLE-N");
 
-  const auto em = ImGui::GetFontSize();
 
-  ImGui::BeginGroup();
-  if (ImNodes::BeginInputSlot("CLK", 1)) {
-    gui::NodeInSock(ctx, in_[0]);
-    ImNodes::EndSlot();
+class TuplePush final : public LambdaNodeDriver {
+ public:
+  using Owner = LambdaNode<TuplePush>;
+
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
+      "Value/TuplePush", "append 1 element to tuple",
+      {typeid(iface::Node)});
+
+  static inline const std::vector<SockMeta> kInSocks = {
+    { "tuple", "", },
+    { "item",  "", },
+  };
+  static inline const std::vector<SockMeta> kOutSocks = {
+    { "tuple", "", },
+  };
+
+  TuplePush(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+      owner_(o), ctx_(ctx) {
   }
-  if (ImNodes::BeginInputSlot("CLR", 1)) {
-    gui::NodeInSock(ctx, in_[1]);
-    ImNodes::EndSlot();
+
+  std::string title() const noexcept {
+    return "TUPLE PUSH";
   }
-  for (size_t i = 0; i < data_->n; ++i) {
-    const auto& name = in_[2+i]->name();
-    if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
-      gui::NodeInSock(name);
-      ImNodes::EndSlot();
+
+  void Handle(size_t idx, Value&& v) {
+    switch (idx) {
+    case 0:
+      tuple_ = v.tupleUniqPtr();
+      ExecIf();
+      return;
+    case 1:
+      item_ = std::move(v);
+      ExecIf();
+      return;
     }
+    assert(false);
   }
-  ImGui::EndGroup();
+  void ExecIf() noexcept {
+    if (!tuple_ || !item_) return;
+    tuple_->push_back(std::move(*item_));
+    owner_->out(0)->Send(ctx_.lock(), tuple_);
 
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(2*em);
-  int n = static_cast<int>(data_->n);
-  if (ImGui::DragInt("##InputCount", &n, 1, 0, kMaxInput)) {
-    Queue::main().Push([this, n]() { Rebuild(static_cast<size_t>(n)); });
+    tuple_ = nullptr;
+    item_  = std::nullopt;
   }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("number of inputs");
-  }
-  ImGui::SameLine();
 
-  ImGui::BeginGroup();
-  if (ImNodes::BeginOutputSlot("out", 1)) {
-    ImGui::AlignTextToFramePadding();
-    gui::NodeOutSock("out");
-    ImNodes::EndSlot();
+ private:
+  Owner* owner_;
+
+  std::weak_ptr<Context> ctx_;
+
+  std::shared_ptr<Value::Tuple> tuple_;
+
+  std::optional<Value> item_;
+};
+
+
+class TuplePop final : public LambdaNodeDriver {
+ public:
+  using Owner = LambdaNode<TuplePop>;
+
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
+      "Value/TuplePop", "pop the last element from tuple",
+      {typeid(iface::Node)});
+
+  static inline const std::vector<SockMeta> kInSocks = {
+    { "tuple", "", kExecIn },
+  };
+  static inline const std::vector<SockMeta> kOutSocks = {
+    { "item",  "", },
+    { "tuple", "", },
+  };
+
+  TuplePop(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+      owner_(o), ctx_(ctx) {
   }
-  ImGui::EndGroup();
-}
+
+  std::string title() const noexcept {
+    return "TUPLE POP";
+  }
+
+  void Handle(size_t idx, Value&& v) {
+    assert(idx == 0);
+    (void) idx;
+
+    auto  ctx = ctx_.lock();
+    auto& tup = v.tupleUniq();
+    if (tup.size() == 0) throw Exception("empty tuple");
+
+    owner_->out(0)->Send(ctx, Value(tup.back()));
+    tup.pop_back();
+    owner_->out(1)->Send(ctx, std::move(v));
+  }
+
+ private:
+  Owner* owner_;
+
+  std::weak_ptr<Context> ctx_;
+};
 
 
 class ExternalText final : public File,

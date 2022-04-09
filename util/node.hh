@@ -6,18 +6,75 @@
 
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
+#include "util/value.hh"
 
 
 namespace kingtaker {
+
+// An implementation of Context that redirects an output of target node to a
+// specific socket.
+class NodeRedirectContext final : public iface::Node::Context {
+ public:
+  using Node = iface::Node;
+
+  NodeRedirectContext(const std::weak_ptr<Node::OutSock>& dst,
+                  const std::weak_ptr<Node::Context>& ctx,
+                  Node*                               target = nullptr) noexcept :
+      dst_(dst), ctx_(ctx), target_(target) {
+  }
+
+  void Attach(Node* target) noexcept {
+    target_ = target;
+  }
+
+  void ObserveSend(const Node::OutSock& src, const Value& v) noexcept override {
+    if (&src.owner() != target_) return;
+
+    auto dst = dst_.lock();
+    auto ctx = ctx_.lock();
+    if (dst && ctx) {
+      dst->Send(ctx, Value::Tuple { src.name(), Value(v) });
+    }
+  }
+
+  Node* target() const noexcept { return target_; }
+
+ private:
+  std::weak_ptr<Node::OutSock> dst_;
+  std::weak_ptr<Node::Context> ctx_;
+
+  Node* target_;
+};
+
+
+// An implemetation of InSock that executes lambda when received something
+class NodeLambdaInSock final : public iface::Node::InSock {
+ public:
+  using Node     = iface::Node;
+  using Receiver = std::function<void(const std::shared_ptr<Node::Context>&, Value&&)>;
+
+  NodeLambdaInSock(Node* o, std::string_view n, Receiver&& f) noexcept :
+      InSock(o, n), lambda_(std::move(f)) {
+  }
+
+  void Receive(const std::shared_ptr<Node::Context>& ctx, Value&& v) noexcept override {
+    lambda_(ctx, std::move(v));
+  }
+ private:
+  Receiver lambda_;
+};
+
 
 // Use with LambdaNode<Driver>.
 class LambdaNodeDriver : public iface::Node::Context::Data {
  public:
   using TypeInfo = File::TypeInfo;
   using RefStack = File::RefStack;
-  using Packer   = File::Packer;
+  using Path     = File::Path;
   using Node     = iface::Node;
-  using Context  = iface::Node::Context;
+  using InSock   = Node::InSock;
+  using OutSock  = Node::OutSock;
+  using Context  = Node::Context;
 
   // static constexpr char* kTitle = "";
 
@@ -26,7 +83,7 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
     kPulseButton = 1 << 0,
     kFrameHeight = 1 << 1,
 
-    kClockIn  = 1 << 2,
+    kExecIn   = 1 << 2,
     kErrorOut = 1 << 3,
   };
   using SockFlags = uint8_t;
@@ -50,6 +107,8 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
   LambdaNodeDriver& operator=(const LambdaNodeDriver&) = default;
   LambdaNodeDriver& operator=(LambdaNodeDriver&&) = default;
 
+  // std::string title() const noexcept;
+
   // void Handle(size_t, Value&&);
 };
 
@@ -57,7 +116,7 @@ template <typename Driver>
 class LambdaNode final : public File, public iface::Node {
  public:
   LambdaNode(const std::shared_ptr<Env>& env) noexcept :
-      File(&Driver::type_, env), Node(Node::kNone),
+      File(&Driver::kType, env), Node(Node::kNone),
       life_(std::make_shared<std::monostate>()) {
     std::shared_ptr<OutSock> err;
     for (size_t i = 0; i < Driver::kOutSocks.size(); ++i) {
@@ -72,7 +131,7 @@ class LambdaNode final : public File, public iface::Node {
     for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
       const auto& m = Driver::kInSocks[i];
 
-      if (m.flags & LambdaNodeDriver::kClockIn) {
+      if (m.flags & LambdaNodeDriver::kExecIn) {
         in_.emplace_back(new ClockInSock(this, m.name, i, err));
       } else {
         in_.emplace_back(new CustomInSock(this, m.name, i));
@@ -162,7 +221,7 @@ class LambdaNode final : public File, public iface::Node {
     void OnCatch(const std::shared_ptr<Context>& ctx, Exception& e) noexcept {
       notify::Error(owner()->path(), owner(),
                     "error while handling input ("+name()+"): "s+e.msg());
-      err_->Send(ctx, {});
+      if (err_) err_->Send(ctx, {});
     }
 
    private:
@@ -171,7 +230,8 @@ class LambdaNode final : public File, public iface::Node {
 };
 template <typename Driver>
 void LambdaNode<Driver>::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  ImGui::TextUnformatted(Driver::kTitle);
+  const auto driver = ctx->GetOrNew<Driver>(this, this, ctx);
+  ImGui::TextUnformatted(driver->title().c_str());
 
   ImGui::BeginGroup();
   for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {

@@ -17,6 +17,7 @@
 
 #include "util/gui.hh"
 #include "util/keymap.hh"
+#include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -25,12 +26,11 @@
 namespace kingtaker {
 namespace {
 
-// A simple implementation of directory file.
 class GenericDir : public File,
     public iface::Dir,
     public iface::DirItem {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<GenericDir>(
+  static inline TypeInfo kType = TypeInfo::New<GenericDir>(
       "System/GenericDir", "generic impl of directory",
       {typeid(iface::Dir), typeid(iface::DirItem)});
 
@@ -40,7 +40,7 @@ class GenericDir : public File,
              ItemList&& items   = {},
              Time       lastmod = Clock::now(),
              bool       shown   = false) :
-      File(&type_, env), DirItem(kTree | kMenu),
+      File(&kType, env), DirItem(kTree | kMenu),
       items_(std::move(items)), lastmod_(lastmod), shown_(shown) {
   }
 
@@ -273,14 +273,13 @@ void GenericDir::UpdateItem(RefStack& ref, File* f) noexcept {
 }
 
 
-// Saves and restores permanentized parameters of ImGui.
 class ImGuiConfig : public File {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<ImGuiConfig>(
+  static inline TypeInfo kType = TypeInfo::New<ImGuiConfig>(
       "System/ImGuiConfig", "saves and restores ImGui config", {});
 
   ImGuiConfig(const std::shared_ptr<Env>& env) noexcept :
-      File(&type_, env) {
+      File(&kType, env) {
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -304,11 +303,11 @@ class ImGuiConfig : public File {
 
 class LogView : public File {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<LogView>(
+  static inline TypeInfo kType = TypeInfo::New<LogView>(
       "System/LogView", "provides system log viewer", {});
 
   LogView(const std::shared_ptr<Env>& env, bool shown = true) noexcept :
-      File(&type_, env), shown_(shown) {
+      File(&kType, env), shown_(shown) {
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -342,7 +341,7 @@ class LogView : public File {
 
 class ClockPulseGenerator final : public File, public iface::DirItem {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<ClockPulseGenerator>(
+  static inline TypeInfo kType = TypeInfo::New<ClockPulseGenerator>(
       "System/ClockPulseGenerator", "emits a pulse into a specific node on each GUI updates",
       {typeid(iface::DirItem)});
 
@@ -351,7 +350,7 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
                       const std::string& sock_name = "",
                       bool               shown     = false,
                       bool               enable    = false) noexcept :
-      File(&type_, env), DirItem(kNone),
+      File(&kType, env), DirItem(kNone),
       nctx_(std::make_shared<iface::Node::Context>()),
       path_(path), sock_name_(sock_name), shown_(shown), enable_(enable) {
   }
@@ -478,468 +477,68 @@ void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
 }
 
 
-class Logger final : public File, public iface::Node {
+class Logger final : public LambdaNodeDriver {
  public:
-  static inline TypeInfo type_ = TypeInfo::New<Logger>(
+  using Owner = LambdaNode<Logger>;
+
+  static inline TypeInfo kType = TypeInfo::New<Owner>(
       "System/Logger", "prints msg to system log",
       {typeid(iface::Node)});
 
-  Logger(const std::shared_ptr<Env>& env,
-         notify::Level      lv   = notify::kTrace,
-         const std::string& msg  = "",
-         ImVec2             size = {0, 0}) noexcept :
-      File(&type_, env), Node(kNone),
-      data_(std::make_shared<UniversalData>(lv, msg)), size_(size) {
-    std::weak_ptr<UniversalData> wdata = data_;
-    auto task = [self = this, wdata](const auto&, auto&& v) {
-      auto data = wdata.lock();
-      if (!data) return;
-      auto msg = data->msg;
-
-      const auto d = msg.find('$');
-      if (d != std::string::npos) {
-        msg = msg.substr(0, d)+v.StringifyType()+msg.substr(d+1);
-      }
-
-      const auto p = msg.find('%');
-      if (p != std::string::npos) {
-        msg = msg.substr(0, p)+v.Stringify()+msg.substr(p+1);
-      }
-
-      notify::Push(
-          {std::source_location::current(), data->lv, msg, File::Path(data->path), self});
-    };
-    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task)));
-  }
-
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    try {
-      const auto size = msgpack::as_if<std::tuple<float, float>>(
-          msgpack::find(obj, "size"s), {0.f, 0.f});
-
-      return std::make_unique<Logger>(
-          env,
-          IntToLevel(msgpack::as_if<int>(msgpack::find(obj, "level"s), 0)),
-          msgpack::as_if<std::string>(msgpack::find(obj, "msg"s), ""s),
-          ImVec2 {std::get<0>(size), std::get<1>(size)});
-    } catch (msgpack::type_error&) {
-      return std::make_unique<Logger>(env);
-    }
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack_map(3);
-
-    pk.pack("level"s);
-    pk.pack(LevelToInt(data_->lv));
-
-    pk.pack("msg"s);
-    pk.pack(data_->msg);
-
-    pk.pack("size"s);
-    pk.pack(std::make_tuple(size_.x, size_.y));
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<Logger>(env, data_->lv, data_->msg, size_);
-  }
-
-  void Update(RefStack&, Event&) noexcept override;
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
-  static void UpdateLevelCombo(notify::Level* lv) noexcept;
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
-  }
-
- private:
-  struct UniversalData {
-    UniversalData(notify::Level l, const std::string& v) noexcept :
-        lv(l), msg(v) {
-    }
-    notify::Level lv;
-    std::string msg;
-
-    File::Path path;
+  static inline const std::vector<SockMeta> kInSocks = {
+    { "clear", "", kPulseButton },
+    { "level", "" },
+    { "msg",   "" },
+    { "exec",  "", kPulseButton | kExecIn },
   };
-  std::shared_ptr<UniversalData> data_;
+  static inline const std::vector<SockMeta> kOutSocks = {};
 
-  ImVec2 size_;
-
-
-  static int LevelToInt(notify::Level lv) noexcept {
-    switch (lv) {
-    case notify::kTrace: return 0;
-    case notify::kInfo:  return 1;
-    case notify::kWarn:  return 2;
-    case notify::kError: return 3;
-    default: assert(false); return 0;
-    }
+  Logger(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+      owner_(o), ctx_(ctx) {
   }
-  static notify::Level IntToLevel(int idx) noexcept {
+
+  std::string title() const noexcept {
+    return "LOGGER";
+  }
+
+  void Handle(size_t idx, Value&& v) {
     switch (idx) {
-    case 0: return notify::kTrace;
-    case 1: return notify::kInfo;
-    case 2: return notify::kWarn;
-    case 3: return notify::kError;
-    default: return notify::kTrace;
+    case 0:
+      level_ = notify::kTrace;
+      msg_   = std::nullopt;
+      return;
+    case 1:
+      level_ = ParseLevel(v.string());
+      return;
+    case 2:
+      msg_ = std::move(v);
+      return;
+    case 3:
+      if (!msg_) throw Exception("msg is not specified");
+      notify::Push({std::source_location::current(),
+                   level_, msg_->Stringify(), Path(owner_->path()), owner_});
+      return;
     }
-  }
-};
-void Logger::Update(RefStack& ref, Event&) noexcept {
-  data_->path = ref.GetFullPath();
-}
-void Logger::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
-  const auto em = ImGui::GetFontSize();
-  const auto fh = ImGui::GetFrameHeight();
-
-  ImGui::TextUnformatted("SYSTEM LOGGER");
-
-  ImGui::BeginGroup();
-  {
-    if (ImNodes::BeginInputSlot("CLK", 1)) {
-      ImGui::AlignTextToFramePadding();
-      gui::NodeSocket();
-      ImNodes::EndSlot();
-    }
-  }
-  ImGui::EndGroup();
-  ImGui::SameLine();
-  ImGui::BeginGroup();
-  {
-    ImGui::SetNextItemWidth(4.5f*em);
-    UpdateLevelCombo(&data_->lv);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("output log level");
-    }
-    ImGui::SameLine();
-    {
-      gui::ResizeGroup _("##resizer", &size_, {8, fh/em}, {32, 4*fh/em}, em);
-      ImGui::InputTextMultiline("##msg", &data_->msg, size_*em);
-    }
-  }
-  ImGui::EndGroup();
-}
-void Logger::UpdateLevelCombo(notify::Level* lv) noexcept {
-  static const char* kNames[] = {"TRAC", "INFO", "WARN", "ERRR"};
-  static const int   kCount   = sizeof(kNames)/sizeof(kNames[0]);
-
-  int idx = LevelToInt(*lv);
-  if (ImGui::Combo("##level", &idx, kNames, kCount)) {
-    *lv = IntToLevel(idx);
-  }
-}
-
-
-class MouseInput : public File, public iface::Node {
- public:
-  static inline TypeInfo type_ = TypeInfo::New<MouseInput>(
-      "System/MouseInput", "retrieves mouse state",
-      {typeid(iface::Node)});
-
-  MouseInput(const std::shared_ptr<Env>& env) noexcept :
-      File(&type_, env), Node(kNone), data_(std::make_shared<UniversalData>()) {
-    out_.emplace_back(new OutSock(this, "pos"));
-    out_.emplace_back(new OutSock(this, "left"));
-    out_.emplace_back(new OutSock(this, "middle"));
-    out_.emplace_back(new OutSock(this, "right"));
-    out_.emplace_back(new OutSock(this, "gui_active"));
-
-    std::weak_ptr<UniversalData> wdata = data_;
-    std::weak_ptr<OutSock>       wp = out_[0];
-    std::weak_ptr<OutSock>       wl = out_[1];
-    std::weak_ptr<OutSock>       wm = out_[2];
-    std::weak_ptr<OutSock>       wr = out_[3];
-    std::weak_ptr<OutSock>       wa = out_[4];
-    auto task = [wdata, wp, wl, wm, wr, wa](const auto& ctx, auto&&) {
-      auto data = wdata.lock();
-      if (!data) return;
-
-      auto p = wp.lock();
-      if (p) p->Send(ctx, data->pos);
-
-      auto l = wl.lock();
-      if (l) l->Send(ctx, data->l);
-
-      auto m = wm.lock();
-      if (m) m->Send(ctx, data->m);
-
-      auto r = wr.lock();
-      if (r) r->Send(ctx, data->r);
-
-      auto a = wa.lock();
-      if (a) a->Send(ctx, data->gui_active);
-    };
-    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task)));
-  }
-
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object&, const std::shared_ptr<Env>& env) {
-    return std::make_unique<MouseInput>(env);
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack_nil();
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<MouseInput>(env);
-  }
-
-  void Update(RefStack&, Event&) noexcept override;
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
-  static void UpdateSocket(const char*, float) noexcept;
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
+    assert(false);
   }
 
  private:
-  struct UniversalData {
-    Value::Vec2 pos;
-    std::string l, m, r;
-    bool gui_active;
-  };
-  std::shared_ptr<UniversalData> data_;
+  Owner* owner_;
+
+  std::weak_ptr<Context> ctx_;
+
+  notify::Level level_ = notify::kTrace;
+
+  std::optional<Value> msg_;
 
 
-  static void GetState(std::string& str, ImGuiMouseButton b) noexcept {
-    str = "";
-    if (ImGui::IsMouseDown(b))          str = "DOWN";
-    if (ImGui::IsMouseClicked(b))       str = "CLICK";
-    if (ImGui::IsMouseReleased(b))      str = "RELEASE";
-    if (ImGui::IsMouseDoubleClicked(b)) str = "DOUBLE";
+  static notify::Level ParseLevel(std::string_view v) {
+    if (v == "TRAC") return notify::kTrace;
+    if (v == "INFO") return notify::kInfo;
+    if (v == "WARN") return notify::kWarn;
+    if (v == "ERRR") return notify::kError;
+    throw Exception("unknown log level: "+std::string(v));
   }
 };
-void MouseInput::Update(RefStack&, Event&) noexcept {
-  const auto p = ImGui::GetMousePos();
-  data_->pos = {p.x, p.y};
-
-  GetState(data_->l, ImGuiMouseButton_Left);
-  GetState(data_->m, ImGuiMouseButton_Middle);
-  GetState(data_->r, ImGuiMouseButton_Right);
-
-  data_->gui_active =
-      ImGui::IsAnyItemHovered() ||
-      ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
-}
-void MouseInput::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  const auto w = 4*ImGui::GetFontSize();
-
-  ImGui::TextUnformatted("MOUSE INPUT");
-  if (ImNodes::BeginInputSlot("CLK", 1)) {
-    gui::NodeSocket();
-    ImGui::SameLine();
-    if (ImGui::SmallButton("CLK")) {
-      Queue::sub().Push([clk = in_[0], ctx]() { clk->Receive(ctx, {}); });
-    }
-    ImNodes::EndSlot();
-  }
-  ImGui::SameLine();
-
-  ImGui::BeginGroup();
-  if (ImNodes::BeginOutputSlot("pos", 1)) {
-    UpdateSocket("pos", w);
-    ImNodes::EndSlot();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("mouse pos in native window coordinates");
-    }
-  }
-  if (ImNodes::BeginOutputSlot("left", 1)) {
-    UpdateSocket("left", w);
-    ImNodes::EndSlot();
-  }
-  if (ImNodes::BeginOutputSlot("middle", 1)) {
-    UpdateSocket("middle", w);
-    ImNodes::EndSlot();
-  }
-  if (ImNodes::BeginOutputSlot("right", 1)) {
-    UpdateSocket("right", w);
-    ImNodes::EndSlot();
-  }
-
-  if (ImNodes::BeginOutputSlot("gui_active", 1)) {
-    UpdateSocket("GUI active", w);
-    ImNodes::EndSlot();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("is any UI component hovered");
-    }
-  }
-  ImGui::EndGroup();
-}
-void MouseInput::UpdateSocket(const char* s, float w) noexcept {
-  const auto tw = ImGui::CalcTextSize(s).x;
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-tw));
-  ImGui::TextUnformatted(s);
-  ImGui::SameLine();
-  gui::NodeSocket();
-}
-
-
-class KeyInput final : public File, public iface::Node {
- public:
-  static inline TypeInfo type_ = TypeInfo::New<KeyInput>(
-      "System/KeyInput", "retrieves key state",
-      {typeid(iface::Node)});
-
-  KeyInput(const std::shared_ptr<Env>& env, const std::string& key = "(none)") noexcept :
-      File(&type_, env), Node(Node::kNone),
-      data_(std::make_shared<UniversalData>()), key_(key) {
-    out_.emplace_back(new OutSock(this, "down"));
-    out_.emplace_back(new OutSock(this, "press"));
-    out_.emplace_back(new OutSock(this, "repeat"));
-    out_.emplace_back(new OutSock(this, "release"));
-
-    std::weak_ptr<UniversalData> wdata = data_;
-    std::weak_ptr<OutSock>       wd    = out_[0];
-    std::weak_ptr<OutSock>       wp    = out_[1];
-    std::weak_ptr<OutSock>       wrp   = out_[2];
-    std::weak_ptr<OutSock>       wr    = out_[3];
-    auto task = [wdata, wd, wp, wrp, wr](const auto& ctx, auto&&) {
-      auto data = wdata.lock();
-      if (!data) return;
-      const auto state = data->state;
-
-      auto d = wd.lock();
-      if (d && state & State::kDown) d->Send(ctx, {});
-
-      auto p = wp.lock();
-      if (p && state & State::kPress) p->Send(ctx, {});
-
-      auto rp = wrp.lock();
-      if (rp && state & State::kRepeat) rp->Send(ctx, {});
-
-      auto r = wr.lock();
-      if (r && state & State::kRelease) r->Send(ctx, {});
-    };
-    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(task)));
-  }
-
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    try {
-      return std::make_unique<KeyInput>(
-          env, msgpack::as_if<std::string>(obj, "(none)"s));
-    } catch (msgpack::type_error&) {
-      throw DeserializeException("broken System/KeyInput");
-    }
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack(key_);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<KeyInput>(env, key_);
-  }
-
-  void Update(RefStack&, Event&) noexcept override {
-    FetchKeyCode();
-
-    auto& st = data_->state;
-    st = State::kNone;
-
-    if (keycode_ && !ImGui::IsAnyItemActive()) {
-      if (ImGui::IsKeyDown(*keycode_)) {
-        st = st | kDown;
-      }
-      if (ImGui::IsKeyPressed(*keycode_, false)) {
-        st = st | kPress;
-      } else if (ImGui::IsKeyPressed(*keycode_, true)) {
-        st = st | kRepeat;
-      }
-      if (ImGui::IsKeyReleased(*keycode_)) {
-        st = st | kRelease;
-      }
-    }
-  }
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
-  static void UpdateSocket(const char*, float) noexcept;
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node>(t).Select(this);
-  }
-
- private:
-  enum State : uint8_t  {
-    kNone    = 0,
-    kDown    = 1 << 0,
-    kPress   = 1 << 1,
-    kRepeat  = 1 << 2,
-    kRelease = 1 << 3,
-  };
-  struct UniversalData final {
-    uint8_t state = kNone;
-  };
-  std::shared_ptr<UniversalData> data_;
-
-  // permanentized params
-  std::string key_;
-
-  // volatile params
-  std::optional<ImGuiKey> keycode_ = std::nullopt;
-
-
-  void FetchKeyCode() noexcept {
-    if (keycode_) return;
-    auto itr = kKeyMap.find(key_);
-    if (itr != kKeyMap.end()) {
-      keycode_ = itr->second;
-    }
-  }
-};
-void KeyInput::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  const auto em = ImGui::GetFontSize();
-  const auto w  = 4*em;
-
-  ImGui::TextUnformatted("KEY INPUT:");
-  ImGui::SameLine();
-  ImGui::SmallButton(key_.c_str());
-
-  gui::NodeCanvasResetZoom();
-  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-    FetchKeyCode();
-    for (auto& p : kKeyMap) {
-      const bool sel = (keycode_ && *keycode_ == p.second);
-      if (ImGui::MenuItem(p.first.c_str(), nullptr, sel)) {
-        key_     = p.first;
-        keycode_ = p.second;
-      }
-    }
-    ImGui::EndPopup();
-  }
-  gui::NodeCanvasSetZoom();
-
-  if (ImNodes::BeginInputSlot("CLK", 1)) {
-    gui::NodeSocket();
-    ImGui::SameLine();
-    if (ImGui::SmallButton("CLK")) {
-      Queue::sub().Push([clk = in_[0], ctx]() { clk->Receive(ctx, {}); });
-    }
-    ImNodes::EndSlot();
-  }
-  ImGui::SameLine();
-
-  ImGui::BeginGroup();
-  if (ImNodes::BeginOutputSlot("down", 1)) {
-    UpdateSocket("down", w);
-    ImNodes::EndSlot();
-  }
-  if (ImNodes::BeginOutputSlot("press", 1)) {
-    UpdateSocket("press", w);
-    ImNodes::EndSlot();
-  }
-  if (ImNodes::BeginOutputSlot("repeat", 1)) {
-    UpdateSocket("repeat", w);
-    ImNodes::EndSlot();
-  }
-  if (ImNodes::BeginOutputSlot("release", 1)) {
-    UpdateSocket("release", w);
-    ImNodes::EndSlot();
-  }
-  ImGui::EndGroup();
-}
-void KeyInput::UpdateSocket(const char* s, float w) noexcept {
-  const auto tw = ImGui::CalcTextSize(s).x;
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX()+(w-tw));
-  ImGui::TextUnformatted(s);
-  ImGui::SameLine();
-  gui::NodeSocket();
-}
 
 } }  // namespace kingtaker

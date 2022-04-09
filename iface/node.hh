@@ -25,7 +25,6 @@ class Node {
 
   class Sock;
   class InSock;
-  class LambdaInSock;
   class OutSock;
 
   using InSockList  = std::vector<std::shared_ptr<InSock>>;
@@ -57,6 +56,9 @@ class Node {
 
   std::span<const std::shared_ptr<InSock>> in() noexcept { return in_; }
   std::span<const std::shared_ptr<OutSock>> out() noexcept { return out_; }
+
+  const std::shared_ptr<InSock>& in(size_t i) const noexcept { return in_[i]; }
+  const std::shared_ptr<OutSock>& out(size_t i) const noexcept { return out_[i]; }
 
   Flags flags() const noexcept { return flags_; }
 
@@ -152,21 +154,6 @@ class Node::InSock : public Sock {
  private:
   std::vector<std::weak_ptr<OutSock>> src_;
 };
-class Node::LambdaInSock final : public InSock {
- public:
-  using Receiver = std::function<void(const std::shared_ptr<Context>&, Value&&)>;
-
-  LambdaInSock(Node* o, std::string_view n, Receiver&& f) noexcept :
-      InSock(o, n), lambda_(std::move(f)) {
-  }
-
-  void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-    lambda_(ctx, std::move(v));
-  }
- private:
-  Receiver lambda_;
-};
-
 
 // A Node socket that emits value to input sockets
 // all operations must be done from main thread
