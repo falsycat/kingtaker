@@ -51,7 +51,7 @@ class Imm final : public File,
       if (!val || !out) return;
       out->Send(ctx, Value(*val));
     };
-    in_.emplace_back(new LambdaInSock(this, "CLK", std::move(receiver)));
+    in_.emplace_back(new NodeLambdaInSock(this, "CLK", std::move(receiver)));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {

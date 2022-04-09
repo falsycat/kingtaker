@@ -140,7 +140,7 @@ class Exec final : public File, public iface::Node {
       auto cdata = ContextData::Get(udata, ctx);
       dev_.Queue([cdata](auto L) { cdata->Clear(L); });
     };
-    in_.emplace_back(new LambdaInSock(this, "clear", std::move(task_clear)));
+    in_.emplace_back(new NodeLambdaInSock(this, "clear", std::move(task_clear)));
 
     auto task_func = [udata = udata_](auto& ctx, auto&& v) {
       try {
@@ -150,7 +150,7 @@ class Exec final : public File, public iface::Node {
         notify::Warn(udata->pathSync(), udata->self, e.msg());
       }
     };
-    in_.emplace_back(new LambdaInSock(this, "func", std::move(task_func)));
+    in_.emplace_back(new NodeLambdaInSock(this, "func", std::move(task_func)));
 
     auto task_send = [udata = udata_](auto& ctx, auto&& v) {
       try {
@@ -159,7 +159,7 @@ class Exec final : public File, public iface::Node {
         notify::Error(udata->pathSync(), udata->self, e.msg());
       }
     };
-    in_.emplace_back(new LambdaInSock(this, "send", std::move(task_send)));
+    in_.emplace_back(new NodeLambdaInSock(this, "send", std::move(task_send)));
   }
 
   static std::unique_ptr<File> Deserialize(

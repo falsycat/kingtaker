@@ -6,9 +6,64 @@
 
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
+#include "util/value.hh"
 
 
 namespace kingtaker {
+
+// An implementation of Context that redirects an output of target node to a
+// specific socket.
+class NodeRedirectContext final : public iface::Node::Context {
+ public:
+  using Node = iface::Node;
+
+  NodeRedirectContext(const std::weak_ptr<Node::OutSock>& dst,
+                  const std::weak_ptr<Node::Context>& ctx,
+                  Node*                               target = nullptr) noexcept :
+      dst_(dst), ctx_(ctx), target_(target) {
+  }
+
+  void Attach(Node* target) noexcept {
+    target_ = target;
+  }
+
+  void ObserveSend(const Node::OutSock& src, const Value& v) noexcept override {
+    if (&src.owner() != target_) return;
+
+    auto dst = dst_.lock();
+    auto ctx = ctx_.lock();
+    if (dst && ctx) {
+      dst->Send(ctx, Value::Tuple { src.name(), Value(v) });
+    }
+  }
+
+  Node* target() const noexcept { return target_; }
+
+ private:
+  std::weak_ptr<Node::OutSock> dst_;
+  std::weak_ptr<Node::Context> ctx_;
+
+  Node* target_;
+};
+
+
+// An implemetation of InSock that executes lambda when received something
+class NodeLambdaInSock final : public iface::Node::InSock {
+ public:
+  using Node     = iface::Node;
+  using Receiver = std::function<void(const std::shared_ptr<Node::Context>&, Value&&)>;
+
+  NodeLambdaInSock(Node* o, std::string_view n, Receiver&& f) noexcept :
+      InSock(o, n), lambda_(std::move(f)) {
+  }
+
+  void Receive(const std::shared_ptr<Node::Context>& ctx, Value&& v) noexcept override {
+    lambda_(ctx, std::move(v));
+  }
+ private:
+  Receiver lambda_;
+};
+
 
 // Use with LambdaNode<Driver>.
 class LambdaNodeDriver : public iface::Node::Context::Data {

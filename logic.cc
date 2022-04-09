@@ -32,7 +32,7 @@ class Passthru final : public File, public iface::Node {
       if (!out) return;
       out->Send(ctx, std::move(v));
     };
-    in_.emplace_back(new LambdaInSock(this, "in", std::move(task)));
+    in_.emplace_back(new NodeLambdaInSock(this, "in", std::move(task)));
   }
 
   static std::unique_ptr<File> Deserialize(const msgpack::object&, const std::shared_ptr<Env>& env) {

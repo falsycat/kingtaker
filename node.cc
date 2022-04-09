@@ -404,7 +404,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
         sock->Send(ctx, std::move(v));
       };
-      in_.emplace_back(new LambdaInSock(this, "in", std::move(handler)));
+      in_.emplace_back(new NodeLambdaInSock(this, "in", std::move(handler)));
     }
 
     static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
@@ -1128,7 +1128,7 @@ class Call final : public LambdaNodeDriver {
       ictx_ = nullptr;
     }
     if (!ictx_) {
-      ictx_ = std::make_unique<RedirectContext>(owner_->out(0), octx_.lock(), n);
+      ictx_ = std::make_unique<NodeRedirectContext>(owner_->out(0), octx_.lock(), n);
     }
 
     auto task = [sock, ictx = ictx_, v = value]() mutable {
@@ -1144,7 +1144,7 @@ class Call final : public LambdaNodeDriver {
 
   File::Path path_;
 
-  std::shared_ptr<Node::RedirectContext> ictx_;
+  std::shared_ptr<NodeRedirectContext> ictx_;
 };
 
 } }  // namespace kingtaker
