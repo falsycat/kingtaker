@@ -9,7 +9,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include <iostream>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1069,7 +1068,7 @@ class Call final : public LambdaNodeDriver {
   using Owner = LambdaNode<Call>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "Node/Call", "redirect input to a specific node on filesystem with sub context",
+      "Node/Call", "redirect input to a specific Node on filesystem with sub context",
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
@@ -1145,6 +1144,263 @@ class Call final : public LambdaNodeDriver {
   File::Path path_;
 
   std::shared_ptr<NodeRedirectContext> ictx_;
+};
+
+
+class Cache final : public File, public iface::DirItem {
+ public:
+  static inline TypeInfo kType = TypeInfo::New<Cache>(
+      "Node/Cache", "stores execution result of Node",
+      {typeid(iface::DirItem)});
+
+  Cache(const std::shared_ptr<Env>& env) noexcept :
+      File(&kType, env), DirItem(DirItem::kMenu | DirItem::kTooltip),
+      store_(std::make_shared<Store>()) {
+  }
+
+  static std::unique_ptr<File> Deserialize(
+      const msgpack::object&, const std::shared_ptr<Env>& env) {
+    return std::make_unique<Cache>(env);
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack_nil();
+  }
+  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    return std::make_unique<Cache>(env);
+  }
+
+  void Update(RefStack& ref, Event&) noexcept override {
+    basepath_ = ref.GetFullPath();
+  }
+  void UpdateMenu(RefStack&) noexcept override {
+    if (ImGui::MenuItem("drop all cache")) store_->DropAll();
+  }
+  void UpdateTooltip(RefStack&) noexcept override {
+    ImGui::Indent();
+    ImGui::Text("store size  : %zu", store_->size());
+    ImGui::Text("try/hit/miss: %zu/%zu/%zu", try_cnt_, hit_cnt_, try_cnt_-hit_cnt_);
+    if (try_cnt_ > 0) {
+      ImGui::Text("hit rate    : %f%%",
+                  static_cast<float>(hit_cnt_)/static_cast<float>(try_cnt_)*100.f);
+    }
+    ImGui::Unindent();
+  }
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::DirItem>(t).Select(this);
+  }
+
+ private:
+  Path basepath_;
+
+  class Store;
+  std::shared_ptr<Store> store_;
+
+  size_t try_cnt_ = 0;
+  size_t hit_cnt_ = 0;
+
+
+  using Param = std::pair<std::string, Value>;
+
+  class StoreItem final {
+   public:
+    friend class Store;
+
+    using Observer = std::function<void(std::string_view, const Value&)>;
+
+    void Observe(Observer&& obs) noexcept {
+      for (const auto& out : out_) {
+        obs(out.first, out.second);
+      }
+      obs_.push_back(obs);
+    }
+    void Set(const std::string& name, Value&& v) noexcept {
+      out_.emplace_back(name, v);
+      for (const auto& obs : obs_) {
+        obs(name, v);
+      }
+    }
+
+    const std::vector<Param>& in() const noexcept { return in_; }
+    const std::vector<Param>& out() const noexcept { return out_; }
+
+   private:
+    StoreItem() = delete;
+    StoreItem(std::vector<Param>&& in) noexcept : in_(std::move(in)) {
+    }
+
+    std::vector<Param> in_, out_;
+
+    std::vector<Observer> obs_;
+  };
+  class Store final {
+   public:
+    Store() noexcept { }
+
+    std::shared_ptr<StoreItem> Find(const std::vector<Param>& in) const noexcept {
+      for (const auto& item : items_) {
+        if (in == item->in()) return item;
+      }
+      return nullptr;
+    }
+    const std::shared_ptr<StoreItem>& Allocate(std::vector<Param>&& in) noexcept {
+      items_.emplace_back(new StoreItem(std::move(in)));
+      return items_.back();
+    }
+    void DropAll() noexcept {
+      items_.clear();
+    }
+
+    size_t size() const noexcept { return items_.size(); }
+
+   private:
+    std::deque<std::shared_ptr<StoreItem>> items_;
+  };
+
+  // Node::Context that observes output of cache target.
+  class InnerContext final : public iface::Node::Context {
+   public:
+    using Node = iface::Node;
+
+    InnerContext(Node* target, const std::weak_ptr<StoreItem>& item) noexcept :
+        target_(target), item_(item) {
+    }
+
+    void ObserveSend(const Node::OutSock& sock, const Value& v) noexcept override {
+      if (&sock.owner() != target_) return;
+
+      auto item = item_.lock();
+      if (!item) return;
+
+      item->Set(sock.name(), Value(v));
+    }
+
+   private:
+    Node* target_;
+
+    std::weak_ptr<StoreItem> item_;
+  };
+
+
+  class Call final : public LambdaNodeDriver {
+   public:
+    using Owner = LambdaNode<Call>;
+
+    static inline TypeInfo kType = TypeInfo::New<Owner>(
+        "Node/Cache/Call", "redirect input or emit cached value",
+        {typeid(iface::Node)});
+
+    static inline const std::vector<SockMeta> kInSocks = {
+      { "clear",      "", kPulseButton },
+      { "node_path",  "", },
+      { "cache_path", "", },
+      { "params",     "", },
+      { "exec",       "", kPulseButton | kExecIn },
+    };
+    static inline const std::vector<SockMeta> kOutSocks = {
+      { "out", "", },
+    };
+
+    Call(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
+        owner_(o), ctx_(ctx) {
+    }
+
+    std::string title() const noexcept {
+      return "CACHE CALL";
+    }
+
+    void Handle(size_t idx, Value&& v) {
+      switch (idx) {
+      case 0:
+        Clear();
+        return;
+      case 1:
+        node_path_ = File::ParsePath(v.string());
+        return;
+      case 2:
+        cache_path_ = File::ParsePath(v.string());
+        return;
+      case 3:
+        SetParam(std::move(v));
+        return;
+      case 4:
+        Exec();
+        return;
+      }
+      assert(false);
+    }
+    void Clear() noexcept {
+      node_path_  = {};
+      cache_path_ = {};
+      params_     = {};
+    }
+    void SetParam(Value&& v) {
+      const auto& tup = v.tuple(2);
+      params_.emplace_back(tup[0].string(), tup[1]);
+    }
+    void Exec() {
+      auto c = GetCacheFile();
+      auto n = GetNode();
+      ++c->try_cnt_;
+
+      std::weak_ptr<OutSock> wout = owner_->out(0);
+      auto obs = [wctx = ctx_, wout](auto name, auto& value) {
+        auto ctx = wctx.lock();
+        auto out = wout.lock();
+        if (ctx && out) {
+          out->Send(ctx, Value::Tuple { std::string(name), value });
+        }
+      };
+
+      // use cache if found
+      auto cache = c->store_->Find(params_);
+      if (cache) {
+        ++c->hit_cnt_;
+        cache->Observe(std::move(obs));
+        return;
+      }
+
+      // allocate new cache
+      cache = c->store_->Allocate(std::vector<Param>(params_));
+      cache->Observe(std::move(obs));
+
+      // redirect input
+      auto ictx = std::make_shared<InnerContext>(n, cache);
+      for (const auto& param : params_) {
+        try {
+          const auto in = n->FindIn(param.first);
+          if (!in) throw Exception("no such socket found: "+param.first);
+          in->Receive(ictx, Value(param.second));
+        } catch (Exception& e) {
+          notify::Warn(owner_->path(), owner_, e.msg());
+        }
+      }
+    }
+
+   private:
+    Owner* owner_;
+
+    std::weak_ptr<Context> ctx_;
+
+    Path node_path_;
+    Path cache_path_;
+
+    std::vector<Param> params_;
+
+
+    Node* GetNode() {
+      auto f = &*RefStack().Resolve(owner_->path()).Resolve(node_path_);
+      auto n = File::iface<Node>(f);
+      if (!n) throw Exception("target file doesn't have Node interface");
+      return n;
+    }
+    Cache* GetCacheFile() {
+      auto c = dynamic_cast<Cache*>(
+          &*RefStack().Resolve(owner_->path()).Resolve(cache_path_));
+      if (!c) throw Exception("file is not Node/Cache");
+      return c;
+    }
+  };
 };
 
 } }  // namespace kingtaker
