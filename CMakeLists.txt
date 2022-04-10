@@ -61,6 +61,7 @@ target_sources(kingtaker
     iface/dir.hh
     iface/factory.hh
     iface/history.hh
+    iface/memento.hh
     iface/node.hh
 
     util/format.hh
@@ -71,6 +72,7 @@ target_sources(kingtaker
     util/keymap.cc
     util/luajit.hh
     util/luajit.cc
+    util/memento.hh
     util/node.hh
     util/notify.hh
     util/notify.cc

@@ -76,15 +76,15 @@ class SimpleHistory : public History {
     return ret;
   }
 
-  void Add(std::unique_ptr<T>&& cmd) {
-    cmd->Apply();
-
+  void AddSilently(std::unique_ptr<T>&& cmd) noexcept {
     cmds_.erase(cmds_.begin()+static_cast<intmax_t>(cursor_), cmds_.end());
     cmds_.push_back(std::move(cmd));
     ++cursor_;
   }
   void Queue(std::unique_ptr<T>&& cmd) noexcept {
-    Queue::main().Push([this, ptr = cmd.release()]() { Add(std::unique_ptr<T>(ptr)); });
+    auto ptr = cmd.get();
+    AddSilently(std::move(cmd));
+    Queue::main().Push([ptr]() { ptr->Apply(); });
   }
 
   void Drop(size_t dist) noexcept {

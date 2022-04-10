@@ -15,10 +15,12 @@
 
 #include "iface/dir.hh"
 #include "iface/factory.hh"
+#include "iface/memento.hh"
 #include "iface/node.hh"
 
 #include "util/format.hh"
 #include "util/gui.hh"
+#include "util/memento.hh"
 #include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
@@ -35,21 +37,15 @@ class Imm final : public File,
  public:
   static inline TypeInfo type_ = TypeInfo::New<Imm>(
       "Value/Imm", "immediate value",
-      {typeid(iface::Factory<Value>), typeid(iface::DirItem), typeid(iface::Node)});
+      {typeid(iface::Factory<Value>), typeid(iface::Memento), typeid(iface::DirItem), typeid(iface::Node)});
 
   Imm(const std::shared_ptr<Env>& env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
-      value_(std::make_shared<Value>(std::move(v))),
-      size_(size) {
+      mem_(std::make_shared<Memento>(UniversalData {this, std::move(v), size})) {
     out_.emplace_back(new OutSock(this, "out"));
 
-    std::weak_ptr<OutSock> wout = out_[0];
-    std::weak_ptr<Value>   wval = value_;
-    auto receiver = [wout, wval](const auto& ctx, auto&&) {
-      auto val = wval.lock();
-      auto out = wout.lock();
-      if (!val || !out) return;
-      out->Send(ctx, Value(*val));
+    auto receiver = [out = out_[0], mem = mem_](const auto& ctx, auto&&) {
+      out->Send(ctx, Value(mem->data().value));
     };
     in_.emplace_back(new NodeLambdaInSock(this, "CLK", std::move(receiver)));
   }
@@ -62,18 +58,21 @@ class Imm final : public File,
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);
 
+    const auto& data = mem_->data();
+
     pk.pack("size");
-    pk.pack(std::make_pair(size_.x, size_.y));
+    pk.pack(std::make_pair(data.size.x, data.size.y));
 
     pk.pack("value"s);
-    value_->Serialize(pk);
+    data.value.Serialize(pk);
   }
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<Imm>(env, Value(*value_), size_);
+    const auto& data = mem_->data();
+    return std::make_unique<Imm>(env, Value(data.value), data.size);
   }
 
   Value Create() noexcept override {
-    return *value_;
+    return mem_->data().value;
   }
 
   void UpdateTree(RefStack&) noexcept override;
@@ -85,16 +84,38 @@ class Imm final : public File,
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::Node, iface::DirItem, iface::Node>(t).Select(this);
+    return PtrSelector<iface::DirItem, iface::Memento, iface::Node>(t).
+        Select(this, mem_.get());
   }
 
  private:
-  // permanentized value
-  std::shared_ptr<Value> value_;
+  class UniversalData final {
+   public:
+    UniversalData(Imm* o, Value&& v, ImVec2 sz) noexcept :
+        value(std::move(v)), size(sz), owner_(o) {
+    }
 
+    bool operator==(const UniversalData& other) const noexcept {
+      return
+          value == other.value &&
+          size.x == other.size.x && size.y == other.size.y;
+    }
+    void Restore(const UniversalData& src) noexcept {
+      *this = src;
+      owner_->OnUpdate();
+    }
+
+    Value  value;
+    ImVec2 size;
+
+   private:
+    Imm* owner_;
+  };
+  using Memento = SimpleMemento<UniversalData>;
+  std::shared_ptr<Memento> mem_;
+
+  // permanentized
   Time lastmod_;
-
-  ImVec2 size_;
 
 
   void OnUpdate() noexcept {
@@ -134,7 +155,7 @@ void Imm::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
   }
 }
 void Imm::UpdateTypeChanger(bool mini) noexcept {
-  auto& v = *value_;
+  auto& v = mem_->data().value;
 
   const char* type =
       v.isInteger()? "Int":
@@ -169,19 +190,20 @@ void Imm::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
 
-  auto& v = *value_;
+  auto& data = mem_->data();
+  auto& v    = data.value;
 
   ImGui::SameLine();
   if (v.isInteger()) {
-    gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
-    ImGui::SetNextItemWidth(size_.x*em);
+    gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {12, fh/em}, em);
+    ImGui::SetNextItemWidth(data.size.x*em);
     if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.integer())) {
       OnUpdate();
     }
 
   } else if (v.isScalar()) {
-    gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {12, fh/em}, em);
-    ImGui::SetNextItemWidth(size_.x*em);
+    gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {12, fh/em}, em);
+    ImGui::SetNextItemWidth(data.size.x*em);
     if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.scalar())) {
       OnUpdate();
     }
@@ -192,13 +214,17 @@ void Imm::UpdateEditor() noexcept {
     }
 
   } else if (v.isString()) {
-    gui::ResizeGroup _("##resizer", &size_, {4, fh/em}, {24, 24}, em);
-    if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), size_*em)) {
+    gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {24, 24}, em);
+    if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), data.size*em)) {
       OnUpdate();
     }
 
   } else {
     ImGui::TextUnformatted("UNKNOWN TYPE X(");
+  }
+
+  if (!ImGui::IsAnyItemActive() && data != mem_->commitData()) {
+    mem_->Commit();
   }
 }
 
