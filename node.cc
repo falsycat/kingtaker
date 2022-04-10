@@ -1044,7 +1044,7 @@ class Call final : public LambdaNodeDriver {
   }
 
   std::string title() const noexcept {
-    return ictx_? "CALL*": "CALL";
+    return ictx_.expired()? "CALL": "CALL*";
   }
 
   void Handle(size_t idx, Value&& v) {
@@ -1062,8 +1062,9 @@ class Call final : public LambdaNodeDriver {
     assert(false);
   }
   void Clear() noexcept {
-    if (ictx_) ictx_->Attach(nullptr);
-    ictx_ = nullptr;
+    auto ictx = ictx_.lock();
+    if (ictx) ictx->Attach(nullptr);
+    ictx_.reset();
     path_ = {};
   }
   void Send(Value&& v) {
@@ -1080,15 +1081,17 @@ class Call final : public LambdaNodeDriver {
     auto sock = n->FindIn(name);
     if (!sock) throw Exception("unknown input: "+name);
 
-    if (ictx_ && ictx_->target() != n) {
-      ictx_->Attach(nullptr);
-      ictx_ = nullptr;
+    auto ictx = ictx_.lock();
+    if (ictx && ictx->target() != n) {
+      ictx->Attach(nullptr);
+      ictx = nullptr;
     }
-    if (!ictx_) {
-      ictx_ = std::make_unique<NodeRedirectContext>(owner_->out(0), octx_.lock(), n);
+    if (!ictx) {
+      ictx = std::make_shared<NodeRedirectContext>(owner_->out(0), octx_.lock(), n);
     }
+    ictx_ = ictx;
 
-    auto task = [sock, ictx = ictx_, v = value]() mutable {
+    auto task = [sock, ictx, v = value]() mutable {
       sock->Receive(ictx, std::move(v));
     };
     Queue::sub().Push(std::move(task));
@@ -1101,7 +1104,7 @@ class Call final : public LambdaNodeDriver {
 
   File::Path path_;
 
-  std::shared_ptr<NodeRedirectContext> ictx_;
+  std::weak_ptr<NodeRedirectContext> ictx_;
 };
 
 
@@ -1178,6 +1181,11 @@ class Cache final : public File, public iface::DirItem {
       }
     }
 
+    // after calling this, Set() cannot be called
+    void Finish() noexcept {
+      obs_.clear();
+    }
+
     const std::vector<Param>& in() const noexcept { return in_; }
     const std::vector<Param>& out() const noexcept { return out_; }
 
@@ -1221,6 +1229,10 @@ class Cache final : public File, public iface::DirItem {
 
     InnerContext(Node* target, const std::weak_ptr<StoreItem>& item) noexcept :
         target_(target), item_(item) {
+    }
+    ~InnerContext() {
+      auto item = item_.lock();
+      if (item) item->Finish();
     }
 
     void ObserveSend(const Node::OutSock& sock, const Value& v) noexcept override {
@@ -1296,17 +1308,15 @@ class Cache final : public File, public iface::DirItem {
       params_.emplace_back(tup[0].string(), tup[1]);
     }
     void Exec() {
-      auto c = GetCacheFile();
-      auto n = GetNode();
+      auto ctx = ctx_.lock();
+      auto c   = GetCacheFile();
+      auto n   = GetNode();
       ++c->try_cnt_;
 
       std::weak_ptr<OutSock> wout = owner_->out(0);
-      auto obs = [wctx = ctx_, wout](auto name, auto& value) {
-        auto ctx = wctx.lock();
+      auto obs = [ctx, wout](auto name, auto& value) {
         auto out = wout.lock();
-        if (ctx && out) {
-          out->Send(ctx, Value::Tuple { std::string(name), value });
-        }
+        if (out) out->Send(ctx, Value::Tuple { std::string(name), value });
       };
 
       // use cache if found

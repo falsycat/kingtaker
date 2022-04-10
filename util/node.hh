@@ -17,9 +17,9 @@ class NodeRedirectContext final : public iface::Node::Context {
  public:
   using Node = iface::Node;
 
-  NodeRedirectContext(const std::weak_ptr<Node::OutSock>& dst,
-                      const std::weak_ptr<Node::Context>& ctx,
-                      Node*                               target = nullptr) noexcept :
+  NodeRedirectContext(const std::weak_ptr<Node::OutSock>&   dst,
+                      const std::shared_ptr<Node::Context>& ctx,
+                      Node*                                 target = nullptr) noexcept :
       dst_(dst), ctx_(ctx), target_(target) {
   }
 
@@ -29,19 +29,16 @@ class NodeRedirectContext final : public iface::Node::Context {
 
   void ObserveSend(const Node::OutSock& src, const Value& v) noexcept override {
     if (&src.owner() != target_) return;
-
     auto dst = dst_.lock();
-    auto ctx = ctx_.lock();
-    if (dst && ctx) {
-      dst->Send(ctx, Value::Tuple { src.name(), Value(v) });
-    }
+    if (dst) dst->Send(ctx_, Value::Tuple { src.name(), Value(v) });
   }
 
   Node* target() const noexcept { return target_; }
 
  private:
   std::weak_ptr<Node::OutSock> dst_;
-  std::weak_ptr<Node::Context> ctx_;
+
+  std::shared_ptr<Node::Context> ctx_;
 
   Node* target_;
 };
