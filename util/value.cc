@@ -217,7 +217,7 @@ try {
   for (size_t i = 0; i < obj.via.array.size; ++i) {
     emplace_back(obj.via.array.ptr[i]);
   }
-} catch (msgpack::type_error& e) {
+} catch (msgpack::type_error&) {
   throw DeserializeException("broken Tuple");
 }
 void Value::Tuple::Serialize(File::Packer& pk) const {
