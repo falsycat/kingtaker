@@ -44,35 +44,31 @@ class GenericDir : public File,
       items_(std::move(items)), lastmod_(lastmod), shown_(shown) {
   }
 
-  static std::unique_ptr<GenericDir> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    try {
-      ItemList items;
+  GenericDir(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+      GenericDir(env, DeserializeItems(env, msgpack::find(obj, "items"s)),
+                 msgpack::as_if(msgpack::find(obj, "lastmod"s), Clock::now()),
+                 msgpack::as_if(msgpack::find(obj, "shown"s), false)) {
+  }
+  static ItemList DeserializeItems(
+      const std::shared_ptr<Env>& env, const msgpack::object& obj) {
+    if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
 
-      auto& obj_items = msgpack::find(obj, "items"s);
-      if (obj_items.type != msgpack::type::MAP) throw msgpack::type_error();
+    ItemList items;
+    for (size_t i = 0; i < obj.via.map.size; ++i) {
+      auto& kv = obj.via.map.ptr[i];
 
-      for (size_t i = 0; i < obj_items.via.map.size; ++i) {
-        auto& kv = obj_items.via.map.ptr[i];
-
-        const auto key = kv.key.as<std::string>();
-        if (!iface::Dir::ValidateName(key)) {
-          throw DeserializeException("invalid name");
-        }
-
-        auto [itr, uniq] = items.insert({key, File::Deserialize(kv.val, env)});
-        if (!uniq) {
-          throw DeserializeException("item name duplication in GenericDir");
-        }
-        assert(itr->second);
+      const auto key = kv.key.as<std::string>();
+      if (!iface::Dir::ValidateName(key)) {
+        throw DeserializeException("invalid name");
       }
-      return std::make_unique<GenericDir>(
-          env,
-          std::move(items),
-          msgpack::as_if(msgpack::find(obj, "lastmod"s), Clock::now()),
-          msgpack::as_if(msgpack::find(obj, "shown"s), false));
-    } catch (msgpack::type_error& e) {
-      throw DeserializeException("broken GenericDir: "s+e.what());
+
+      auto [itr, uniq] = items.insert({key, File::Deserialize(env, kv.val)});
+      if (!uniq) {
+        throw DeserializeException("item name duplication in GenericDir");
+      }
+      assert(itr->second);
     }
+    return items;
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(3);
@@ -278,16 +274,13 @@ class ImGuiConfig : public File {
   static inline TypeInfo kType = TypeInfo::New<ImGuiConfig>(
       "System/ImGuiConfig", "saves and restores ImGui config", {});
 
-  ImGuiConfig(const std::shared_ptr<Env>& env) noexcept :
+  ImGuiConfig(const std::shared_ptr<Env>& env, const std::string& v = "") noexcept :
       File(&kType, env) {
+    ImGui::LoadIniSettingsFromMemory(v.data(), v.size());
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    if (obj.type == msgpack::type::STR) {
-      const auto& str = obj.via.str;
-      ImGui::LoadIniSettingsFromMemory(str.ptr, str.size);
-    }
-    return std::make_unique<ImGuiConfig>(env);
+  ImGuiConfig(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+      ImGuiConfig(env, obj.as<std::string>()) {
   }
   void Serialize(Packer& pk) const noexcept override {
     size_t n;
@@ -310,8 +303,8 @@ class LogView : public File {
       File(&kType, env), shown_(shown) {
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    return std::make_unique<LogView>(env, obj.as<bool>());
+  LogView(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+      LogView(env, obj.as<bool>()) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack(shown_);
@@ -355,18 +348,12 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
       path_(path), sock_name_(sock_name), shown_(shown), enable_(enable) {
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    try {
-      return std::make_unique<ClockPulseGenerator>(
-          env,
-          msgpack::find(obj, "path"s).as<std::string>(),
-          msgpack::find(obj, "sock_name"s).as<std::string>(),
-          msgpack::as_if<bool>(msgpack::find(obj, "shown"s), false),
-          msgpack::as_if<bool>(msgpack::find(obj, "enable"s), false));
-    } catch (msgpack::type_error&) {
-      throw DeserializeException("broken ClockPulseGenerator");
-    }
+  ClockPulseGenerator(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+      ClockPulseGenerator(env,
+                          msgpack::find(obj, "path"s).as<std::string>(),
+                          msgpack::find(obj, "sock_name"s).as<std::string>(),
+                          msgpack::as_if<bool>(msgpack::find(obj, "shown"s), false),
+                          msgpack::as_if<bool>(msgpack::find(obj, "enable"s), false)) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(4);

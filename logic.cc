@@ -35,8 +35,8 @@ class Passthru final : public File, public iface::Node {
     in_.emplace_back(new NodeLambdaInSock(this, "in", std::move(task)));
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object&, const std::shared_ptr<Env>& env) {
-    return std::make_unique<Passthru>(env);
+  Passthru(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+      Passthru(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();

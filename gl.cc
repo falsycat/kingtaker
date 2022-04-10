@@ -813,13 +813,10 @@ class Preview final : public File, public iface::DirItem {
       File(&kType, env), DirItem(DirItem::kNone), shown_(shown) {
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    try {
-      return std::make_unique<Preview>(env, obj.as<bool>());
-    } catch (msgpack::type_error&) {
-      throw DeserializeException("broken GL/Preview");
-    }
+  Preview(const std::shared_ptr<Env>& env, const msgpack::object& obj)
+  try : Preview(env, obj.as<bool>()) {
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken GL/Preview");
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack(shown_);

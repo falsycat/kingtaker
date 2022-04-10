@@ -54,10 +54,10 @@ class Imm final : public File,
     in_.emplace_back(new NodeLambdaInSock(this, "CLK", std::move(receiver)));
   }
 
-  static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    const auto value = Value::Deserialize(msgpack::find(obj, "value"s));
-    const auto size  = msgpack::find(obj, "size"s).as<std::pair<float, float>>();
-    return std::make_unique<Imm>(env, Value(value), ImVec2 {size.first, size.second});
+  Imm(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+      Imm(env,
+          Value(msgpack::find(obj, "value"s)),
+          msgpack::as_if<ImVec2>(msgpack::find(obj, "size"s), {0, 0})) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);
@@ -358,12 +358,10 @@ class ExternalText final : public File,
     Load();
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-    return std::make_unique<ExternalText>(
-        env,
-        msgpack::find(obj, "path"s).as<std::string>(),
-        msgpack::find(obj, "editor_shown"s).as<bool>());
+  ExternalText(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+      ExternalText(env,
+                   msgpack::find(obj, "path"s).as<std::string>(),
+                   msgpack::find(obj, "editor_shown"s).as<bool>()) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);

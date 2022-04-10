@@ -18,8 +18,8 @@ class NodeRedirectContext final : public iface::Node::Context {
   using Node = iface::Node;
 
   NodeRedirectContext(const std::weak_ptr<Node::OutSock>& dst,
-                  const std::weak_ptr<Node::Context>& ctx,
-                  Node*                               target = nullptr) noexcept :
+                      const std::weak_ptr<Node::Context>& ctx,
+                      Node*                               target = nullptr) noexcept :
       dst_(dst), ctx_(ctx), target_(target) {
   }
 
@@ -139,9 +139,8 @@ class LambdaNode final : public File, public iface::Node {
     }
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object&, const std::shared_ptr<Env>& env) noexcept {
-    return std::make_unique<LambdaNode>(env);
+  LambdaNode(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+      LambdaNode(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();

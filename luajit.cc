@@ -162,9 +162,8 @@ class Exec final : public File, public iface::Node {
     in_.emplace_back(new NodeLambdaInSock(this, "send", std::move(task_send)));
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object&, const std::shared_ptr<Env>& env) {
-    return std::make_unique<Exec>(env);
+  Exec(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+      Exec(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
