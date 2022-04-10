@@ -53,21 +53,24 @@ const File::TypeInfo* File::Lookup(const std::string& name) noexcept {
   if (itr == reg.end()) return nullptr;
   return itr->second;
 }
-std::unique_ptr<File> File::Deserialize(const msgpack::object& v, const std::shared_ptr<Env>& env) {
+std::unique_ptr<File> File::Deserialize(const std::shared_ptr<Env>& env, const msgpack::object& v) {
+  std::string tname;
   try {
-    const auto name = msgpack::find(v, "type"s).as<std::string>();
-    const auto type = Lookup(name);
-    if (!type) throw DeserializeException(std::string("unknown file type: ")+name);
-    return type->Deserialize(msgpack::find(v, "param"s), env);
+    tname = msgpack::find(v, "type"s).as<std::string>();
+    const auto type = Lookup(tname);
+
+    if (!type) throw DeserializeException(std::string("unknown file type: ")+tname);
+    return type->Deserialize(env, msgpack::find(v, "param"s));
+
   } catch (msgpack::type_error&) {
-    throw DeserializeException("invalid File data");
+    throw DeserializeException(tname.empty()? "broken File"s: "broken "+tname);
   }
 }
-std::unique_ptr<File> File::Deserialize(std::istream& st, const std::shared_ptr<Env>& env) {
+std::unique_ptr<File> File::Deserialize(const std::shared_ptr<Env>& env, std::istream& st) {
   const std::string buf(std::istreambuf_iterator<char>(st), {});
   msgpack::object_handle obj;
   msgpack::unpack(obj, buf.data(), buf.size());
-  return Deserialize(obj.get(), env);
+  return Deserialize(env, obj.get());
 }
 void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
   pk.pack_map(2);
@@ -81,17 +84,11 @@ void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
 File::TypeInfo::TypeInfo(std::string_view name,
                          std::string_view desc,
                          std::vector<std::type_index>&& iface,
-                         Factory&& f,
-                         AssocFactory&& af,
-                         AssocChecker&& ac,
-                         Deserializer&& d,
-                         GUI&& g) noexcept :
+                         Factory&&      factory,
+                         Deserializer&& deserializer) noexcept :
     name_(name), desc_(desc), iface_(std::move(iface)),
-    factory_(std::move(f)),
-    assoc_factory_(std::move(af)),
-    assoc_checker_(std::move(ac)),
-    deserializer_(std::move(d)),
-    gui_(std::move(g)) {
+    factory_(std::move(factory)),
+    deserializer_(std::move(deserializer)) {
   auto& reg = registry_();
   assert(reg.find(name_) == reg.end());
   reg[name_] = this;

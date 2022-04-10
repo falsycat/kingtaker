@@ -218,7 +218,7 @@ void InitKingtaker() noexcept {
     msgpack::object_handle obj =
         msgpack::unpack(reinterpret_cast<const char*>(kInitialRoot),
                         sizeof(kInitialRoot));
-    root_ = File::Deserialize(obj.get(), env);
+    root_ = File::Deserialize(env, obj.get());
     assert(root_);
     return;
   }
@@ -229,7 +229,7 @@ void InitKingtaker() noexcept {
     if (!st) {
       throw DeserializeException("failed to open: "s+config.string());
     }
-    root_ = File::Deserialize(st, env);
+    root_ = File::Deserialize(env, st);
 
   } catch (msgpack::unpack_error& e) {
     Panic("MessagePack unpack error: "s+e.what());
@@ -317,20 +317,15 @@ void UpdateAppMenu() noexcept {
           auto t = p.second;
           ImGui::MenuItem(t->name().c_str());
           if (ImGui::IsItemHovered()) {
-            if (t->gui()) {
-              t->UpdateGUI();
-            } else {
-              ImGui::BeginTooltip();
-              ImGui::Text("name   : %s", t->name().c_str());
-              ImGui::Text("desc   : %s", t->desc().c_str());
-              ImGui::Text("factory:");
-              ImGui::Indent();
-              if (t->factory())      { ImGui::Bullet(); ImGui::TextUnformatted("New"); }
-              if (t->assocFactory()) { ImGui::Bullet(); ImGui::TextUnformatted("Association"); }
-              if (t->deserializer()) { ImGui::Bullet(); ImGui::TextUnformatted("Deserialize"); }
-              ImGui::Unindent();
-              ImGui::EndTooltip();
-            }
+            ImGui::BeginTooltip();
+            ImGui::Text("name   : %s", t->name().c_str());
+            ImGui::Text("desc   : %s", t->desc().c_str());
+            ImGui::Text("factory:");
+            ImGui::Indent();
+            if (t->factory())      { ImGui::Bullet(); ImGui::TextUnformatted("New"); }
+            if (t->deserializer()) { ImGui::Bullet(); ImGui::TextUnformatted("Deserialize"); }
+            ImGui::Unindent();
+            ImGui::EndTooltip();
           }
         }
         ImGui::EndMenu();

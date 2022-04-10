@@ -49,35 +49,51 @@ class Network : public File, public iface::DirItem, public iface::Node {
   // wrapper struct for node file
   struct NodeHolder final {
    public:
-    static std::unique_ptr<NodeHolder> Create(size_t id, std::unique_ptr<File>&& f) {
-      auto n = File::iface<Node>(f.get());
-      if (!n) return nullptr;
-      return std::make_unique<NodeHolder>(id, std::move(f), n);
-    }
-
     NodeHolder() = delete;
-    NodeHolder(size_t id, std::unique_ptr<File>&& f, Node* n) noexcept :
-        id_(id), file_(std::move(f)), entity_(n), first_(true) {
-      assert(file_);
-      assert(entity_);
-    }
     NodeHolder(size_t                  id,
                std::unique_ptr<File>&& f,
-               Node*                   n,
-               ImVec2&&                p) noexcept :
-        id_(id), file_(std::move(f)), entity_(n), pos_(std::move(p)) {
-      assert(file_);
-      assert(entity_);
+               ImVec2                  pos = {0, 0},
+               bool                    sel = false,
+               bool                    first = true) :
+        id_(id), file_(std::move(f)), entity_(File::iface<iface::Node>(file_.get())),
+        pos_(pos), select_(sel), first_(first) {
+      if (!entity_) throw Exception("File doesn't have Node interface");
     }
+    NodeHolder(const NodeHolder&) = delete;
+    NodeHolder(NodeHolder&&) = delete;
+    NodeHolder& operator=(const NodeHolder&) = delete;
+    NodeHolder& operator=(NodeHolder&&) = delete;
 
-    static std::unique_ptr<NodeHolder> Deserialize(
-        const msgpack::object&, const std::shared_ptr<Env>&);
+    NodeHolder(const std::shared_ptr<Env>& env, const msgpack::object& obj)
+    try : NodeHolder(msgpack::find(obj, "id"s).as<size_t>(),
+                     File::Deserialize(env, msgpack::find(obj, "file"s)),
+                     msgpack::as_if<ImVec2>(msgpack::find(obj, "pos"s), {0, 0}),
+                     msgpack::as_if<bool>(msgpack::find(obj, "select"s), false),
+                     false  /* = first */) {
+    } catch (Exception& e) {
+      throw DeserializeException("broken Node/Network NodeHolder: "+e.msg());
+    }
+    void Serialize(Packer& pk) const noexcept {
+      pk.pack_map(4);
+
+      pk.pack("id"s);
+      pk.pack(id_);
+
+      pk.pack("file"s);
+      file_->SerializeWithTypeInfo(pk);
+
+      pk.pack("pos"s);
+      pk.pack(std::make_pair(pos_.x, pos_.y));
+
+      pk.pack("select"s);
+      pk.pack(select_);
+    }
     void DeserializeLink(const msgpack::object&, const NodeMap&);
-    void Serialize(Packer&) const noexcept;
     void SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept;
 
-    std::unique_ptr<NodeHolder> Clone(size_t id, const std::shared_ptr<Env>& env) const noexcept {
-      return NodeHolder::Create(id, file_->Clone(env));
+    std::unique_ptr<NodeHolder> Clone(
+        size_t id, const std::shared_ptr<Env>& env) const noexcept {
+      return std::make_unique<NodeHolder>(id, file_->Clone(env));
     }
 
     void Setup(Network* owner) noexcept {
@@ -120,21 +136,22 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
   Network(const std::shared_ptr<Env>& env,
           Time lastmod = Clock::now(),
-          NodeHolderList&& nodes = {},
-          size_t next = 0) noexcept :
+          NodeHolderList&& nodes = {}) noexcept :
       File(&kType, env), DirItem(DirItem::kMenu), Node(Node::kNone),
       ctx_(std::make_shared<Context>()),
-      lastmod_(lastmod), nodes_(std::move(nodes)), next_id_(next),
+      lastmod_(lastmod), nodes_(std::move(nodes)),
       history_(this) {
     canvas_.Style.NodeRounding = 0.f;
+    for (auto& node : nodes_) {
+      node->Setup(this);
+      next_id_ = std::max(next_id_, node->id()+1);
+    }
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object&, const std::shared_ptr<Env>&);
+  Network(const std::shared_ptr<Env>&, const msgpack::object&);
+  static NodeHolderList DeserializeNodeHolderList(
+      const std::shared_ptr<Env>&, const msgpack::object&);
   void Serialize(Packer&) const noexcept override;
-
-  void DeserializeGUI(const msgpack::object&) noexcept;
-  void SerializeGUI(Packer&) const noexcept;
 
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override;
 
@@ -350,8 +367,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
       out_.emplace_back(new OutSock(this, "out"));
     }
 
-    static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-      return std::make_unique<InputNode>(env, obj.as<std::string>());
+    InputNode(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+        InputNode(env, obj.as<std::string>()) {
     }
     void Serialize(Packer& pk) const noexcept override {
       pk.pack(name_);
@@ -406,8 +423,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
       in_.emplace_back(new NodeLambdaInSock(this, "in", std::move(handler)));
     }
 
-    static std::unique_ptr<File> Deserialize(const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-      return std::make_unique<OutputNode>(env, obj.as<std::string>());
+    OutputNode(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+        OutputNode(env, obj.as<std::string>()) {
     }
     void Serialize(Packer& pk) const noexcept override {
       pk.pack(name_);
@@ -439,50 +456,53 @@ class Network : public File, public iface::DirItem, public iface::Node {
   };
 };
 
-std::unique_ptr<File> Network::Deserialize(
-    const msgpack::object& obj, const std::shared_ptr<Env>& env) {
+Network::Network(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+    Network(env,
+            msgpack::find(obj, "lastmod"s).as<Time>(),
+            DeserializeNodeHolderList(env, obj)) {
+  const auto gui = msgpack::find(obj, "gui"s);
   try {
-    const auto lastmod = msgpack::find(obj, "lastmod"s).as<Time>();
+    shown_ = msgpack::find(gui, "shown"s).as<bool>();
 
-    const auto next = msgpack::find(obj, "nextId"s).as<size_t>();
+    canvas_.Zoom = msgpack::find(gui, "zoom"s).as<float>();
 
-    auto& obj_nodes = msgpack::find(obj, "nodes"s);
-    if (obj_nodes.type != msgpack::type::ARRAY) throw msgpack::type_error();
-
-    NodeMap nmap(obj_nodes.via.array.size);
-    NodeHolderList nodes(obj_nodes.via.array.size);
-
-    for (size_t i = 0; i < obj_nodes.via.array.size; ++i) {
-      nodes[i] = NodeHolder::Deserialize(obj_nodes.via.array.ptr[i], env);
-      nmap[i]  = &nodes[i]->entity();
-
-      if (nodes[i]->id() == next) {
-        throw DeserializeException("nodeId conflict");
-      }
-    }
-
-    auto& obj_links = msgpack::find(obj, "links"s);
-    if (obj_links.type != msgpack::type::ARRAY) throw msgpack::type_error();
-    if (obj_links.via.array.size > nmap.size()) {
-      throw DeserializeException("broken Network");
-    }
-    for (size_t i = 0; i < obj_links.via.array.size; ++i) {
-      nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
-    }
-
-    auto ret = std::make_unique<Network>(env, lastmod, std::move(nodes), next);
-    ret->DeserializeGUI(msgpack::find(obj, "gui"s));
-    for (auto& h : ret->nodes_) h->Setup(ret.get());
-    return ret;
+    std::pair<float, float> offset;
+    msgpack::find(gui, "offset"s).convert(offset);
+    canvas_.Offset = {offset.first, offset.second};
 
   } catch (msgpack::type_error&) {
-    throw DeserializeException("broken data structure");
+    shown_         = false;
+    canvas_.Zoom   = 1.f;
+    canvas_.Offset = {0, 0};
   }
+}
+Network::NodeHolderList Network::DeserializeNodeHolderList(
+    const std::shared_ptr<Env>& env, const msgpack::object& obj) {
+  auto& obj_nodes = msgpack::find(obj, "nodes"s);
+  if (obj_nodes.type != msgpack::type::ARRAY) throw msgpack::type_error();
+
+  NodeMap        nmap (obj_nodes.via.array.size);
+  NodeHolderList nodes(obj_nodes.via.array.size);
+
+  for (size_t i = 0; i < obj_nodes.via.array.size; ++i) {
+    nodes[i] = std::make_unique<NodeHolder>(env, obj_nodes.via.array.ptr[i]);
+    nmap[i]  = &nodes[i]->entity();
+  }
+
+  auto& obj_links = msgpack::find(obj, "links"s);
+  if (obj_links.type != msgpack::type::ARRAY) throw msgpack::type_error();
+  if (obj_links.via.array.size > nmap.size()) {
+    throw DeserializeException("broken Node/Network: too many link list");
+  }
+  for (size_t i = 0; i < obj_links.via.array.size; ++i) {
+    nodes[i]->DeserializeLink(obj_links.via.array.ptr[i], nmap);
+  }
+  return nodes;
 }
 void Network::Serialize(Packer& pk) const noexcept {
   std::unordered_map<Node*, size_t> idxmap;
 
-  pk.pack_map(5);
+  pk.pack_map(4);
 
   pk.pack("lastmod"s);
   pk.pack(lastmod_);
@@ -501,108 +521,46 @@ void Network::Serialize(Packer& pk) const noexcept {
     h->SerializeLink(pk, idxmap);
   }
 
-  pk.pack("nextId"s);
-  pk.pack(next_id_);
-
   pk.pack("gui"s);
-  SerializeGUI(pk);
-}
+  {
+    pk.pack_map(3);
 
-void Network::DeserializeGUI(const msgpack::object& obj) noexcept {
-  try {
-    shown_ = msgpack::find(obj, "shown"s).as<bool>();
+    pk.pack("shown"s);
+    pk.pack(shown_);
 
-    canvas_.Zoom = msgpack::find(obj, "zoom"s).as<float>();
+    pk.pack("zoom"s);
+    pk.pack(canvas_.Zoom);
 
-    std::pair<float, float> offset;
-    msgpack::find(obj, "offset"s).convert(offset);
-    canvas_.Offset = {offset.first, offset.second};
-
-  } catch (msgpack::type_error&) {
-    shown_         = false;
-    canvas_.Zoom   = 1.f;
-    canvas_.Offset = {0, 0};
+    pk.pack("offset"s);
+    pk.pack(std::make_tuple(canvas_.Offset.x, canvas_.Offset.y));
   }
 }
-void Network::SerializeGUI(Packer& pk) const noexcept {
-  pk.pack_map(3);
 
-  pk.pack("shown"s);
-  pk.pack(shown_);
+void Network::NodeHolder::DeserializeLink(const msgpack::object& obj, const NodeMap& nmap)
+try {
+  if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
+  for (size_t i = 0; i < obj.via.map.size; ++i) {
+    auto  out_name = obj.via.map.ptr[i].key.as<std::string>();
+    auto& out_dst  = obj.via.map.ptr[i].val;
 
-  pk.pack("zoom"s);
-  pk.pack(canvas_.Zoom);
+    auto out = entity_->FindOut(out_name);
+    if (!out) continue;
 
-  pk.pack("offset"s);
-  pk.pack(std::make_tuple(canvas_.Offset.x, canvas_.Offset.y));
-}
-
-std::unique_ptr<Network::NodeHolder> Network::NodeHolder::Deserialize(
-    const msgpack::object& obj, const std::shared_ptr<Env>& env) {
-  try {
-    const size_t id = msgpack::find(obj, "id"s).as<size_t>();
-
-    auto f = File::Deserialize(msgpack::find(obj, "file"s), env);
-    auto n = File::iface<Node>(f.get());
-    if (!n) throw DeserializeException("it's not node");
-
-    std::pair<float, float> p;
-    msgpack::find(obj, "pos"s).convert(p);
-
-    auto h = std::make_unique<NodeHolder>(
-        id, std::move(f), n, ImVec2 {p.first, p.second});
-    try {
-      h->select_ = msgpack::find(obj, "select"s).as<bool>();
-    } catch (msgpack::type_error&) {
-    }
-    return h;
-
-  } catch (msgpack::type_error&) {
-    throw DeserializeException("broken NodeHolder structure");
-  }
-}
-void Network::NodeHolder::Serialize(Packer& pk) const noexcept {
-  pk.pack_map(4);
-
-  pk.pack("id"s);
-  pk.pack(id_);
-
-  pk.pack("file"s);
-  file_->SerializeWithTypeInfo(pk);
-
-  pk.pack("pos"s);
-  pk.pack(std::make_pair(pos_.x, pos_.y));
-
-  pk.pack("select"s);
-  pk.pack(select_);
-}
-
-void Network::NodeHolder::DeserializeLink(const msgpack::object& obj, const NodeMap& nmap) {
-  try {
-    if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
-    for (size_t i = 0; i < obj.via.map.size; ++i) {
-      auto  out_name = obj.via.map.ptr[i].key.as<std::string>();
-      auto& out_dst  = obj.via.map.ptr[i].val;
-
-      auto out = entity_->FindOut(out_name);
-      if (!out) continue;
-
-      for (size_t j = 0; j < out_dst.via.array.size; ++j) {
-        std::pair<size_t, std::string> conn;
-        if (!out_dst.via.array.ptr[j].convert_if_not_nil(conn)) {
-          continue;
-        }
-        if (conn.first >= nmap.size()) throw DeserializeException("missing node");
-
-        auto in = nmap[conn.first]->FindIn(conn.second);
-        if (!in) continue;
-
-        Node::Link(out, in);
+    for (size_t j = 0; j < out_dst.via.array.size; ++j) {
+      std::pair<size_t, std::string> conn;
+      if (!out_dst.via.array.ptr[j].convert_if_not_nil(conn)) {
+        continue;
       }
+      if (conn.first >= nmap.size()) throw DeserializeException("missing node");
+
+      auto in = nmap[conn.first]->FindIn(conn.second);
+      if (!in) continue;
+
+      Node::Link(out, in);
     }
-  } catch (msgpack::type_error&) {
-    throw DeserializeException("broken NodeHolder link");
   }
+} catch (msgpack::type_error&) {
+  throw DeserializeException("broken NodeHolder link");
 }
 void Network::NodeHolder::SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept {
   pk.pack_map(static_cast<uint32_t>(entity_->out().size()));
@@ -688,7 +646,7 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
         auto& t = *p.second;
         if (!t.factory() || !t.CheckImplemented<Node>()) continue;
         if (ImGui::MenuItem(t.name().c_str())) {
-          history_.AddNodeIf(NodeHolder::Create(next_id_++, t.Create(env())));
+          history_.AddNodeIf(std::make_unique<NodeHolder>(next_id_++, t.Create(env())));
         }
         if (ImGui::IsItemHovered()) {
           ImGui::SetTooltip("%s", t.desc().c_str());
@@ -793,7 +751,7 @@ void Network::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
     ImGui::TextUnformatted("name duplication");
   }
   if (submit && !empty && !dup) {
-    history_.AddNodeIf(NodeHolder::Create(
+    history_.AddNodeIf(std::make_unique<NodeHolder>(
             next_id_++, std::make_unique<T>(env(), io_new_name_)));
     io_new_name_ = "";
     ImGui::CloseCurrentPopup();
@@ -1158,9 +1116,8 @@ class Cache final : public File, public iface::DirItem {
       store_(std::make_shared<Store>()) {
   }
 
-  static std::unique_ptr<File> Deserialize(
-      const msgpack::object&, const std::shared_ptr<Env>& env) {
-    return std::make_unique<Cache>(env);
+  Cache(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+      Cache(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();

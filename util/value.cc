@@ -34,31 +34,38 @@ void Value::Serialize(File::Packer& pk) const {
   }
   throw Exception("serialization is not supported on the type");
 }
-Value Value::Deserialize(const msgpack::object& obj) {
-  try {
-    switch (obj.type) {
-    case msgpack::type::BOOLEAN:
-      return Value(obj.via.boolean);
-    case msgpack::type::POSITIVE_INTEGER:
-    case msgpack::type::NEGATIVE_INTEGER:
-      return Value(static_cast<Integer>(obj.via.i64));
-    case msgpack::type::FLOAT:
-      return Value(obj.via.f64);
-    case msgpack::type::STR:
-      return Value(
-          std::string(obj.via.str.ptr, obj.via.str.size));
-    case msgpack::type::MAP: {
-      const auto  type  = msgpack::find(obj, "type"s).as<std::string>();
-      const auto& param = msgpack::find(obj, "param"s);
-      if (type == "tensor") return Tensor::Deserialize(param);
-    } break;
+Value::Value(const msgpack::object& obj)
+try {
+  switch (obj.type) {
+  case msgpack::type::BOOLEAN:
+    v_ = obj.as<Boolean>();
+    return;
+  case msgpack::type::POSITIVE_INTEGER:
+  case msgpack::type::NEGATIVE_INTEGER:
+    v_ = obj.as<Integer>();
+    return;
+  case msgpack::type::FLOAT:
+    v_ = obj.as<float>();
+    return;
+  case msgpack::type::STR:
+    v_ = std::make_shared<String>(obj.as<String>());
+    return;
 
-    default:
-      ;
-    }
-  } catch (msgpack::type_error&) {
+  case msgpack::type::ARRAY:
+    v_ = std::make_shared<Tuple>(obj);
+    return;
+
+  case msgpack::type::MAP: {
+    const auto  type  = msgpack::find(obj, "type"s).as<std::string>();
+    const auto& param = msgpack::find(obj, "param"s);
+    if (type == "tensor") v_ = std::make_shared<Tensor>(param);
   }
-  throw DeserializeException("invalid value");
+  [[fallthrough]];
+  default:
+    throw DeserializeException("unknown value type");
+  }
+} catch (msgpack::type_error&) {
+  throw DeserializeException("broken Value");
 }
 
 const char* Value::StringifyType() const noexcept {
@@ -151,7 +158,7 @@ Value::Tensor::Type Value::Tensor::ParseType(std::string_view v) {
   if (v == "f64") return F64;
   throw Exception("unknown tensor type");
 }
-size_t Value::Tensor::CountSamples(const std::vector<size_t>& dim) {
+size_t Value::Tensor::CountSamples(std::span<size_t> dim) {
   if (dim.size() == 0) {
     throw Exception("empty dimension");
   }
@@ -167,24 +174,19 @@ size_t Value::Tensor::CountSamples(const std::vector<size_t>& dim) {
   return n;
 }
 
-Value::Tensor::Tensor(Type t, std::vector<size_t>&& d, std::vector<uint8_t>&& b) noexcept :
+Value::Tensor::Tensor(Type t, std::vector<size_t>&& d, std::vector<uint8_t>&& b) :
     type_(t), dim_(std::move(d)), buf_(std::move(b)) {
   buf_.resize(CountSamples(dim_) * (t&0xFF)/8);
 }
 
-Value::Tensor Value::Tensor::Deserialize(const msgpack::object& obj) {
-  try {
-    const auto type = Tensor::ParseType(msgpack::find(obj, "type"s).as<std::string>());
-
-    auto dim = msgpack::find(obj, "dim"s).as<std::vector<size_t>>();
-    auto buf = msgpack::find(obj, "buf"s).as<std::vector<uint8_t>>();
-
-    CountSamples(dim);
-    return Tensor(type, std::move(dim), std::move(buf));
-
-  } catch (Exception& e) {
-    throw DeserializeException("invalid tensor: "+e.msg());
-  }
+Value::Tensor::Tensor(const msgpack::object& obj)
+try : Tensor(Tensor::ParseType(msgpack::find(obj, "type"s).as<std::string>()),
+             msgpack::find(obj, "dim"s).as<std::vector<size_t>>(),
+             msgpack::find(obj, "buf"s).as<std::vector<uint8_t>>()) {
+} catch (msgpack::type_error&) {
+  throw DeserializeException("broken Tensor");
+} catch (Exception& e) {
+  throw DeserializeException("broken Tensor: "+e.msg());
 }
 void Value::Tensor::Serialize(File::Packer& pk) const noexcept {
   pk.pack_map(3);
@@ -207,6 +209,20 @@ std::string Value::Tensor::StringifyMeta() const noexcept {
     ret += std::to_string(v);
   }
   return ret;
+}
+
+
+Value::Tuple::Tuple(const msgpack::object& obj)
+try {
+  for (size_t i = 0; i < obj.via.array.size; ++i) {
+    emplace_back(obj.via.array.ptr[i]);
+  }
+} catch (msgpack::type_error&) {
+  throw DeserializeException("broken Tuple");
+}
+void Value::Tuple::Serialize(File::Packer& pk) const {
+  pk.pack_array(static_cast<uint32_t>(size()));
+  for (auto& v : *this) v.Serialize(pk);
 }
 
 }  // namespace kingtaker

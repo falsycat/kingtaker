@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -71,8 +72,8 @@ class Value final {
   Value& operator=(const Value&) = default;
   Value& operator=(Value&&) = default;
 
+  Value(const msgpack::object&);
   void Serialize(File::Packer&) const;
-  static Value Deserialize(const msgpack::object&);
 
   const char* StringifyType() const noexcept;
   std::string Stringify(size_t max = 64) const noexcept;
@@ -238,18 +239,18 @@ class Value::Tensor final {
 
   static const char* StringifyType(Type) noexcept;
   static Type ParseType(std::string_view);
-  static size_t CountSamples(const std::vector<size_t>&);
+  static size_t CountSamples(std::span<size_t>);
 
   Tensor() = delete;
-  Tensor(Type t, const std::vector<size_t>& d) noexcept : Tensor(t, std::vector<size_t>(d)) { }
-  Tensor(Type t, std::vector<size_t>&& d) noexcept : Tensor(t, std::move(d), {}) { }
-  Tensor(Type, std::vector<size_t>&&, std::vector<uint8_t>&&) noexcept;
+  Tensor(Type t, const std::vector<size_t>& d) : Tensor(t, std::vector<size_t>(d)) { }
+  Tensor(Type t, std::vector<size_t>&& d) : Tensor(t, std::move(d), {}) { }
+  Tensor(Type, std::vector<size_t>&&, std::vector<uint8_t>&&);
   Tensor(const Tensor&) = default;
   Tensor(Tensor&&) = default;
   Tensor& operator=(const Tensor&) = default;
   Tensor& operator=(Tensor&&) = default;
 
-  static Tensor Deserialize(const msgpack::object& obj);
+  Tensor(const msgpack::object&);
   void Serialize(File::Packer&) const noexcept;
 
   std::string StringifyMeta() const noexcept;
@@ -348,6 +349,9 @@ std::shared_ptr<T> Value::dataPtr() const {
 class Value::Tuple final : public std::vector<Value> {
  public:
   using vector::vector;
+
+  Tuple(const msgpack::object&);
+  void Serialize(File::Packer&) const;
 
   const Value& operator[](size_t idx) const {
     if (idx >= size()) {
