@@ -17,11 +17,11 @@
 #include <linalg.hh>
 
 #include "iface/dir.hh"
-#include "iface/history.hh"
 #include "iface/memento.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/history.hh"
 #include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
@@ -34,7 +34,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo kType = TypeInfo::New<Network>(
       "Node/Network", "manages multiple Nodes and connections between them",
-      {typeid(iface::DirItem), typeid(iface::History)});
+      {typeid(iface::DirItem)});
 
   using IndexMap = std::unordered_map<Node*, size_t>;
   using NodeMap  = std::vector<Node*>;
@@ -107,7 +107,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       if (inter) inter->Teardown(owner);
     }
 
-    std::unique_ptr<iface::History::Command> WatchMemento() noexcept;
+    std::unique_ptr<HistoryCommand> WatchMemento() noexcept;
 
     void UpdateNode(Network*, RefStack&) noexcept;
     void UpdateWindow(RefStack&, Event&) noexcept;
@@ -202,8 +202,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem, iface::History, iface::Node>(t).
-        Select(this, &history_);
+    return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
   }
 
  private:
@@ -248,7 +247,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
 
   // History interface implementation
-  class History : public iface::SimpleHistory<> {
+  class History : public kingtaker::History<> {
    public:
     History(Network* o) : owner_(o) { }
 
@@ -855,10 +854,10 @@ void Network::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&)
   ImGui::Text("%s >OUT", ctx_sock_->name().c_str());
 }
 
-std::unique_ptr<iface::History::Command> Network::NodeHolder::WatchMemento() noexcept {
+std::unique_ptr<HistoryCommand> Network::NodeHolder::WatchMemento() noexcept {
   if (!memento_) return nullptr;
 
-  class MementoCommand final : public iface::History::Command {
+  class MementoCommand final : public HistoryCommand {
    public:
     MementoCommand(NodeHolder* h, const std::shared_ptr<iface::Memento::Tag>& tag) noexcept :
         holder_(h), tag_(tag) {
@@ -886,7 +885,7 @@ std::unique_ptr<iface::History::Command> Network::NodeHolder::WatchMemento() noe
 }
 
 // a command for link creation or removal
-class Network::History::LinkSwapCommand : public Command {
+class Network::History::LinkSwapCommand : public HistoryCommand {
  public:
   enum Type { kLink, kUnlink, };
 
@@ -933,7 +932,7 @@ void Network::History::Unlink(ConnList&& conns) noexcept {
 }
 
 // a command for node creation or removal
-class Network::History::SwapCommand : public Command {
+class Network::History::SwapCommand : public HistoryCommand {
  public:
   SwapCommand(Network* o, NodeHolderList&& h = {}) :
       owner_(o), holders_(std::move(h)) {
