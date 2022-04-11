@@ -198,7 +198,6 @@ class Network : public File, public iface::DirItem, public iface::Node {
   void UpdateCanvasMenu(RefStack&) noexcept;
   template <typename T, typename U>
   void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   Time lastmod() const noexcept override {
     return lastmod_;
@@ -822,62 +821,6 @@ void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
   ref.Pop();
 }
 
-void Network::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
-  const auto em   = ImGui::GetFontSize();
-  const auto line = ImGui::GetCursorPosY();
-  ImGui::NewLine();
-
-  ImGui::BeginGroup();
-  if (in_.size() || out_.size()) {
-    ImGui::BeginGroup();
-    for (auto& in : in_) {
-      const auto c = in->name().c_str();
-      if (ImNodes::BeginInputSlot(c, 1)) {
-        gui::NodeSocket();
-        ImNodes::EndSlot();
-      }
-      ImGui::SameLine();
-      ImGui::TextUnformatted(c);
-    }
-    ImGui::EndGroup();
-
-    ImGui::SameLine();
-    ImGui::Dummy({2*em, 1});
-    ImGui::SameLine();
-
-    float wmax = 0;
-    for (auto& out : out_) {
-      wmax = std::max(wmax, ImGui::CalcTextSize(out->name().c_str()).x);
-    }
-    ImGui::BeginGroup();
-    for (auto& out : out_) {
-      const auto c = out->name().c_str();
-      const auto w = ImGui::CalcTextSize(c).x;
-
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (wmax-w));
-      ImGui::TextUnformatted(c);
-
-      ImGui::SameLine();
-      if (ImNodes::BeginOutputSlot(c, 1)) {
-        gui::NodeSocket();
-        ImNodes::EndSlot();
-      }
-    }
-    ImGui::EndGroup();
-  } else {
-    ImGui::TextDisabled("No I/O");
-  }
-  ImGui::EndGroup();
-
-  static const char* title = "Network";
-  const auto w  = ImGui::GetItemRectSize().x;
-  const auto tw = ImGui::CalcTextSize(title).x;
-  if (w > tw) {
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w-tw)/2);
-  }
-  ImGui::SetCursorPosY(line);
-  ImGui::TextUnformatted("Network");
-}
 void Network::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   auto owner = ref.FindParent<Network>();
   if (!owner) {
