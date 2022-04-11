@@ -59,18 +59,19 @@ target_sources(kingtaker
     value.cc
 
     iface/dir.hh
-    iface/factory.hh
-    iface/history.hh
+    iface/memento.hh
     iface/node.hh
 
     util/format.hh
     util/gl.hh
     util/gui.hh
     util/gui.cc
+    util/history.hh
     util/keymap.hh
     util/keymap.cc
     util/luajit.hh
     util/luajit.cc
+    util/memento.hh
     util/node.hh
     util/notify.hh
     util/notify.cc

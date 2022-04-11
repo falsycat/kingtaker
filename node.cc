@@ -17,11 +17,11 @@
 #include <linalg.hh>
 
 #include "iface/dir.hh"
-#include "iface/factory.hh"
-#include "iface/history.hh"
+#include "iface/memento.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
+#include "util/history.hh"
 #include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
@@ -34,7 +34,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo kType = TypeInfo::New<Network>(
       "Node/Network", "manages multiple Nodes and connections between them",
-      {typeid(iface::DirItem), typeid(iface::History)});
+      {typeid(iface::DirItem)});
 
   using IndexMap = std::unordered_map<Node*, size_t>;
   using NodeMap  = std::vector<Node*>;
@@ -50,13 +50,15 @@ class Network : public File, public iface::DirItem, public iface::Node {
   struct NodeHolder final {
    public:
     NodeHolder() = delete;
-    NodeHolder(size_t                  id,
-               std::unique_ptr<File>&& f,
+    NodeHolder(std::unique_ptr<File>&& f,
+               size_t                  id,
                ImVec2                  pos = {0, 0},
                bool                    sel = false,
                bool                    first = true) :
-        id_(id), file_(std::move(f)), entity_(File::iface<iface::Node>(file_.get())),
-        pos_(pos), select_(sel), first_(first) {
+        file_(std::move(f)),
+        entity_(File::iface<iface::Node>(file_.get())),
+        memento_(File::iface<iface::Memento>(file_.get())),
+        id_(id), pos_(pos), select_(sel), first_(first) {
       if (!entity_) throw Exception("File doesn't have Node interface");
     }
     NodeHolder(const NodeHolder&) = delete;
@@ -65,8 +67,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
     NodeHolder& operator=(NodeHolder&&) = delete;
 
     NodeHolder(const std::shared_ptr<Env>& env, const msgpack::object& obj)
-    try : NodeHolder(msgpack::find(obj, "id"s).as<size_t>(),
-                     File::Deserialize(env, msgpack::find(obj, "file"s)),
+    try : NodeHolder(File::Deserialize(env, msgpack::find(obj, "file"s)),
+                     msgpack::find(obj, "id"s).as<size_t>(),
                      msgpack::as_if<ImVec2>(msgpack::find(obj, "pos"s), {0, 0}),
                      msgpack::as_if<bool>(msgpack::find(obj, "select"s), false),
                      false  /* = first */) {
@@ -93,7 +95,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     std::unique_ptr<NodeHolder> Clone(
         size_t id, const std::shared_ptr<Env>& env) const noexcept {
-      return std::make_unique<NodeHolder>(id, file_->Clone(env));
+      return std::make_unique<NodeHolder>(file_->Clone(env), id);
     }
 
     void Setup(Network* owner) noexcept {
@@ -105,30 +107,35 @@ class Network : public File, public iface::DirItem, public iface::Node {
       if (inter) inter->Teardown(owner);
     }
 
+    std::unique_ptr<HistoryCommand> WatchMemento() noexcept;
+
     void UpdateNode(Network*, RefStack&) noexcept;
     void UpdateWindow(RefStack&, Event&) noexcept;
 
     void Select() noexcept { select_ = true; }
     void Unselect() noexcept { select_ = false; }
 
-    size_t id() const noexcept { return id_; }
     File& file() const noexcept { return *file_; }
     Node& entity() const noexcept { return *entity_; }
 
+    size_t id() const noexcept { return id_; }
     const ImVec2& pos() const noexcept { return pos_; }
 
    private:
-    // permanentized
-    size_t id_;
-
     std::unique_ptr<File> file_;
     Node*                 entity_;
+    iface::Memento*       memento_;
+
+    // permanentized
+    size_t id_;
 
     ImVec2 pos_    = {0, 0};
     bool   select_ = false;
 
     // volatile
     bool first_ = false;
+
+    std::shared_ptr<iface::Memento::Tag> last_tag_;
   };
   using NodeHolderList    = std::vector<std::unique_ptr<NodeHolder>>;
   using NodeHolderRefList = std::vector<NodeHolder*>;
@@ -187,16 +194,15 @@ class Network : public File, public iface::DirItem, public iface::Node {
   void Update(RefStack& ref, Event& ev) noexcept override;
   void UpdateMenu(RefStack&) noexcept override;
   void UpdateCanvas(RefStack&) noexcept;
+  void UpdateCanvasMenu(RefStack&) noexcept;
   template <typename T, typename U>
   void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
 
   Time lastmod() const noexcept override {
     return lastmod_;
   }
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem, iface::History, iface::Node>(t).
-        Select(this, &history_);
+    return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
   }
 
  private:
@@ -241,7 +247,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
 
   // History interface implementation
-  class History : public iface::SimpleHistory<> {
+  class History : public kingtaker::History<> {
    public:
     History(Network* o) : owner_(o) { }
 
@@ -641,52 +647,17 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
 
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem()) {
-    if (ImGui::BeginMenu("New")) {
-      for (auto& p : File::registry()) {
-        auto& t = *p.second;
-        if (!t.factory() || !t.CheckImplemented<Node>()) continue;
-        if (ImGui::MenuItem(t.name().c_str())) {
-          history_.AddNodeIf(std::make_unique<NodeHolder>(next_id_++, t.Create(env())));
-        }
-        if (ImGui::IsItemHovered()) {
-          ImGui::SetTooltip("%s", t.desc().c_str());
-        }
-      }
-      ImGui::Separator();
-      if (ImGui::BeginMenu("Input")) {
-        UpdateNewIO<InputNode>(in_);
-        ImGui::EndMenu();
-      }
-      if (ImGui::BeginMenu("Output")) {
-        UpdateNewIO<OutputNode>(out_);
-        ImGui::EndMenu();
-      }
-      ImGui::EndMenu();
-    }
-
-    ImGui::Separator();
-    if (ImGui::MenuItem("Undo")) {
-      history_.Move(-1);
-    }
-    if (ImGui::MenuItem("Redo")) {
-      history_.Move(1);
-    }
-
-    ImGui::Separator();
-    if (ImGui::MenuItem("Clear history")) {
-      history_.Clear();
-    }
-    if (ImGui::MenuItem("Clear entire context")) {
-      Queue::main().Push([this]() { ctx_ = std::make_shared<Context>(); });
-    }
+    UpdateCanvasMenu(ref);
     ImGui::EndPopup();
   }
   gui::NodeCanvasSetZoom();
 
+  // update children
   for (auto& h : nodes_) {
     h->UpdateNode(this, ref);
   }
 
+  // handle removed connections
   ConnList rm_conns;
   for (auto& h : nodes_) {
     auto node = &h->entity();
@@ -709,6 +680,7 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
     history_.Unlink(std::move(rm_conns));
   }
 
+  // handle new connection
   void* inptr;
   void* outptr;
   const char* srcs;
@@ -722,8 +694,55 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
     if (src && dst) history_.Link({{dst, src}});
   }
 
+  // detect memento changes
+  for (auto& h : nodes_) {
+    if (auto cmd = h->WatchMemento()) {
+      history_.AddSilently(std::move(cmd));
+    }
+  }
+
   gui::NodeCanvasResetZoom();
   ImNodes::EndCanvas();
+}
+void Network::UpdateCanvasMenu(RefStack&) noexcept {
+  if (ImGui::BeginMenu("New")) {
+    for (auto& p : File::registry()) {
+      auto& t = *p.second;
+      if (!t.factory() || !t.CheckImplemented<Node>()) continue;
+      if (ImGui::MenuItem(t.name().c_str())) {
+        history_.AddNodeIf(std::make_unique<NodeHolder>(t.Create(env()), next_id_++));
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", t.desc().c_str());
+      }
+    }
+    ImGui::Separator();
+    if (ImGui::BeginMenu("Input")) {
+      UpdateNewIO<InputNode>(in_);
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Output")) {
+      UpdateNewIO<OutputNode>(out_);
+      ImGui::EndMenu();
+    }
+    ImGui::EndMenu();
+  }
+
+  ImGui::Separator();
+  if (ImGui::MenuItem("Undo")) {
+    history_.Move(-1);
+  }
+  if (ImGui::MenuItem("Redo")) {
+    history_.Move(1);
+  }
+
+  ImGui::Separator();
+  if (ImGui::MenuItem("Clear history")) {
+    history_.Clear();
+  }
+  if (ImGui::MenuItem("Clear entire context")) {
+    Queue::main().Push([this]() { ctx_ = std::make_shared<Context>(); });
+  }
 }
 template <typename T, typename U>
 void Network::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
@@ -752,7 +771,7 @@ void Network::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
   }
   if (submit && !empty && !dup) {
     history_.AddNodeIf(std::make_unique<NodeHolder>(
-            next_id_++, std::make_unique<T>(env(), io_new_name_)));
+            std::make_unique<T>(env(), io_new_name_), next_id_++));
     io_new_name_ = "";
     ImGui::CloseCurrentPopup();
   }
@@ -800,62 +819,6 @@ void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
   ref.Pop();
 }
 
-void Network::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
-  const auto em   = ImGui::GetFontSize();
-  const auto line = ImGui::GetCursorPosY();
-  ImGui::NewLine();
-
-  ImGui::BeginGroup();
-  if (in_.size() || out_.size()) {
-    ImGui::BeginGroup();
-    for (auto& in : in_) {
-      const auto c = in->name().c_str();
-      if (ImNodes::BeginInputSlot(c, 1)) {
-        gui::NodeSocket();
-        ImNodes::EndSlot();
-      }
-      ImGui::SameLine();
-      ImGui::TextUnformatted(c);
-    }
-    ImGui::EndGroup();
-
-    ImGui::SameLine();
-    ImGui::Dummy({2*em, 1});
-    ImGui::SameLine();
-
-    float wmax = 0;
-    for (auto& out : out_) {
-      wmax = std::max(wmax, ImGui::CalcTextSize(out->name().c_str()).x);
-    }
-    ImGui::BeginGroup();
-    for (auto& out : out_) {
-      const auto c = out->name().c_str();
-      const auto w = ImGui::CalcTextSize(c).x;
-
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (wmax-w));
-      ImGui::TextUnformatted(c);
-
-      ImGui::SameLine();
-      if (ImNodes::BeginOutputSlot(c, 1)) {
-        gui::NodeSocket();
-        ImNodes::EndSlot();
-      }
-    }
-    ImGui::EndGroup();
-  } else {
-    ImGui::TextDisabled("No I/O");
-  }
-  ImGui::EndGroup();
-
-  static const char* title = "Network";
-  const auto w  = ImGui::GetItemRectSize().x;
-  const auto tw = ImGui::CalcTextSize(title).x;
-  if (w > tw) {
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w-tw)/2);
-  }
-  ImGui::SetCursorPosY(line);
-  ImGui::TextUnformatted("Network");
-}
 void Network::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
   auto owner = ref.FindParent<Network>();
   if (!owner) {
@@ -891,8 +854,38 @@ void Network::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&)
   ImGui::Text("%s >OUT", ctx_sock_->name().c_str());
 }
 
+std::unique_ptr<HistoryCommand> Network::NodeHolder::WatchMemento() noexcept {
+  if (!memento_) return nullptr;
+
+  class MementoCommand final : public HistoryCommand {
+   public:
+    MementoCommand(NodeHolder* h, const std::shared_ptr<iface::Memento::Tag>& tag) noexcept :
+        holder_(h), tag_(tag) {
+    }
+    void Apply() override { Exec(); }
+    void Revert() override { Exec(); }
+   private:
+    NodeHolder* holder_;
+    std::shared_ptr<iface::Memento::Tag> tag_;
+
+    void Exec() noexcept {
+      if (holder_->last_tag_.get() == tag_.get()) return;
+      holder_->last_tag_ = tag_;
+      tag_ = tag_->Restore();
+    }
+  };
+
+  const auto ptag = std::move(last_tag_);
+  last_tag_ = memento_->Save();
+
+  if (ptag && ptag.get() != last_tag_.get()) {
+    return std::make_unique<MementoCommand>(this, ptag);
+  }
+  return nullptr;
+}
+
 // a command for link creation or removal
-class Network::History::LinkSwapCommand : public Command {
+class Network::History::LinkSwapCommand : public HistoryCommand {
  public:
   enum Type { kLink, kUnlink, };
 
@@ -939,7 +932,7 @@ void Network::History::Unlink(ConnList&& conns) noexcept {
 }
 
 // a command for node creation or removal
-class Network::History::SwapCommand : public Command {
+class Network::History::SwapCommand : public HistoryCommand {
  public:
   SwapCommand(Network* o, NodeHolderList&& h = {}) :
       owner_(o), holders_(std::move(h)) {
