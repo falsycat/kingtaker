@@ -17,7 +17,6 @@
 #include <linalg.hh>
 
 #include "iface/dir.hh"
-#include "iface/factory.hh"
 #include "iface/history.hh"
 #include "iface/memento.hh"
 #include "iface/node.hh"

@@ -14,7 +14,6 @@
 #include <ImNodes.h>
 
 #include "iface/dir.hh"
-#include "iface/factory.hh"
 #include "iface/memento.hh"
 #include "iface/node.hh"
 
@@ -31,13 +30,12 @@ namespace kingtaker {
 namespace {
 
 class Imm final : public File,
-    public iface::Factory<Value>,
     public iface::DirItem,
     public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Imm>(
       "Value/Imm", "immediate value",
-      {typeid(iface::Factory<Value>), typeid(iface::Memento), typeid(iface::DirItem), typeid(iface::Node)});
+      {typeid(iface::Memento), typeid(iface::DirItem), typeid(iface::Node)});
 
   Imm(const std::shared_ptr<Env>& env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
@@ -69,10 +67,6 @@ class Imm final : public File,
   std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
     const auto& data = mem_->data();
     return std::make_unique<Imm>(env, Value(data.value), data.size);
-  }
-
-  Value Create() noexcept override {
-    return mem_->data().value;
   }
 
   void UpdateTree(RefStack&) noexcept override;
@@ -367,184 +361,5 @@ class TuplePop final : public LambdaNodeDriver {
 
   std::weak_ptr<Context> ctx_;
 };
-
-
-class ExternalText final : public File,
-    public iface::DirItem,
-    public iface::Factory<Value> {
- public:
-  static inline TypeInfo type_ = TypeInfo::New<ExternalText>(
-      "Value/ExternalText", "text data from a native file",
-      {typeid(iface::DirItem), typeid(iface::Factory<Value>)});
-
-  ExternalText(const std::shared_ptr<Env>& env, const std::string& path = "", bool editor_shown = false) noexcept :
-      File(&type_, env), DirItem(kMenu),
-      path_(path), editor_shown_(editor_shown),
-      str_(std::make_shared<std::string>()) {
-    Load();
-  }
-
-  ExternalText(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
-      ExternalText(env,
-                   msgpack::find(obj, "path"s).as<std::string>(),
-                   msgpack::find(obj, "editor_shown"s).as<bool>()) {
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack_map(2);
-
-    pk.pack("path"s);
-    pk.pack(path_);
-
-    pk.pack("editor_shown");
-    pk.pack(editor_shown_);
-  }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
-    return std::make_unique<ExternalText>(env, path_);
-  }
-
-  Value Create() noexcept override {
-    assert(str_);
-    return Value(str_);
-  }
-
-  void Update(RefStack&, Event&) noexcept override;
-  void UpdateMenu(RefStack&) noexcept override;
-
-  Time lastmod() const noexcept override { return lastmod_; }
-
-  void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem, iface::Factory<Value>>(t).Select(this);
-  }
-
- private:
-  void Save() noexcept {
-    if (path_.empty()) return;
-
-    std::ofstream ofs(path_);
-    ofs << *str_;
-
-    save_failure_ = false;
-    if (ofs.fail()) {
-      save_failure_ = true;
-      return;
-    }
-    modified_ = false;
-  }
-  bool Load(const std::string& path = "") noexcept {
-    input_path_load_failure_ = true;
-
-    const auto& p      = path.size()? path: path_;
-    const auto  target = env()->path().parent_path() / p;
-
-    const auto xx = env()->path().c_str();
-    (void) xx;
-
-    std::string str;
-    try {
-      // TODO(falsycat): make async
-      std::ifstream ifs(target, std::ios::binary);
-
-      str = std::string(std::istreambuf_iterator<char>(ifs),
-                        std::istreambuf_iterator<char>());
-      if (ifs.fail()) return false;
-    } catch (std::exception&) {
-      return false;
-    }
-
-    lastmod_ = Clock::now();
-
-    modified_     = false;
-    save_failure_ = false;
-
-    path_ = p;
-    str_  = std::make_shared<std::string>(std::move(str));
-
-    input_path_load_failure_ = false;
-    return true;
-  }
-
-  // permanentized params
-  std::string path_;
-  bool        editor_shown_;
-
-  // volatile params
-  std::shared_ptr<std::string> str_;
-
-  Time lastmod_;
-
-  std::string input_path_;
-  bool        input_path_load_failure_ = false;
-
-  bool modified_     = false;
-  bool save_failure_ = false;
-};
-void ExternalText::Update(RefStack& ref, Event& ev) noexcept {
-  const auto em = ImGui::GetFontSize();
-
-  if (editor_shown_) {
-    ImGui::SetNextWindowSize({16*em, 16*em}, ImGuiCond_FirstUseEver);
-
-    constexpr auto kWinFlags = ImGuiWindowFlags_MenuBar;
-    if (gui::BeginWindow(this, "TextEditor", ref, ev, &editor_shown_, kWinFlags)) {
-      if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-          if (ImGui::MenuItem("Save")) {
-            Save();
-          }
-          if (ImGui::BeginMenu("Load")) {
-            constexpr auto kPathFlags = ImGuiInputTextFlags_EnterReturnsTrue;
-            constexpr auto kPathHint  = "path to native file";
-            if (ImGui::InputTextWithHint("##InputPath", kPathHint, &input_path_, kPathFlags)) {
-              if (Load(input_path_)) {
-                input_path_              = "";
-                input_path_load_failure_ = false;
-                ImGui::CloseCurrentPopup();
-              }
-            }
-            ImGui::SetKeyboardFocusHere(-1);
-
-            if (input_path_load_failure_) {
-              ImGui::Bullet();
-              ImGui::TextUnformatted("load failure");
-            }
-            ImGui::EndMenu();
-          }
-          if (ImGui::MenuItem("Reload")) {
-            Load();
-          }
-          ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("Edit")) {
-          ImGui::EndMenu();
-        }
-        ImGui::EndMenuBar();
-      }
-
-      if (path_.empty()) {
-        ImGui::TextUnformatted("(New File):");
-      } else {
-        ImGui::Text("%s:", path_.c_str());
-      }
-      if (modified_) {
-        ImGui::SameLine();
-        ImGui::Text("(modified)");
-      }
-      if (save_failure_) {
-        ImGui::SameLine();
-        ImGui::Text("(save error)");
-      }
-
-      if (1 != str_.use_count()) str_ = std::make_shared<std::string>(*str_);
-      if (ImGui::InputTextMultiline("##Editor", str_.get(), {-FLT_MIN, -FLT_MIN})) {
-        lastmod_  = Clock::now();
-        modified_ = true;
-      }
-    }
-    gui::EndWindow();
-  }
-}
-void ExternalText::UpdateMenu(RefStack&) noexcept {
-  ImGui::MenuItem("Text Editor", nullptr, &editor_shown_);
-}
 
 } }  // namespace kingtaker
