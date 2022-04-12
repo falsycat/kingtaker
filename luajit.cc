@@ -176,7 +176,7 @@ class Exec final : public File, public iface::Node {
     std::unique_lock<std::mutex> k(udata_->mtx);
     udata_->path = ref.GetFullPath();
   }
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -207,7 +207,7 @@ class Exec final : public File, public iface::Node {
     static std::shared_ptr<ContextData> Get(
         const std::shared_ptr<UniversalData>& udata,
         const std::shared_ptr<Context>&       ctx) noexcept {
-      return ctx->GetOrNew<ContextData>(udata->self, udata, ctx);
+      return ctx->data<ContextData>(udata->self, udata, ctx);
     }
     static void Push(lua_State* L, const std::shared_ptr<ContextData>& cdata) {
       dev_.NewObjWithoutMeta<std::weak_ptr<ContextData>>(L, cdata);
@@ -337,7 +337,7 @@ class Exec final : public File, public iface::Node {
     dev_.Queue(std::move(task));
   }
 };
-void Exec::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+void Exec::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::TextUnformatted("LuaJIT Exec");
 
   ImGui::BeginGroup();

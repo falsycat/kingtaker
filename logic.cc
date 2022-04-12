@@ -22,8 +22,7 @@ class Passthru final : public File, public iface::Node {
       "Logic/Passthru", "passes all inputs into output directly",
       {typeid(iface::Node)});
 
-  Passthru(Env* env) noexcept :
-      File(&kType, env), Node(kNone) {
+  Passthru(Env* env) noexcept : File(&kType, env), Node(kNone) {
     out_.emplace_back(new OutSock(this, "out"));
 
     std::weak_ptr<OutSock> wout = out_[0];
@@ -45,13 +44,13 @@ class Passthru final : public File, public iface::Node {
     return std::make_unique<Passthru>(env);
   }
 
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
   }
 };
-void Passthru::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
+void Passthru::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
   ImGui::TextUnformatted("PASSTHRU");
 
   if (ImNodes::BeginInputSlot("in", 1)) {
@@ -173,7 +172,8 @@ class Await final : public LambdaNodeDriver {
   size_t count_ = 0;
 
   size_t expect() const noexcept {
-    return owner_->in(0)->src().size();
+    auto ctx = ctx_.lock();
+    return ctx? ctx->srcOf(owner_->in(0).get()).size(): 0;
   }
 };
 

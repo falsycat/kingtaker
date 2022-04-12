@@ -73,6 +73,7 @@ target_sources(kingtaker
     util/luajit.cc
     util/memento.hh
     util/node.hh
+    util/node.cc
     util/notify.hh
     util/notify.cc
     util/ptr_selector.hh

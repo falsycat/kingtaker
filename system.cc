@@ -333,7 +333,6 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
                       bool               shown     = false,
                       bool               enable    = false) noexcept :
       File(&kType, env), DirItem(kNone),
-      nctx_(std::make_shared<iface::Node::Context>()),
       path_(path), sock_name_(sock_name), shown_(shown), enable_(enable) {
   }
 
@@ -378,9 +377,6 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
   }
 
  private:
-  std::shared_ptr<iface::Node::Context> nctx_;
-
-
   // permanentized params
   std::string path_;
   std::string sock_name_;
@@ -394,13 +390,16 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
 
   void Emit(const RefStack& ref) noexcept {
     try {
-      auto n = File::iface<iface::Node>(&*ref.Resolve(path_));
+      auto target = ref.Resolve(path_);
+
+      auto n = File::iface<iface::Node>(&*target);
       if (!n) throw Exception("target doesn't have Node interface");
 
-      auto sock = n->FindIn(sock_name_);
+      auto sock = n->in(sock_name_);
       if (!sock) throw Exception("missing input socket, "+sock_name_);
 
-      sock->Receive(nctx_, Value::Pulse());
+      auto ctx = std::make_shared<iface::Node::Context>(target.GetFullPath());
+      sock->Receive(ctx, Value::Pulse());
     } catch (Exception& e) {
       notify::Warn(ref, e.msg());
       enable_ = false;
@@ -426,13 +425,6 @@ void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
       }
     }
     if (enable_) ImGui::EndDisabled();
-
-    // context clear button
-    ImGui::SameLine();
-    if (ImGui::Button("X")) {
-      nctx_ = std::make_shared<iface::Node::Context>();
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("clears execution context");
 
     // pulse emit button
     ImGui::SameLine();

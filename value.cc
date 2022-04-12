@@ -70,7 +70,7 @@ class Imm final : public File,
   }
 
   void UpdateTree(RefStack&) noexcept override;
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
   void UpdateTypeChanger(bool mini = false) noexcept;
   void UpdateEditor() noexcept;
 
@@ -115,7 +115,7 @@ void Imm::UpdateTree(RefStack&) noexcept {
   ImGui::SameLine();
   UpdateEditor();
 }
-void Imm::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+void Imm::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::TextUnformatted("IMM:");
   ImGui::SameLine();
   UpdateTypeChanger(true);
