@@ -5,7 +5,7 @@
 
 namespace kingtaker {
 
-void Value::Serialize(File::Packer& pk) const {
+void Value::Serialize(Packer& pk) const {
   if (isInteger()) {
     pk.pack(integer());
     return;
@@ -188,7 +188,7 @@ try : Tensor(Tensor::ParseType(msgpack::find(obj, "type"s).as<std::string>()),
 } catch (Exception& e) {
   throw DeserializeException("broken Tensor: "+e.msg());
 }
-void Value::Tensor::Serialize(File::Packer& pk) const noexcept {
+void Value::Tensor::Serialize(Packer& pk) const noexcept {
   pk.pack_map(3);
 
   pk.pack("type"s);
@@ -220,7 +220,7 @@ try {
 } catch (msgpack::type_error&) {
   throw DeserializeException("broken Tuple");
 }
-void Value::Tuple::Serialize(File::Packer& pk) const {
+void Value::Tuple::Serialize(Packer& pk) const {
   pk.pack_array(static_cast<uint32_t>(size()));
   for (auto& v : *this) v.Serialize(pk);
 }

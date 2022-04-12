@@ -31,7 +31,7 @@ struct Item final {
        File::Path&&         path_ = {},
        File*                fptr_ = nullptr) noexcept :
     src(src_), lv(lv_), text(text_), path(std::move(path_)), fptr(fptr_),
-    time(File::Clock::now()) {
+    time(Clock::now()) {
   }
   Item(std::source_location src_,
        Level                lv_,
@@ -53,7 +53,7 @@ struct Item final {
   File::Path path;
   File* fptr = nullptr;  // don't refer the entity (use it as ID)
 
-  File::Time time;
+  Time time;
 
   bool select = false;
 };

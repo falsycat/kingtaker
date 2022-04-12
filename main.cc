@@ -54,11 +54,13 @@ Queue& Queue::sub() noexcept { return subq_; }
 Queue& Queue::cpu() noexcept { return cpuq_; }
 Queue& Queue::gl() noexcept { return glq_; }
 
+File::Env env_(std::filesystem::current_path(), File::Env::kRoot);
+
 static std::unique_ptr<File> root_;
 File& File::root() noexcept { return *root_; }
 
 struct {
-  File::Event::Status       st = File::Event::kNone;
+  File::Event::Status st = File::Event::kNone;
   std::unordered_set<File*> focus;
 } next_;
 
@@ -146,7 +148,7 @@ int main(int, char**) {
   // main loop
   bool alive = true;
   while (alive) {
-    const auto t = File::Clock::now();
+    const auto t = Clock::now();
 
     // new frame
     if (next_.st & File::Event::kClosed) alive = false;
@@ -184,7 +186,7 @@ int main(int, char**) {
         Panic(e.Stringify());
       }
       glq_.WaitUntil(until);
-    } while (File::Clock::now() < until);
+    } while (Clock::now() < until);
   }
   // request main worker to exit
   main_alive_ = false;
@@ -208,28 +210,24 @@ int main(int, char**) {
 
 
 void InitKingtaker() noexcept {
-  const auto config = std::filesystem::current_path() / kFileName;
-
-  auto env = std::make_shared<File::Env>(config, File::Env::kRoot);
-  if (!std::filesystem::exists(kFileName)) {
+  const auto config = env_.npath() / kFileName;
+  if (!std::filesystem::exists(config)) {
     static const uint8_t kInitialRoot[] = {
 #     include "generated/kingtaker.inc"
     };
-    msgpack::object_handle obj =
-        msgpack::unpack(reinterpret_cast<const char*>(kInitialRoot),
-                        sizeof(kInitialRoot));
-    root_ = File::Deserialize(env, obj.get());
+    const auto obj = msgpack::unpack(
+        reinterpret_cast<const char*>(kInitialRoot), sizeof(kInitialRoot));
+    root_ = File::Deserialize(&env_, obj.get());
     assert(root_);
     return;
   }
 
   try {
-    // open the file
-    std::ifstream st(kFileName, std::ios::binary);
+    std::ifstream st(config, std::ios::binary);
     if (!st) {
       throw DeserializeException("failed to open: "s+config.string());
     }
-    root_ = File::Deserialize(env, st);
+    root_ = File::Deserialize(&env_, st);
 
   } catch (msgpack::unpack_error& e) {
     Panic("MessagePack unpack error: "s+e.what());
@@ -351,7 +349,9 @@ void UpdateAppMenu() noexcept {
 void Save() noexcept {
   next_.st |= File::Event::kSaved;
 
-  std::ofstream f(kFileName, std::ios::binary);
+  const auto config = env_.npath() / kFileName;
+
+  std::ofstream f(config, std::ios::binary);
   if (!f) {
     Panic("failed to open: "s+kFileName);
     return;

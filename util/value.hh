@@ -73,7 +73,7 @@ class Value final {
   Value& operator=(Value&&) = default;
 
   Value(const msgpack::object&);
-  void Serialize(File::Packer&) const;
+  void Serialize(Packer&) const;
 
   const char* StringifyType() const noexcept;
   std::string Stringify(size_t max = 64) const noexcept;
@@ -251,7 +251,7 @@ class Value::Tensor final {
   Tensor& operator=(Tensor&&) = default;
 
   Tensor(const msgpack::object&);
-  void Serialize(File::Packer&) const noexcept;
+  void Serialize(Packer&) const noexcept;
 
   std::string StringifyMeta() const noexcept;
 
@@ -351,7 +351,7 @@ class Value::Tuple final : public std::vector<Value> {
   using vector::vector;
 
   Tuple(const msgpack::object&);
-  void Serialize(File::Packer&) const;
+  void Serialize(Packer&) const;
 
   const Value& operator[](size_t idx) const {
     if (idx >= size()) {

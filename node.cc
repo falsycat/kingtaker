@@ -66,7 +66,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     NodeHolder& operator=(const NodeHolder&) = delete;
     NodeHolder& operator=(NodeHolder&&) = delete;
 
-    NodeHolder(const std::shared_ptr<Env>& env, const msgpack::object& obj)
+    NodeHolder(Env* env, const msgpack::object& obj)
     try : NodeHolder(File::Deserialize(env, msgpack::find(obj, "file"s)),
                      msgpack::find(obj, "id"s).as<size_t>(),
                      msgpack::as_if<ImVec2>(msgpack::find(obj, "pos"s), {0, 0}),
@@ -93,8 +93,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     void DeserializeLink(const msgpack::object&, const NodeMap&);
     void SerializeLink(Packer& pk, const IndexMap& idxmap) const noexcept;
 
-    std::unique_ptr<NodeHolder> Clone(
-        size_t id, const std::shared_ptr<Env>& env) const noexcept {
+    std::unique_ptr<NodeHolder> Clone(size_t id, Env* env) const noexcept {
       return std::make_unique<NodeHolder>(file_->Clone(env), id);
     }
 
@@ -141,12 +140,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
   using NodeHolderRefList = std::vector<NodeHolder*>;
 
 
-  Network(const std::shared_ptr<Env>& env,
-          Time lastmod = Clock::now(),
-          NodeHolderList&& nodes = {}) noexcept :
-      File(&kType, env), DirItem(DirItem::kMenu), Node(Node::kNone),
-      ctx_(std::make_shared<Context>()),
-      lastmod_(lastmod), nodes_(std::move(nodes)),
+  Network(Env* env, Time lastmod = Clock::now(), NodeHolderList&& nodes = {}) noexcept :
+      File(&kType, env, lastmod), DirItem(DirItem::kMenu), Node(Node::kNone),
+      ctx_(std::make_shared<Context>()), nodes_(std::move(nodes)),
       history_(this) {
     canvas_.Style.NodeRounding = 0.f;
     for (auto& node : nodes_) {
@@ -155,12 +151,11 @@ class Network : public File, public iface::DirItem, public iface::Node {
     }
   }
 
-  Network(const std::shared_ptr<Env>&, const msgpack::object&);
-  static NodeHolderList DeserializeNodeHolderList(
-      const std::shared_ptr<Env>&, const msgpack::object&);
+  Network(Env*, const msgpack::object&);
+  static NodeHolderList DeserializeNodeHolderList(Env*, const msgpack::object&);
   void Serialize(Packer&) const noexcept override;
 
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override;
+  std::unique_ptr<File> Clone(Env* env) const noexcept override;
 
   File* Find(std::string_view name) const noexcept override {
     try {
@@ -198,9 +193,6 @@ class Network : public File, public iface::DirItem, public iface::Node {
   template <typename T, typename U>
   void UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept;
 
-  Time lastmod() const noexcept override {
-    return lastmod_;
-  }
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
   }
@@ -210,7 +202,6 @@ class Network : public File, public iface::DirItem, public iface::Node {
   ImNodes::CanvasState canvas_;
 
   // permanentized params
-  Time           lastmod_;
   NodeHolderList nodes_;
   size_t         next_id_ = 0;
 
@@ -304,7 +295,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       virtual bool Detach(AbstractIONode* n) noexcept = 0;
     };
 
-    AbstractIONode(TypeInfo* t, const std::shared_ptr<Env>& env, std::string_view name) :
+    AbstractIONode(TypeInfo* t, Env* env, std::string_view name) :
         File(t, env), Node(kNone), name_(name) {
     }
 
@@ -368,18 +359,18 @@ class Network : public File, public iface::DirItem, public iface::Node {
     static inline TypeInfo kType = TypeInfo::New<InputNode>(
         "Node/Network/Input", "input emitter in Node/Network", {});
 
-    InputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
+    InputNode(Env* env, std::string_view name) noexcept :
         AbstractIONode(&kType, env, name) {
       out_.emplace_back(new OutSock(this, "out"));
     }
 
-    InputNode(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+    InputNode(Env* env, const msgpack::object& obj) :
         InputNode(env, obj.as<std::string>()) {
     }
     void Serialize(Packer& pk) const noexcept override {
       pk.pack(name_);
     }
-    std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    std::unique_ptr<File> Clone(Env* env) const noexcept override {
       return std::make_unique<InputNode>(env, name_);
     }
 
@@ -415,7 +406,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     static inline TypeInfo kType = TypeInfo::New<OutputNode>(
         "Node/Network/Output", "output receiver in Node/Network", {});
 
-    OutputNode(const std::shared_ptr<Env>& env, std::string_view name) noexcept :
+    OutputNode(Env* env, std::string_view name) noexcept :
         AbstractIONode(&kType, env, name), life_(std::make_shared<std::monostate>()) {
       std::weak_ptr<std::monostate> wlife = life_;
       auto handler = [this, wlife, name = name_](const auto& ctx, auto&& v) {
@@ -429,13 +420,13 @@ class Network : public File, public iface::DirItem, public iface::Node {
       in_.emplace_back(new NodeLambdaInSock(this, "in", std::move(handler)));
     }
 
-    OutputNode(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+    OutputNode(Env* env, const msgpack::object& obj) :
         OutputNode(env, obj.as<std::string>()) {
     }
     void Serialize(Packer& pk) const noexcept override {
       pk.pack(name_);
     }
-    std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+    std::unique_ptr<File> Clone(Env* env) const noexcept override {
       return std::make_unique<OutputNode>(env, name_);
     }
 
@@ -462,7 +453,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   };
 };
 
-Network::Network(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+Network::Network(Env* env, const msgpack::object& obj) :
     Network(env,
             msgpack::find(obj, "lastmod"s).as<Time>(),
             DeserializeNodeHolderList(env, obj)) {
@@ -483,7 +474,7 @@ Network::Network(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
   }
 }
 Network::NodeHolderList Network::DeserializeNodeHolderList(
-    const std::shared_ptr<Env>& env, const msgpack::object& obj) {
+    Env* env, const msgpack::object& obj) {
   auto& obj_nodes = msgpack::find(obj, "nodes"s);
   if (obj_nodes.type != msgpack::type::ARRAY) throw msgpack::type_error();
 
@@ -508,10 +499,7 @@ Network::NodeHolderList Network::DeserializeNodeHolderList(
 void Network::Serialize(Packer& pk) const noexcept {
   std::unordered_map<Node*, size_t> idxmap;
 
-  pk.pack_map(4);
-
-  pk.pack("lastmod"s);
-  pk.pack(lastmod_);
+  pk.pack_map(3);
 
   pk.pack("nodes"s);
   pk.pack_array(static_cast<uint32_t>(nodes_.size()));
@@ -591,7 +579,7 @@ void Network::NodeHolder::SerializeLink(Packer& pk, const IndexMap& idxmap) cons
   }
 }
 
-std::unique_ptr<File> Network::Clone(const std::shared_ptr<Env>& env) const noexcept {
+std::unique_ptr<File> Network::Clone(Env* env) const noexcept {
   std::unordered_map<Node*, Node*> nmap;
 
   size_t id = 0;
@@ -708,9 +696,9 @@ void Network::UpdateCanvasMenu(RefStack&) noexcept {
   if (ImGui::BeginMenu("New")) {
     for (auto& p : File::registry()) {
       auto& t = *p.second;
-      if (!t.factory() || !t.CheckImplemented<Node>()) continue;
+      if (!t.factory() || !t.IsImplemented<Node>()) continue;
       if (ImGui::MenuItem(t.name().c_str())) {
-        history_.AddNodeIf(std::make_unique<NodeHolder>(t.Create(env()), next_id_++));
+        history_.AddNodeIf(std::make_unique<NodeHolder>(t.Create(&env()), next_id_++));
       }
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", t.desc().c_str());
@@ -771,7 +759,7 @@ void Network::UpdateNewIO(std::vector<std::shared_ptr<U>>& list) noexcept {
   }
   if (submit && !empty && !dup) {
     history_.AddNodeIf(std::make_unique<NodeHolder>(
-            std::make_unique<T>(env(), io_new_name_), next_id_++));
+            std::make_unique<T>(&env(), io_new_name_), next_id_++));
     io_new_name_ = "";
     ImGui::CloseCurrentPopup();
   }
@@ -802,7 +790,7 @@ void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem()) {
     if (ImGui::MenuItem("Clone")) {
-      owner->history_.AddNodeIf(Clone(owner->next_id_++, owner->env()));
+      owner->history_.AddNodeIf(Clone(owner->next_id_++, &owner->env()));
     }
     if (ImGui::MenuItem("Remove")) {
       owner->history_.RemoveNodes({this});
@@ -819,15 +807,7 @@ void Network::NodeHolder::UpdateNode(Network* owner, RefStack& ref) noexcept {
   ref.Pop();
 }
 
-void Network::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
-  auto owner = ref.FindParent<Network>();
-  if (!owner) {
-    ImGui::TextUnformatted("INPUT");
-    ImGui::TextUnformatted("ERROR X(");
-    ImGui::TextUnformatted("This node must be used at inside of Network");
-    return;
-  }
-
+void Network::InputNode::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   ImGui::Text("IN> %s", ctx_sock_->name().c_str());
 
   ImGui::SameLine();
@@ -836,15 +816,7 @@ void Network::InputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) 
     ImNodes::EndSlot();
   }
 }
-void Network::OutputNode::Update(RefStack& ref, const std::shared_ptr<Context>&) noexcept {
-  auto owner = ref.FindParent<Network>();
-  if (!owner) {
-    ImGui::TextUnformatted("OUTPUT");
-    ImGui::TextUnformatted("ERROR X(");
-    ImGui::TextUnformatted("This node must be used at inside of Network");
-    return;
-  }
-
+void Network::OutputNode::Update(RefStack&, const std::shared_ptr<Context>&) noexcept {
   if (ImNodes::BeginInputSlot("in", 1)) {
     gui::NodeSocket();
     ImNodes::EndSlot();
@@ -1107,18 +1079,18 @@ class Cache final : public File, public iface::DirItem {
       "Node/Cache", "stores execution result of Node",
       {typeid(iface::DirItem)});
 
-  Cache(const std::shared_ptr<Env>& env) noexcept :
+  Cache(Env* env) noexcept :
       File(&kType, env), DirItem(DirItem::kMenu | DirItem::kTooltip),
       store_(std::make_shared<Store>()) {
   }
 
-  Cache(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+  Cache(Env* env, const msgpack::object&) noexcept :
       Cache(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<Cache>(env);
   }
 

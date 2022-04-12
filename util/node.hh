@@ -112,7 +112,7 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
 template <typename Driver>
 class LambdaNode final : public File, public iface::Node {
  public:
-  LambdaNode(const std::shared_ptr<Env>& env) noexcept :
+  LambdaNode(Env* env) noexcept :
       File(&Driver::kType, env), Node(Node::kNone),
       life_(std::make_shared<std::monostate>()) {
     std::shared_ptr<OutSock> err;
@@ -136,13 +136,13 @@ class LambdaNode final : public File, public iface::Node {
     }
   }
 
-  LambdaNode(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+  LambdaNode(Env* env, const msgpack::object&) noexcept :
       LambdaNode(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<LambdaNode>(env);
   }
 

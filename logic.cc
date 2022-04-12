@@ -22,7 +22,7 @@ class Passthru final : public File, public iface::Node {
       "Logic/Passthru", "passes all inputs into output directly",
       {typeid(iface::Node)});
 
-  Passthru(const std::shared_ptr<Env>& env) noexcept :
+  Passthru(Env* env) noexcept :
       File(&kType, env), Node(kNone) {
     out_.emplace_back(new OutSock(this, "out"));
 
@@ -35,13 +35,13 @@ class Passthru final : public File, public iface::Node {
     in_.emplace_back(new NodeLambdaInSock(this, "in", std::move(task)));
   }
 
-  Passthru(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+  Passthru(Env* env, const msgpack::object&) noexcept :
       Passthru(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<Passthru>(env);
   }
 

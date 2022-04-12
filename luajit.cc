@@ -126,7 +126,7 @@ class Exec final : public File, public iface::Node {
       "LuaJIT/Exec", "execute compiled function",
       {typeid(iface::Node)});
 
-  Exec(const std::shared_ptr<Env>& env) noexcept :
+  Exec(Env* env) noexcept :
       File(&kType, env), Node(Node::kNone),
       udata_(std::make_shared<UniversalData>()) {
     out_.emplace_back(new OutSock(this, "recv"));
@@ -162,13 +162,13 @@ class Exec final : public File, public iface::Node {
     in_.emplace_back(new NodeLambdaInSock(this, "send", std::move(task_send)));
   }
 
-  Exec(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+  Exec(Env* env, const msgpack::object&) noexcept :
       Exec(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<Exec>(env);
   }
 
