@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -224,6 +225,36 @@ class Network : public File, public iface::DirItem, public iface::Node {
     shown_ = true;
   }
 
+  void RebuildSocks() noexcept {
+    std::set<std::string> in_names;
+    for (auto in : in_nodes_) in_names.insert(in->name());
+    for (const auto& name : in_names) {
+      if (in(name)) continue;
+      in_.emplace_back(new CustomInSock(this, name));
+    }
+    for (auto itr = in_.begin(); itr < in_.end();) {
+      if (in_names.contains((*itr)->name())) {
+        ++itr;
+      } else {
+        itr = in_.erase(itr);
+      }
+    }
+
+    std::set<std::string> out_names;
+    for (auto out : out_nodes_) out_names.insert(out->name());
+    for (const auto& name : out_names) {
+      if (out(name)) continue;
+      out_.emplace_back(new OutSock(this, name));
+    }
+    for (auto itr = out_.begin(); itr < out_.end();) {
+      if (out_names.contains((*itr)->name())) {
+        ++itr;
+      } else {
+        itr = out_.erase(itr);
+      }
+    }
+  }
+
 
   // a wrapper for node files
   class NodeHolder final {
@@ -274,6 +305,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
         owner.out_nodes_.insert(out);
       }
       owner.hmap_[node_] = this;
+      owner.RebuildSocks();
     }
     void TearDown(Network& owner) noexcept {
       if (auto in = dynamic_cast<InNode*>(node_)) {
@@ -282,6 +314,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
         owner.out_nodes_.erase(out);
       }
       owner.hmap_.erase(node_);
+      owner.RebuildSocks();
     }
 
     std::unique_ptr<HistoryCommand> WatchMemento() noexcept;
@@ -367,6 +400,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
+    void* iface(const std::type_index& t) noexcept override {
+      return PtrSelector<iface::Node>(t).Select(this);
+    }
     const std::string& name() const noexcept { return name_; }
 
    private:
@@ -393,12 +429,76 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
+    void* iface(const std::type_index& t) noexcept override {
+      return PtrSelector<iface::Node>(t).Select(this);
+    }
     const std::string& name() const noexcept { return name_; }
 
    private:
     std::string name_;
   };
 
+
+  // An impl of InSock that executes Network as lambda.
+  class CustomInSock final : public InSock {
+   public:
+    CustomInSock(Network* owner, std::string_view name) noexcept :
+        InSock(owner, name), owner_(owner), life_(owner_->life_) {
+    }
+
+    void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept override {
+      if (life_.expired()) return;
+
+      auto ictx = octx->data<LambdaContext>(owner_, octx, owner_);
+      for (auto in : owner_->in_nodes_) {
+        if (in->name() == name()) in->out(0)->Send(ictx, Value(v));
+      }
+    }
+
+   private:
+    Network* owner_;
+
+    std::weak_ptr<std::monostate> life_;
+  };
+
+
+  // An impl of Context to execute Network as lambda.
+  class LambdaContext : public Context, public Context::Data {
+   public:
+    LambdaContext(const std::shared_ptr<Context>& octx,
+                  Network*                        owner) noexcept :
+        Context(Path(owner->ctx_->basepath())),  // FIXME: ctx_ may not be created yet
+        owner_(owner), life_(owner->life_), octx_(octx) {
+    }
+
+    void ObserveReceive(const InSock& in, const Value& v) noexcept override {
+      if (life_.expired()) return;
+
+      auto itr = owner_->out_nodes_.find(dynamic_cast<OutNode*>(in.owner()));
+      if (itr == owner_->out_nodes_.end()) return;
+
+      const auto& out_sock = owner_->out((*itr)->name());
+      if (!out_sock) return;
+
+      out_sock->Send(octx_, Value(v));
+    }
+
+    std::span<const std::shared_ptr<InSock>> dstOf(const OutSock* out) const noexcept override {
+      if (life_.expired()) return {};
+      return owner_->links_.dstOf(out);
+    }
+    std::span<const std::shared_ptr<OutSock>> srcOf(const InSock* in) const noexcept override {
+      if (life_.expired()) return {};
+      return owner_->links_.srcOf(in);
+    }
+
+   private:
+    Network* owner_;
+
+    std::weak_ptr<std::monostate> life_;
+
+    std::shared_ptr<Context> octx_;
+  };
 
   // An impl of Node::Editor for Network
   class EditorContext final : public Editor {
@@ -955,7 +1055,10 @@ class Cache final : public File, public iface::DirItem {
       auto item = item_.lock();
       if (!item) return;
 
-      item->Set(sock.name(), Value(v));
+      auto task = [item, name = sock.name(), v = v]() mutable {
+        item->Set(name, std::move(v));
+      };
+      Queue::sub().Push(std::move(task));
     }
 
     std::span<const std::shared_ptr<Node::InSock>>

@@ -67,7 +67,7 @@ void NodeLinkStore::Serialize(
 
       const auto linkset_itr = out_.find(s.get());
       if (linkset_itr == out_.end()) {
-        pk.pack_nil();
+        pk.pack_array(0);
         continue;
       }
       const auto& others = linkset_itr->second.others();

@@ -81,6 +81,8 @@ class Node::Context {
   Context& operator=(Context&&) = delete;
 
   virtual void ObserveReceive(const InSock&, const Value&) noexcept { }
+
+  // must be thread-safe
   virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
 
   // Returns an empty when the socket is destructed or missing.
@@ -170,7 +172,10 @@ class Node::OutSock {
   OutSock& operator=(OutSock&&) = delete;
 
   void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
+    ctx->ObserveSend(*this, v);
+
     auto task = [self = this, ctx, v = std::move(v)]() mutable {
+      // self may be already destructed
       const auto dst = ctx->dstOf(self);
       for (const auto& other : dst) {
         ctx->ObserveReceive(*other, v);
