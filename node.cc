@@ -322,8 +322,24 @@ class Network : public File, public iface::DirItem, public iface::Node {
     void AddNodes(std::unique_ptr<NodeHolder>&& h) noexcept;
     void RemoveNodes(NodeHolder* h) noexcept;
 
+    void AddSilently(std::unique_ptr<HistoryCommand>&& cmd) noexcept {
+      tempq_.push_back(std::move(cmd));
+    }
+    void Queue(std::unique_ptr<HistoryCommand>&& cmd) noexcept {
+      auto ptr = cmd.get();
+      AddSilently(std::move(cmd));
+      Queue::main().Push([ptr]() { ptr->Apply(); });
+    }
+    void EndFrame() noexcept {
+      if (tempq_.empty()) return;
+      kingtaker::History<>::AddSilently(
+          std::make_unique<HistoryAggregateCommand>(std::move(tempq_)));
+    }
+
    private:
     Network* owner_;
+
+    std::vector<std::unique_ptr<HistoryCommand>> tempq_;
 
     class NodeSwapCommand;
   } history_;
@@ -494,14 +510,15 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
   }
 
   // detect memento changes
+  bool update = false;
   for (auto& h : nodes_) {
     if (auto cmd = h->WatchMemento()) {
       history_.AddSilently(std::move(cmd));
+      update = true;
     }
   }
-
-  links_.CleanUp();
-  // TODO: save removed links to history
+  if (update) links_.CleanUp();
+  history_.EndFrame();
 
   gui::NodeCanvasResetZoom();
   ImNodes::EndCanvas();
@@ -532,10 +549,10 @@ void Network::UpdateCanvasMenu(RefStack&) noexcept {
 
   ImGui::Separator();
   if (ImGui::MenuItem("Undo")) {
-    history_.Move(-1);
+    history_.UnDo();
   }
   if (ImGui::MenuItem("Redo")) {
-    history_.Move(1);
+    history_.ReDo();
   }
 
   ImGui::Separator();

@@ -20,6 +20,25 @@ class HistoryCommand {
   virtual void Revert() = 0;
 };
 
+class HistoryAggregateCommand : public HistoryCommand {
+ public:
+  HistoryAggregateCommand() = delete;
+  HistoryAggregateCommand(std::vector<std::unique_ptr<HistoryCommand>>&& cmds) noexcept :
+      cmds_(std::move(cmds)) {
+  }
+
+  void Apply() override {
+    for (const auto& cmd : cmds_) cmd->Apply();
+  }
+  void Revert() override {
+    for (const auto& cmd : cmds_) cmd->Revert();
+  }
+
+ private:
+  std::vector<std::unique_ptr<HistoryCommand>> cmds_;
+};
+
+// destructor must be called from a main task
 template <typename T = HistoryCommand>
 class History {
  public:
@@ -33,27 +52,19 @@ class History {
   History& operator=(const History&) = delete;
   History& operator=(History&&) = delete;
 
-  size_t Move(int32_t step) noexcept {
-    size_t ret = 0;
-    if (step < 0) {
-      const size_t dist = std::min(cursor_, static_cast<size_t>(-step));
-      try {
-        for (; ret < dist; ++ret) {
-          cmds_[--cursor_]->Revert();
-        }
-      } catch (Exception&) {
-      }
-    }
-    if (step > 0) {
-      const size_t dist = std::min(static_cast<size_t>(step), cmds_.size()-cursor_);
-      try {
-        for (; ret < dist; ++ret) {
-          cmds_[cursor_++]->Apply();
-        }
-      } catch (Exception&) {
-      }
-    }
-    return ret;
+  void UnDo() noexcept {
+    auto task = [this]() {
+      if (cursor_ == 0) return;
+      cmds_[--cursor_]->Revert();
+    };
+    Queue::main().Push(std::move(task));
+  }
+  void ReDo() noexcept {
+    auto task = [this]() {
+      if (cursor_ >= cmds_.size()) return;
+      cmds_[cursor_++]->Apply();
+    };
+    Queue::main().Push(std::move(task));
   }
 
   void AddSilently(std::unique_ptr<T>&& cmd) noexcept {
@@ -68,15 +79,21 @@ class History {
   }
 
   void Drop(size_t dist) noexcept {
-    const size_t beg = cursor_ < dist? 0: cursor_-dist;
-    const size_t end = std::min(cursor_+dist, cmds_.size());
-    cmds_.erase(cmds_.begin()+end, cmds_.end());
-    cmds_.erase(cmds_.begin(), cmds_.begin()+beg);
-    cursor_ -= beg;
+    auto task = [this, dist]() {
+      const size_t beg = cursor_ < dist? 0: cursor_-dist;
+      const size_t end = std::min(cursor_+dist, cmds_.size());
+      cmds_.erase(cmds_.begin()+end, cmds_.end());
+      cmds_.erase(cmds_.begin(), cmds_.begin()+beg);
+      cursor_ -= beg;
+    };
+    Queue::main().Push(std::move(task));
   }
   void Clear() noexcept {
-    cmds_.clear();
-    cursor_ = 0;
+    auto task = [this]() {
+      cmds_.clear();
+      cursor_ = 0;
+    };
+    Queue::main().Push(std::move(task));
   }
 
   const T& item(size_t idx) const noexcept { return *cmds_[idx]; }
