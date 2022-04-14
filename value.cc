@@ -37,7 +37,7 @@ class Imm final : public File,
       "Value/Imm", "immediate value",
       {typeid(iface::Memento), typeid(iface::DirItem), typeid(iface::Node)});
 
-  Imm(const std::shared_ptr<Env>& env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
+  Imm(Env* env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
       mem_(std::make_shared<Memento>(UniversalData {this, std::move(v), size})) {
     out_.emplace_back(new OutSock(this, "out"));
@@ -48,7 +48,7 @@ class Imm final : public File,
     in_.emplace_back(new NodeLambdaInSock(this, "CLK", std::move(receiver)));
   }
 
-  Imm(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+  Imm(Env* env, const msgpack::object& obj) :
       Imm(env,
           Value(msgpack::find(obj, "value"s)),
           msgpack::as_if<ImVec2>(msgpack::find(obj, "size"s), {0, 0})) {
@@ -64,19 +64,16 @@ class Imm final : public File,
     pk.pack("value"s);
     data.value.Serialize(pk);
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     const auto& data = mem_->data();
     return std::make_unique<Imm>(env, Value(data.value), data.size);
   }
 
   void UpdateTree(RefStack&) noexcept override;
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
   void UpdateTypeChanger(bool mini = false) noexcept;
   void UpdateEditor() noexcept;
 
-  Time lastmod() const noexcept override {
-    return lastmod_;
-  }
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Memento, iface::Node>(t).
         Select(this, mem_.get());
@@ -108,9 +105,6 @@ class Imm final : public File,
   using Memento = SimpleMemento<UniversalData>;
   std::shared_ptr<Memento> mem_;
 
-  // permanentized
-  Time lastmod_;
-
 
   void OnUpdate() noexcept {
     lastmod_ = Clock::now();
@@ -121,7 +115,7 @@ void Imm::UpdateTree(RefStack&) noexcept {
   ImGui::SameLine();
   UpdateEditor();
 }
-void Imm::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
+void Imm::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::TextUnformatted("IMM:");
   ImGui::SameLine();
   UpdateTypeChanger(true);

@@ -36,21 +36,18 @@ class GenericDir : public File,
 
   using ItemList = std::map<std::string, std::unique_ptr<File>>;
 
-  GenericDir(const std::shared_ptr<Env>& env,
+  GenericDir(Env*       env,
              ItemList&& items   = {},
-             Time       lastmod = Clock::now(),
              bool       shown   = false) :
       File(&kType, env), DirItem(kTree | kMenu),
-      items_(std::move(items)), lastmod_(lastmod), shown_(shown) {
+      items_(std::move(items)), shown_(shown) {
   }
 
-  GenericDir(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+  GenericDir(Env* env, const msgpack::object& obj) :
       GenericDir(env, DeserializeItems(env, msgpack::find(obj, "items"s)),
-                 msgpack::as_if(msgpack::find(obj, "lastmod"s), Clock::now()),
                  msgpack::as_if(msgpack::find(obj, "shown"s), false)) {
   }
-  static ItemList DeserializeItems(
-      const std::shared_ptr<Env>& env, const msgpack::object& obj) {
+  static ItemList DeserializeItems(Env* env, const msgpack::object& obj) {
     if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
 
     ItemList items;
@@ -71,10 +68,7 @@ class GenericDir : public File,
     return items;
   }
   void Serialize(Packer& pk) const noexcept override {
-    pk.pack_map(3);
-
-    pk.pack("lastmod"s);
-    pk.pack(lastmod_);
+    pk.pack_map(2);
 
     pk.pack("shown"s);
     pk.pack(shown_);
@@ -88,7 +82,7 @@ class GenericDir : public File,
       }
     }
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     ItemList items;
     for (auto& p : items_) items[p.first] = p.second->Clone(env);
     return std::make_unique<GenericDir>(env, std::move(items));
@@ -128,9 +122,6 @@ class GenericDir : public File,
   void UpdateTree(RefStack& ref) noexcept override;
   void UpdateItem(RefStack& ref, File* f) noexcept;
 
-  Time lastmod() const noexcept override {
-    return lastmod_;
-  }
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Dir, iface::DirItem>(t).
         Select(this);
@@ -139,8 +130,6 @@ class GenericDir : public File,
  private:
   // permanentized params
   ItemList items_;
-
-  Time lastmod_;
 
   bool shown_;
 
@@ -172,7 +161,7 @@ void GenericDir::UpdateMenu(RefStack&) noexcept {
   if (ImGui::BeginMenu("New")) {
     for (const auto& reg : File::registry()) {
       const auto& type = *reg.second;
-      if (!type.factory() || !type.CheckImplemented<DirItem>()) continue;
+      if (!type.factory() || !type.IsImplemented<DirItem>()) continue;
 
       const auto w = 16.f*ImGui::GetFontSize();
 
@@ -202,7 +191,7 @@ void GenericDir::UpdateMenu(RefStack&) noexcept {
 
         if (enter && !dup && valid) {
           Queue::main().Push(
-              [this, &type]() { Add(name_for_new_, type.Create(env())); });
+              [this, &type]() { Add(name_for_new_, type.Create(&env())); });
         }
         ImGui::EndMenu();
       }
@@ -274,12 +263,12 @@ class ImGuiConfig : public File {
   static inline TypeInfo kType = TypeInfo::New<ImGuiConfig>(
       "System/ImGuiConfig", "saves and restores ImGui config", {});
 
-  ImGuiConfig(const std::shared_ptr<Env>& env, const std::string& v = "") noexcept :
+  ImGuiConfig(Env* env, const std::string& v = "") noexcept :
       File(&kType, env) {
     ImGui::LoadIniSettingsFromMemory(v.data(), v.size());
   }
 
-  ImGuiConfig(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+  ImGuiConfig(Env* env, const msgpack::object& obj) :
       ImGuiConfig(env, obj.as<std::string>()) {
   }
   void Serialize(Packer& pk) const noexcept override {
@@ -288,7 +277,7 @@ class ImGuiConfig : public File {
     pk.pack_str(static_cast<uint32_t>(n));
     pk.pack_str_body(ini, static_cast<uint32_t>(n));
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<ImGuiConfig>(env);
   }
 };
@@ -299,17 +288,17 @@ class LogView : public File {
   static inline TypeInfo kType = TypeInfo::New<LogView>(
       "System/LogView", "provides system log viewer", {});
 
-  LogView(const std::shared_ptr<Env>& env, bool shown = true) noexcept :
+  LogView(Env* env, bool shown = true) noexcept :
       File(&kType, env), shown_(shown) {
   }
 
-  LogView(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+  LogView(Env* env, const msgpack::object& obj) :
       LogView(env, obj.as<bool>()) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack(shown_);
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<LogView>(env, shown_);
   }
 
@@ -338,17 +327,16 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
       "System/ClockPulseGenerator", "emits a pulse into a specific node on each GUI updates",
       {typeid(iface::DirItem)});
 
-  ClockPulseGenerator(const std::shared_ptr<Env>& env,
+  ClockPulseGenerator(Env*               env,
                       const std::string& path      = "",
                       const std::string& sock_name = "",
                       bool               shown     = false,
                       bool               enable    = false) noexcept :
       File(&kType, env), DirItem(kNone),
-      nctx_(std::make_shared<iface::Node::Context>()),
       path_(path), sock_name_(sock_name), shown_(shown), enable_(enable) {
   }
 
-  ClockPulseGenerator(const std::shared_ptr<Env>& env, const msgpack::object& obj) :
+  ClockPulseGenerator(Env* env, const msgpack::object& obj) :
       ClockPulseGenerator(env,
                           msgpack::find(obj, "path"s).as<std::string>(),
                           msgpack::find(obj, "sock_name"s).as<std::string>(),
@@ -370,7 +358,7 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
     pk.pack("enable"s);
     pk.pack(enable_);
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<ClockPulseGenerator>(env, path_, sock_name_, shown_, enable_);
   }
 
@@ -389,9 +377,6 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
   }
 
  private:
-  std::shared_ptr<iface::Node::Context> nctx_;
-
-
   // permanentized params
   std::string path_;
   std::string sock_name_;
@@ -405,13 +390,16 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
 
   void Emit(const RefStack& ref) noexcept {
     try {
-      auto n = File::iface<iface::Node>(&*ref.Resolve(path_));
+      auto target = ref.Resolve(path_);
+
+      auto n = File::iface<iface::Node>(&*target);
       if (!n) throw Exception("target doesn't have Node interface");
 
-      auto sock = n->FindIn(sock_name_);
+      auto sock = n->in(sock_name_);
       if (!sock) throw Exception("missing input socket, "+sock_name_);
 
-      sock->Receive(nctx_, Value::Pulse());
+      auto ctx = std::make_shared<iface::Node::Context>(target.GetFullPath());
+      sock->Receive(ctx, Value::Pulse());
     } catch (Exception& e) {
       notify::Warn(ref, e.msg());
       enable_ = false;
@@ -437,13 +425,6 @@ void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
       }
     }
     if (enable_) ImGui::EndDisabled();
-
-    // context clear button
-    ImGui::SameLine();
-    if (ImGui::Button("X")) {
-      nctx_ = std::make_shared<iface::Node::Context>();
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("clears execution context");
 
     // pulse emit button
     ImGui::SameLine();

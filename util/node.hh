@@ -2,8 +2,22 @@
 
 #include "kingtaker.hh"
 
+#include <cassert>
+#include <functional>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <unordered_map>
+
+#include <imgui.h>
+#include <ImNodes.h>
+
 #include "iface/node.hh"
 
+#include "util/gui.hh"
+#include "util/history.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -11,34 +25,205 @@
 
 namespace kingtaker {
 
-// An implementation of Context that redirects an output of target node to a
-// specific socket.
-class NodeRedirectContext final : public iface::Node::Context {
+// An object that stores links between nodes.
+class NodeLinkStore final {
+ public:
+  class SwapCommand;
+
+  using Node    = iface::Node;
+  using InSock  = Node::InSock;
+  using OutSock = Node::OutSock;
+
+  template <typename Self, typename Other>
+  struct LinkSet final {
+   public:
+    LinkSet() = delete;
+    LinkSet(const std::shared_ptr<Self>&          self,
+            std::vector<std::shared_ptr<Other>>&& others = {}) noexcept :
+        self_(self), others_(std::move(others)) {
+    }
+    LinkSet(const LinkSet&) = delete;
+    LinkSet(LinkSet&&) = default;
+    LinkSet& operator=(const LinkSet&) = delete;
+    LinkSet& operator=(LinkSet&&) = default;
+
+    void Link(const std::shared_ptr<Other>& other) noexcept {
+      others_.push_back(other);
+    }
+    bool Unlink(const Other& other) noexcept {
+      for (auto itr = others_.begin(); itr < others_.end(); ++itr) {
+        if (itr->get() == &other) {
+          others_.erase(itr);
+          return others_.empty();
+        }
+      }
+      return false;
+    }
+
+    bool alive() const noexcept {
+      return static_cast<size_t>(self_.use_count()) > others_.size();
+    }
+
+    const std::shared_ptr<Self>& self() const noexcept { return self_; }
+    std::span<const std::shared_ptr<Other>> others() const noexcept { return others_; }
+
+   private:
+    std::shared_ptr<Self> self_;
+
+    std::vector<std::shared_ptr<Other>> others_;
+  };
+  using InSockLinkSet  = LinkSet<InSock, OutSock>;
+  using OutSockLinkSet = LinkSet<OutSock, InSock>;
+  using InSockMap      = std::unordered_map<InSock*, InSockLinkSet>;
+  using OutSockMap     = std::unordered_map<OutSock*, OutSockLinkSet>;
+
+  NodeLinkStore() = default;
+  NodeLinkStore(const NodeLinkStore&) = delete;
+  NodeLinkStore(NodeLinkStore&&) = default;
+  NodeLinkStore& operator=(const NodeLinkStore&) = delete;
+  NodeLinkStore& operator=(NodeLinkStore&&) = default;
+
+  NodeLinkStore(const msgpack::object&, const std::vector<Node*>&);
+  void Serialize(
+      Packer&, const std::unordered_map<Node*, size_t>& idxmap) const noexcept;
+  NodeLinkStore Clone(const std::unordered_map<Node*, Node*>& src_to_dst) const noexcept;
+
+  void Link(const std::shared_ptr<InSock>& in, const std::shared_ptr<OutSock>& out) noexcept;
+  void Unlink(const InSock*, const OutSock*) noexcept;  // deleted pointers can be passed
+  void CleanUp() noexcept;
+
+  void Unlink(const InSock& in) noexcept {
+    const auto src_span = srcOf(&in);
+    std::vector<std::shared_ptr<OutSock>> srcs(src_span.begin(), src_span.end());
+    for (const auto& out : srcs) Unlink(&in, out.get());
+  }
+  void Unlink(const OutSock& out) noexcept {
+    const auto dst_span = dstOf(&out);
+    std::vector<std::shared_ptr<InSock>> dsts(dst_span.begin(), dst_span.end());
+    for (const auto& in : dsts) Unlink(in.get(), &out);
+  }
+
+  std::span<const std::shared_ptr<OutSock>> srcOf(const InSock* in) const noexcept {
+    auto itr = in_.find(const_cast<InSock*>(in));
+    if (itr == in_.end()) return {};
+    return itr->second.others();
+  }
+  std::span<const std::shared_ptr<InSock>> dstOf(const OutSock* out) const noexcept {
+    auto itr = out_.find(const_cast<OutSock*>(out));
+    if (itr == out_.end()) return {};
+    return itr->second.others();
+  }
+
+  const InSockMap&  in () const noexcept { return in_; }
+  const OutSockMap& out() const noexcept { return out_; }
+
+ private:
+  InSockMap  in_;
+  OutSockMap out_;
+
+  NodeLinkStore(InSockMap&& in, OutSockMap&& out) noexcept :
+      in_(std::move(in)), out_(std::move(out)) {
+  }
+};
+
+class NodeLinkStore::SwapCommand : public HistoryCommand {
+ public:
+  enum Type { kLink, kUnlink, };
+
+  SwapCommand(NodeLinkStore* links, Type t, const InSock& in, const OutSock& out) noexcept :
+      links_(links), type_(t),
+      in_node_(in.owner()), in_name_(in.name()),
+      out_node_(out.owner()), out_name_(out.name()) {
+  }
+
+  void Apply() override {
+    switch (type_) {
+    case kLink  : Link();   break;
+    case kUnlink: Unlink(); break;
+    }
+  }
+  void Revert() override {
+    switch (type_) {
+    case kLink  : Unlink(); break;
+    case kUnlink: Link();   break;
+    }
+  }
+
+ private:
+  NodeLinkStore* links_;
+
+  Type type_;
+
+  Node*       in_node_;
+  std::string in_name_;
+  Node*       out_node_;
+  std::string out_name_;
+
+  void Link() const {
+    auto in  = in_node_->in(in_name_);
+    auto out = out_node_->out(out_name_);
+    if (!in || !out) throw Exception("cannot link deleted sockets");
+    links_->Link(in, out);
+  }
+  void Unlink() const {
+    auto in  = in_node_->in(in_name_);
+    auto out = out_node_->out(out_name_);
+    if (!in || !out) throw Exception("cannot unlink deleted sockets");
+    links_->Unlink(in.get(), out.get());
+  }
+};
+
+
+// An impl of Context for sub context.
+class NodeSubContext : public iface::Node::Context {
  public:
   using Node = iface::Node;
 
-  NodeRedirectContext(const std::weak_ptr<Node::OutSock>&   dst,
-                      const std::shared_ptr<Node::Context>& ctx,
+  NodeSubContext(const std::shared_ptr<Node::Context>& octx) noexcept :
+      Context(File::Path(octx->basepath())), octx_(octx) {
+  }
+
+  std::span<const std::shared_ptr<Node::InSock>>
+      dstOf(const Node::OutSock* out) const noexcept {
+    return octx_->dstOf(out);
+  }
+  std::span<const std::shared_ptr<Node::OutSock>>
+      srcOf(const Node::InSock* in) const noexcept {
+    return octx_->srcOf(in);
+  }
+
+  const std::shared_ptr<Node::Context>& octx() const noexcept { return octx_; }
+
+ private:
+  std::shared_ptr<Node::Context> octx_;
+};
+
+
+// An implementation of Context that redirects an output of target node to a
+// specific socket.
+class NodeRedirectContext : public NodeSubContext {
+ public:
+  using Node = iface::Node;
+
+  NodeRedirectContext(const std::shared_ptr<Node::Context>& octx,
+                      const std::weak_ptr<Node::OutSock>&   odst,
                       Node*                                 target = nullptr) noexcept :
-      dst_(dst), ctx_(ctx), target_(target) {
+      NodeSubContext(octx), odst_(odst), target_(target) {
   }
 
   void Attach(Node* target) noexcept {
     target_ = target;
   }
-
   void ObserveSend(const Node::OutSock& src, const Value& v) noexcept override {
-    if (&src.owner() != target_) return;
-    auto dst = dst_.lock();
-    if (dst) dst->Send(ctx_, Value::Tuple { src.name(), Value(v) });
+    if (src.owner() != target_) return;
+    auto odst = odst_.lock();
+    if (odst) odst->Send(octx(), Value::Tuple { src.name(), Value(v) });
   }
 
   Node* target() const noexcept { return target_; }
 
  private:
-  std::weak_ptr<Node::OutSock> dst_;
-
-  std::shared_ptr<Node::Context> ctx_;
+  std::weak_ptr<Node::OutSock> odst_;
 
   Node* target_;
 };
@@ -57,6 +242,7 @@ class NodeLambdaInSock final : public iface::Node::InSock {
   void Receive(const std::shared_ptr<Node::Context>& ctx, Value&& v) noexcept override {
     lambda_(ctx, std::move(v));
   }
+
  private:
   Receiver lambda_;
 };
@@ -112,7 +298,7 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
 template <typename Driver>
 class LambdaNode final : public File, public iface::Node {
  public:
-  LambdaNode(const std::shared_ptr<Env>& env) noexcept :
+  LambdaNode(Env* env) noexcept :
       File(&Driver::kType, env), Node(Node::kNone),
       life_(std::make_shared<std::monostate>()) {
     std::shared_ptr<OutSock> err;
@@ -129,27 +315,27 @@ class LambdaNode final : public File, public iface::Node {
       const auto& m = Driver::kInSocks[i];
 
       if (m.flags & LambdaNodeDriver::kExecIn) {
-        in_.emplace_back(new ClockInSock(this, m.name, i, err));
+        in_.emplace_back(new ExecInSock(this, m.name, i, err));
       } else {
         in_.emplace_back(new CustomInSock(this, m.name, i));
       }
     }
   }
 
-  LambdaNode(const std::shared_ptr<Env>& env, const msgpack::object&) noexcept :
+  LambdaNode(Env* env, const msgpack::object&) noexcept :
       LambdaNode(env) {
   }
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_nil();
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<LambdaNode>(env);
   }
 
   void Update(RefStack& ref, Event&) noexcept override {
     path_ = ref.GetFullPath();
   }
-  void Update(RefStack&, const std::shared_ptr<Context>&) noexcept override;
+  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -164,7 +350,7 @@ class LambdaNode final : public File, public iface::Node {
 
 
   std::shared_ptr<Driver> GetDriver(const std::shared_ptr<Context>& ctx) noexcept {
-    return ctx->GetOrNew<Driver>(this, this, std::weak_ptr<Context>(ctx));
+    return ctx->data<Driver>(this, this, std::weak_ptr<Context>(ctx));
   }
 
   // InSock for generic inputs
@@ -201,12 +387,12 @@ class LambdaNode final : public File, public iface::Node {
   };
 
   // InSock for clock input
-  class ClockInSock : public CustomInSock {
+  class ExecInSock : public CustomInSock {
    public:
-    ClockInSock(LambdaNode*      o,
-                std::string_view name,
-                size_t           idx,
-                const std::shared_ptr<OutSock>& err) noexcept :
+    ExecInSock(LambdaNode*      o,
+               std::string_view name,
+               size_t           idx,
+               const std::shared_ptr<OutSock>& err) noexcept :
         CustomInSock(o, name, idx), err_(err) {
     }
 
@@ -225,8 +411,9 @@ class LambdaNode final : public File, public iface::Node {
   };
 };
 template <typename Driver>
-void LambdaNode<Driver>::Update(RefStack&, const std::shared_ptr<Context>& ctx) noexcept {
-  const auto driver = ctx->GetOrNew<Driver>(this, this, ctx);
+void LambdaNode<Driver>::UpdateNode(
+    RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+  const auto driver = GetDriver(ctx);
   ImGui::TextUnformatted(driver->title().c_str());
 
   ImGui::BeginGroup();

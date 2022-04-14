@@ -809,11 +809,11 @@ class Preview final : public File, public iface::DirItem {
       "GL/Preview", "provides OpenGL texture preview window",
       {typeid(iface::DirItem)});
 
-  Preview(const std::shared_ptr<Env>& env, bool shown = false) noexcept :
+  Preview(Env* env, bool shown = false) noexcept :
       File(&kType, env), DirItem(DirItem::kNone), shown_(shown) {
   }
 
-  Preview(const std::shared_ptr<Env>& env, const msgpack::object& obj)
+  Preview(Env* env, const msgpack::object& obj)
   try : Preview(env, obj.as<bool>()) {
   } catch (msgpack::type_error&) {
     throw DeserializeException("broken GL/Preview");
@@ -821,7 +821,7 @@ class Preview final : public File, public iface::DirItem {
   void Serialize(Packer& pk) const noexcept override {
     pk.pack(shown_);
   }
-  std::unique_ptr<File> Clone(const std::shared_ptr<Env>& env) const noexcept override {
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<Preview>(env, shown_);
   }
 

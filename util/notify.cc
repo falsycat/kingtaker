@@ -95,7 +95,7 @@ void UpdateLogger(
   ImGui::TableSetupScrollFreeze(0, 1);
   ImGui::TableHeadersRow();
 
-  const auto now = File::Clock::now();
+  const auto now = Clock::now();
 
   const auto bg      = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBg);
   const auto fg_high = ImVec4(1, 1, 1, 1);

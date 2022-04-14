@@ -12,9 +12,9 @@
 #include <variant>
 #include <vector>
 
-#include "util/value.hh"
-
 #include "kingtaker.hh"
+
+#include "util/value.hh"
 
 
 namespace kingtaker::iface {
@@ -22,13 +22,10 @@ namespace kingtaker::iface {
 class Node {
  public:
   class Context;
+  class Editor;
 
-  class Sock;
   class InSock;
   class OutSock;
-
-  using InSockList  = std::vector<std::shared_ptr<InSock>>;
-  using OutSockList = std::vector<std::shared_ptr<OutSock>>;
 
   enum Flag : uint8_t {
     kNone = 0,
@@ -36,11 +33,7 @@ class Node {
   };
   using Flags = uint8_t;
 
-  static inline bool Link(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
-  static inline bool Unlink(const std::weak_ptr<OutSock>&, const std::weak_ptr<InSock>&) noexcept;
-
-  Node(Flags f, InSockList&& in = {}, OutSockList&& out = {}) :
-      in_(std::move(in)), out_(std::move(out)), flags_(f) {
+  Node(Flags f) noexcept : flags_(f) {
   }
   virtual ~Node() = default;
   Node(const Node&) = delete;
@@ -48,54 +41,63 @@ class Node {
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
-  virtual void Update(File::RefStack&, const std::shared_ptr<Context>&) noexcept { }
-  virtual void UpdateMenu(File::RefStack&, const std::shared_ptr<Context>&) noexcept { }
+  virtual void UpdateNode(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
+  virtual void UpdateMenu(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
 
-  inline std::shared_ptr<InSock> FindIn(std::string_view) const noexcept;
-  inline std::shared_ptr<OutSock> FindOut(std::string_view) const noexcept;
-
-  std::span<const std::shared_ptr<InSock>> in() noexcept { return in_; }
-  std::span<const std::shared_ptr<OutSock>> out() noexcept { return out_; }
+  std::span<const std::shared_ptr<InSock>> in() const noexcept { return in_; }
+  std::span<const std::shared_ptr<OutSock>> out() const noexcept { return out_; }
 
   const std::shared_ptr<InSock>& in(size_t i) const noexcept { return in_[i]; }
   const std::shared_ptr<OutSock>& out(size_t i) const noexcept { return out_[i]; }
 
+  inline std::shared_ptr<InSock> in(std::string_view) const noexcept;
+  inline std::shared_ptr<OutSock> out(std::string_view) const noexcept;
+
   Flags flags() const noexcept { return flags_; }
 
  protected:
-  InSockList  in_;
-  OutSockList out_;
+  std::vector<std::shared_ptr<InSock>> in_;
+  std::vector<std::shared_ptr<OutSock>> out_;
 
  private:
   Flags flags_;
 };
 
-
-// context for Node execution
 class Node::Context {
  public:
   class Data {
    public:
     Data() = default;
     virtual ~Data() = default;
-    Data(const Data&) = default;
-    Data(Data&&) = default;
-    Data& operator=(const Data&) = default;
-    Data& operator=(Data&&) = default;
   };
 
-  Context() = default;
+  Context() = delete;
+  Context(File::Path&& basepath) noexcept : basepath_(std::move(basepath)) {
+  }
   virtual ~Context() = default;
   Context(const Context&) = delete;
   Context(Context&&) = delete;
   Context& operator=(const Context&) = delete;
   Context& operator=(Context&&) = delete;
 
+  virtual void ObserveReceive(const InSock&, const Value&) noexcept { }
+
+  // must be thread-safe
   virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
 
+  // Returns an empty when the socket is destructed or missing.
+  virtual std::span<const std::shared_ptr<InSock>> dstOf(const OutSock*) const noexcept {
+    return {};
+  }
+  virtual std::span<const std::shared_ptr<OutSock>> srcOf(const InSock*) const noexcept {
+    return {};
+  }
+
+  const File::Path& basepath() const noexcept { return basepath_; }
+
   template <typename T, typename... Args>
-  std::shared_ptr<T> GetOrNew(Node* n, Args... args) noexcept {
-    auto [itr, created] = map_.try_emplace(n);
+  std::shared_ptr<T> data(Node* n, Args... args) noexcept {
+    auto [itr, created] = data_.try_emplace(n);
     if (!created) {
       auto ptr = std::dynamic_pointer_cast<T>(itr->second);
       if (ptr) return ptr;
@@ -106,130 +108,103 @@ class Node::Context {
   }
 
  private:
-  std::unordered_map<Node*, std::shared_ptr<Data>> map_;
+  File::Path basepath_;
+
+  std::unordered_map<Node*, std::shared_ptr<Data>> data_;
 };
 
-
-// base of all Node sockets
-class Node::Sock {
+class Node::Editor : public Context {
  public:
-  Sock() = delete;
-  Sock(Node* o, std::string_view n) noexcept : owner_(o), name_(n) {
+  Editor() = delete;
+  Editor(File::Path&& basepath) noexcept : Context(std::move(basepath)) {
   }
-  virtual ~Sock() = default;
-  Sock(const Sock&) = delete;
-  Sock(Sock&&) = default;
-  Sock& operator=(const Sock&) = delete;
-  Sock& operator=(Sock&&) = default;
+  Editor(const Editor&) = delete;
+  Editor(Editor&&) = delete;
+  Editor& operator=(const Editor&) = delete;
+  Editor& operator=(Editor&&) = delete;
 
-  Node& owner() const noexcept { return *owner_; }
-  const std::string& name() const noexcept { return name_; }
+  virtual void Link(const std::shared_ptr<InSock>&,
+                    const std::shared_ptr<OutSock>&) noexcept = 0;
 
- private:
-  Node* owner_;
+  virtual void Unlink(const InSock&, const OutSock&) noexcept = 0;
 
-  std::string name_;
+  void Unlink(const InSock& in) noexcept {
+    const auto src_span = srcOf(&in);
+    std::vector<std::shared_ptr<OutSock>> srcs(src_span.begin(), src_span.end());
+    for (const auto& out : srcs) Unlink(in, *out);
+  }
+  void Unlink(const OutSock& out) noexcept {
+    const auto dst_span = dstOf(&out);
+    std::vector<std::shared_ptr<InSock>> dsts(dst_span.begin(), dst_span.end());
+    for (const auto& in : dsts) Unlink(*in, out);
+  }
 };
 
-// A Node socket that receive values from output sockets
-// all operations must be done from main thread
-class Node::InSock : public Sock {
+class Node::InSock {
  public:
-  friend Node;
-
-  InSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
+  InSock(Node* o, std::string_view n) noexcept : owner_(o), name_(n) {
   }
+  virtual ~InSock() = default;
+  InSock(const InSock&) = delete;
+  InSock(InSock&&) = delete;
+  InSock& operator=(const InSock&) = delete;
+  InSock& operator=(InSock&&) = delete;
 
   virtual void Receive(const std::shared_ptr<Context>&, Value&&) noexcept { }
 
-  void CleanConns() const noexcept {
-    auto& v = const_cast<decltype(src_)&>(src_);
-    v.erase(std::remove_if(v.begin(), v.end(),
-                           [](auto& e) { return e.expired(); }),
-            v.end());
-  }
-
-  std::span<const std::weak_ptr<OutSock>> src() const noexcept { return src_; }
+  /* it's possible that the owner dies */
+  Node* owner() const noexcept { return owner_; }
+  const std::string& name() const noexcept { return name_; }
 
  private:
-  std::vector<std::weak_ptr<OutSock>> src_;
+  Node*       owner_;
+  std::string name_;
 };
 
-// A Node socket that emits value to input sockets
-// all operations must be done from main thread
-class Node::OutSock : public Sock {
+class Node::OutSock {
  public:
-  friend Node;
-
-  OutSock(Node* o, std::string_view n) noexcept : Sock(o, n) {
+  OutSock(Node* o, std::string_view n) noexcept : owner_(o), name_(n) {
   }
+  virtual ~OutSock() = default;
+  OutSock(const OutSock&) = delete;
+  OutSock(OutSock&&) = delete;
+  OutSock& operator=(const OutSock&) = delete;
+  OutSock& operator=(OutSock&&) = delete;
 
-  virtual void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
+  void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
     ctx->ObserveSend(*this, v);
-    for (auto& wdst : dst_) {
-      if (wdst.expired()) continue;
-      auto task = [wdst, ctx = ctx, v]() mutable {
-        auto dst = wdst.lock();
-        if (dst) dst->Receive(ctx, std::move(v));
-      };
-      Queue::sub().Push(std::move(task));
-    }
+
+    auto task = [self = this, ctx, v = std::move(v)]() mutable {
+      // self may be already destructed
+      const auto dst = ctx->dstOf(self);
+      for (const auto& other : dst) {
+        ctx->ObserveReceive(*other, v);
+        other->Receive(ctx, Value(v));
+      }
+    };
+    Queue::sub().Push(std::move(task));
   }
 
-  void CleanConns() noexcept {
-    auto& v = const_cast<decltype(dst_)&>(dst_);
-    v.erase(std::remove_if(v.begin(), v.end(),
-                           [](auto& e) { return e.expired(); }),
-            v.end());
-  }
-
-  std::span<const std::weak_ptr<InSock>> dst() const noexcept { return dst_; }
+  /* it's possible that the owner is dead */
+  Node* owner() const noexcept { return owner_; }
+  const std::string& name() const noexcept { return name_; }
 
  private:
-  std::vector<std::weak_ptr<InSock>> dst_;
+  Node*       owner_;
+  std::string name_;
 };
 
-
-bool Node::Link(const std::weak_ptr<OutSock>& out,
-                const std::weak_ptr<InSock>&  in) noexcept {
-  auto s_in  = in.lock();
-  auto s_out = out.lock();
-  if (!s_in || !s_out) return false;
-
-  s_in->src_.emplace_back(out);
-  s_out->dst_.emplace_back(in);
-  return true;
+std::shared_ptr<Node::InSock> Node::in(std::string_view name) const noexcept {
+  for (const auto& sock : in_) {
+    if (sock->name() == name) return sock;
+  }
+  return nullptr;
 }
-bool Node::Unlink(const std::weak_ptr<OutSock>& out,
-                  const std::weak_ptr<InSock>&  in) noexcept {
-  auto s_out = out.lock();
-  auto s_in  = in.lock();
-  if (!s_in || !s_out) return false;
-
-  auto& dst = s_out->dst_;
-  dst.erase(std::remove_if(dst.begin(), dst.end(),
-                           [&s_in](auto& e) {
-                             return e.expired() || e.lock().get() == s_in.get();
-                           }),
-            dst.end());
-  auto& src = s_in->src_;
-  src.erase(std::remove_if(src.begin(), src.end(),
-                           [&s_out](auto& e) {
-                             return e.expired() || e.lock().get() == s_out.get();
-                           }),
-            src.end());
-  return true;
-}
-
-std::shared_ptr<Node::InSock> Node::FindIn(std::string_view name) const noexcept {
-  auto itr = std::find_if(in_.begin(), in_.end(),
-                          [name](auto e) { return e->name() == name; });
-  return itr != in_.end()? *itr: nullptr;
-}
-std::shared_ptr<Node::OutSock> Node::FindOut(std::string_view name) const noexcept {
-  auto itr = std::find_if(out_.begin(), out_.end(),
-                          [name](auto e) { return e->name() == name; });
-  return itr != out_.end()? *itr: nullptr;
+std::shared_ptr<Node::OutSock> Node::out(std::string_view name) const noexcept {
+  for (const auto& sock : out_) {
+    if (sock->name() == name) return sock;
+  }
+  return nullptr;
 }
 
 }  // namespace kingtaker::iface

@@ -9,7 +9,8 @@
 
 namespace kingtaker {
 
-static inline std::string StringifyTime(File::Time t) noexcept {
+template <typename T, typename U>
+static inline std::string StringifyTime(std::chrono::time_point<T, U> t) noexcept {
   const auto dur = t.time_since_epoch();
 
   char buf[64];

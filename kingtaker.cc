@@ -5,6 +5,14 @@
 
 namespace kingtaker {
 
+// To ensure that the registry is initialized before using,
+// define it as a static variable of function.
+static File::Registry& registry_() noexcept {
+  static File::Registry reg;
+  return reg;
+}
+
+
 std::string Exception::Stringify() const noexcept {
   std::stringstream st;
   st << msg_ << "\n";
@@ -47,13 +55,14 @@ std::string File::StringifyPath(const Path& p) noexcept {
   return ret;
 }
 
+const File::Registry& File::registry() noexcept { return registry_(); }
 const File::TypeInfo* File::Lookup(const std::string& name) noexcept {
   auto& reg = registry_();
   auto itr = reg.find(name);
   if (itr == reg.end()) return nullptr;
   return itr->second;
 }
-std::unique_ptr<File> File::Deserialize(const std::shared_ptr<Env>& env, const msgpack::object& v) {
+std::unique_ptr<File> File::Deserialize(Env* env, const msgpack::object& v) {
   std::string tname;
   try {
     tname = msgpack::find(v, "type"s).as<std::string>();
@@ -66,7 +75,7 @@ std::unique_ptr<File> File::Deserialize(const std::shared_ptr<Env>& env, const m
     throw DeserializeException(tname.empty()? "broken File"s: "broken "+tname);
   }
 }
-std::unique_ptr<File> File::Deserialize(const std::shared_ptr<Env>& env, std::istream& st) {
+std::unique_ptr<File> File::Deserialize(Env* env, std::istream& st) {
   const std::string buf(std::istreambuf_iterator<char>(st), {});
   msgpack::object_handle obj;
   msgpack::unpack(obj, buf.data(), buf.size());

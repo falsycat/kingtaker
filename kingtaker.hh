@@ -25,6 +25,10 @@ namespace kingtaker {
 
 using namespace std::literals;
 
+using Clock  = std::chrono::system_clock;
+using Time   = Clock::time_point;
+using Packer = msgpack::packer<std::ostream>;
+
 
 // All exceptions thrown by kingtaker must inherit this class.
 class Exception {
@@ -104,43 +108,33 @@ class Queue {
 class File {
  public:
   class TypeInfo;
-  class Env;
   class RefStack;
+  class Env;
   class Event;
 
   class NotFoundException;
 
-  using Clock    = std::chrono::system_clock;
-  using Time     = Clock::time_point;
   using Path     = std::vector<std::string>;
-  using Packer   = msgpack::packer<std::ostream>;
   using Registry = std::map<std::string, TypeInfo*>;
 
   static Path ParsePath(std::string_view) noexcept;
   static std::string StringifyPath(const Path&) noexcept;
 
   static const TypeInfo* Lookup(const std::string&) noexcept;
-  static std::unique_ptr<File> Deserialize(const std::shared_ptr<Env>&, const msgpack::object&);
-  static std::unique_ptr<File> Deserialize(const std::shared_ptr<Env>&, std::istream&);
+  static std::unique_ptr<File> Deserialize(Env*, const msgpack::object&);
+  static std::unique_ptr<File> Deserialize(Env*, std::istream&);
 
-  // An entrypoint must set root file by calling root(File*) before entering main loop.
+  template <typename T>
+  static T* iface(File* f, T* def = nullptr) noexcept {
+    auto ret = reinterpret_cast<T*>(f->iface(typeid(T)));
+    return ret? ret: def;
+  }
+
   static File& root() noexcept;
+  static const Registry& registry() noexcept;
 
-  static const Registry& registry() noexcept { return registry_(); }
-
-  // Use these static version of iface() when compiler cannot
-  // find non-static template member.
-  template <typename T>
-  static T* iface(File* f, T* def = nullptr) noexcept { return f->iface<T>(def); }
-  template <typename T>
-  static T& iface(File* f, T& def) noexcept { return f->iface<T>(def); }
-  template <typename T>
-  static T* iface(File& f, T* def = nullptr) noexcept { return f.iface<T>(def); }
-  template <typename T>
-  static T& iface(File& f, T& def) noexcept { return f.iface<T>(def); }
-
-  File(const TypeInfo* type, const std::shared_ptr<Env>& env) noexcept :
-      type_(type), env_(env) {
+  File(const TypeInfo* type, Env* env, Time lastmod = Clock::now()) noexcept :
+      lastmod_(lastmod), type_(type), env_(env) {
   }
   File() = delete;
   virtual ~File() = default;
@@ -150,16 +144,13 @@ class File {
   File& operator=(File&&) = delete;
 
   virtual void Serialize(Packer&) const noexcept = 0;
-  virtual std::unique_ptr<File> Clone(const std::shared_ptr<Env>&) const noexcept = 0;
+  virtual std::unique_ptr<File> Clone(Env*) const noexcept = 0;
 
   // To make children referrable by path specification, returns them.
   virtual File* Find(std::string_view) const noexcept { return nullptr; }
 
   // Be called on each GUI updates.
   virtual void Update(RefStack&, Event&) noexcept { }
-
-  // Some features may use this field to detect changes.
-  virtual Time lastmod() const noexcept { return {}; }
 
   // Takes typeinfo of the requested interface and
   // returns a pointer of the implementation or nullptr if not implemented.
@@ -171,45 +162,37 @@ class File {
   void SerializeWithTypeInfo(Packer&) const noexcept;
 
   const TypeInfo& type() const noexcept { return *type_; }
-  const std::shared_ptr<Env>& env() const noexcept { return env_; }
+  Env& env() const noexcept { return *env_; }
+  Time lastmod() const noexcept { return lastmod_; }
+
+ protected:
+  Time lastmod_;
 
  private:
-  static Registry& registry_() noexcept { static Registry reg_; return reg_; }
-
   const TypeInfo* type_;
 
-  std::shared_ptr<Env> env_;
-
-
-  template <typename T>
-  T* iface(T* def = nullptr) noexcept {
-    T* ret = reinterpret_cast<T*>(iface(std::type_index(typeid(T))));
-    return ret? ret: def;
-  }
-  template <typename T>
-  T& iface(T& def) noexcept { return *iface<T>(&def); }
+  Env* env_;
 };
 
 class File::TypeInfo final {
  public:
-  using Factory      = std::function<std::unique_ptr<File>(const std::shared_ptr<Env>&)>;
-  using Deserializer = std::function<std::unique_ptr<File>(const std::shared_ptr<Env>&, const msgpack::object&)>;
+  using Factory      = std::function<std::unique_ptr<File>(Env*)>;
+  using Deserializer = std::function<std::unique_ptr<File>(Env*, const msgpack::object&)>;
 
   template <typename T>
   static TypeInfo New(std::string_view name,
                       std::string_view desc,
                       std::vector<std::type_index>&& iface) noexcept {
-    static_assert(std::is_constructible<T,
-                    std::unique_ptr<Env>, const msgpack::object&>::value,
+    static_assert(std::is_constructible<T, Env*, const msgpack::object&>::value,
                   "T has no deserializer");
 
     Factory factory;
-    if constexpr (std::is_constructible<T, std::unique_ptr<Env>>::value) {
-      factory = [](auto& env) { return std::make_unique<T>(env); };
+    if constexpr (std::is_constructible<T, Env*>::value) {
+      factory = [](auto* env) { return std::make_unique<T>(env); };
     }
 
     Deserializer deserializer =
-        [](auto& env, auto& obj) { return std::make_unique<T>(env, obj); };
+        [](auto* env, auto& obj) { return std::make_unique<T>(env, obj); };
 
     return TypeInfo(name, desc, std::move(iface),
                     std::move(factory),
@@ -228,15 +211,15 @@ class File::TypeInfo final {
   TypeInfo& operator=(const TypeInfo&) = delete;
   TypeInfo& operator=(TypeInfo&&) = delete;
 
-  std::unique_ptr<File> Create(const std::shared_ptr<Env>& env) const {
+  std::unique_ptr<File> Create(Env* env) const {
     return factory_(env);
   }
-  std::unique_ptr<File> Deserialize(const std::shared_ptr<Env>& env, const msgpack::object& v) const {
+  std::unique_ptr<File> Deserialize(Env* env, const msgpack::object& v) const {
     return deserializer_(env, v);
   }
 
   template <typename T>
-  bool CheckImplemented() const noexcept {
+  bool IsImplemented() const noexcept {
     return iface_.end() != std::find(iface_.begin(), iface_.end(), typeid(T));
   }
 
@@ -256,34 +239,6 @@ class File::TypeInfo final {
   Factory factory_;
 
   Deserializer deserializer_;
-};
-
-class File::Env {
- public:
-  enum Flag : uint8_t {
-    kNone     = 0,
-    kRoot     = 1 << 1,
-    kReadOnly = 1 << 2,  // permanentize is disabled
-  };
-  using Flags = uint8_t;
-
-  Env() = delete;
-  Env(const std::filesystem::path& path, Flags flags) noexcept :
-      path_(path), flags_(flags) {
-  }
-  virtual ~Env() = default;
-  Env(const Env&) = delete;
-  Env(Env&&) = delete;
-  Env& operator=(const Env&) = delete;
-  Env& operator=(Env&&) = delete;
-
-  const std::filesystem::path& path() const noexcept { return path_; }
-  Flags flags() const noexcept { return flags_; }
-
- private:
-  std::filesystem::path path_;
-
-  Flags flags_;
 };
 
 class File::RefStack final {
@@ -323,16 +278,6 @@ class File::RefStack final {
   Path GetFullPath() const noexcept;
   std::string Stringify() const noexcept;
 
-  template <typename T>
-  T* FindParent() const noexcept {
-    for (auto itr = terms_.crbegin(); itr < terms_.crend(); ++itr) {
-      auto& f = itr->file();
-      auto ret = dynamic_cast<T*>(&f);
-      if (ret) return ret;
-    }
-    return nullptr;
-  }
-
   const Term& top() const noexcept { return terms_.back(); }
   const Term& terms(std::size_t i) const noexcept { return terms_[i]; }
   std::size_t size() const noexcept { return terms_.size(); }
@@ -342,6 +287,34 @@ class File::RefStack final {
 
   std::vector<Term> terms_;
 };
+
+class File::Env final {
+ public:
+  enum Flag : uint8_t {
+    kNone     = 0,
+    kRoot     = 1 << 1,
+    kVolatile = 1 << 2,
+  };
+  using Flags = uint8_t;
+
+  Env() = delete;
+  Env(const std::filesystem::path& npath, Flags flags) noexcept :
+      npath_(npath), flags_(flags) {
+  }
+  Env(const Env&) = delete;
+  Env(Env&&) = delete;
+  Env& operator=(const Env&) = delete;
+  Env& operator=(Env&&) = delete;
+
+  const std::filesystem::path& npath() const noexcept { return npath_; }
+  Flags flags() const noexcept { return flags_; }
+
+ private:
+  std::filesystem::path npath_;
+
+  Flags flags_;
+};
+
 class File::Event {
  public:
   enum State : uint8_t {
