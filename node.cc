@@ -208,7 +208,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       std::unique_ptr<File>&& f, const ImVec2& pos) noexcept
   try {
     return std::make_unique<NodeHolder>(std::move(f), next_id_++, pos);
-  } catch (Exception& e) {
+  } catch (Exception&) {
     return nullptr;
   }
   void Focus(RefStack& ref, NodeHolder* target) noexcept {
@@ -318,10 +318,10 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     void AddNodeIf(std::unique_ptr<NodeHolder>&& h) noexcept {
       if (!h) return;
-      AddNodes(std::move(h));
+      AddNode(std::move(h));
     }
-    void AddNodes(std::unique_ptr<NodeHolder>&& h) noexcept;
-    void RemoveNodes(NodeHolder* h) noexcept;
+    void AddNode(std::unique_ptr<NodeHolder>&& h) noexcept;
+    void RemoveNode(NodeHolder* h) noexcept;
 
     void AddSilently(std::unique_ptr<HistoryCommand>&& cmd) noexcept {
       tempq_.push_back(std::move(cmd));
@@ -418,11 +418,11 @@ class Network : public File, public iface::DirItem, public iface::Node {
           &owner_->links_, NodeLinkStore::SwapCommand::kUnlink, in, out));
     }
 
-    std::span<const std::shared_ptr<InSock>> dstOf(const OutSock* out) const noexcept {
+    std::span<const std::shared_ptr<InSock>> dstOf(const OutSock* out) const noexcept override {
       if (life_.expired()) return {};
       return owner_->links_.dstOf(out);
     }
-    std::span<const std::shared_ptr<OutSock>> srcOf(const InSock* in) const noexcept {
+    std::span<const std::shared_ptr<OutSock>> srcOf(const InSock* in) const noexcept override {
       if (life_.expired()) return {};
       return owner_->links_.srcOf(in);
     }
@@ -616,7 +616,7 @@ void Network::NodeHolder::UpdateNode(Network& owner, RefStack& ref) noexcept {
       owner.history_.AddNodeIf(Clone(owner.next_id_++, &owner.env()));
     }
     if (ImGui::MenuItem("Remove")) {
-      owner.history_.RemoveNodes({this});
+      owner.history_.RemoveNode(this);
     }
     if (node_->flags() & Node::kMenu) {
       ImGui::Separator();
@@ -712,10 +712,10 @@ class Network::History::NodeSwapCommand : public HistoryCommand {
   std::unique_ptr<NodeHolder> holder_;
   NodeHolder*                 ref_;
 };
-void Network::History::AddNodes(std::unique_ptr<NodeHolder>&& h) noexcept {
+void Network::History::AddNode(std::unique_ptr<NodeHolder>&& h) noexcept {
   Queue(std::make_unique<NodeSwapCommand>(owner_, std::move(h)));
 }
-void Network::History::RemoveNodes(NodeHolder* h) noexcept {
+void Network::History::RemoveNode(NodeHolder* h) noexcept {
   for (const auto& in : h->node().in()) {
     for (const auto& out : owner_->links_.srcOf(in.get())) {
       Queue(std::make_unique<NodeLinkStore::SwapCommand>(
