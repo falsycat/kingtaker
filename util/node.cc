@@ -12,8 +12,8 @@ NodeLinkStore::NodeLinkStore(
   if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
 
   for (size_t i = 0; i < obj.via.map.size; ++i) {
-    const auto& src_obj      = obj.via.map.ptr[i];
-    const auto  src_node_idx = src_obj.key.as<size_t>();
+    const auto& src_node_obj = obj.via.map.ptr[i];
+    const auto  src_node_idx = src_node_obj.key.as<size_t>();
     const auto& srcs_obj     = obj.via.map.ptr[i].val;
     if (srcs_obj.type != msgpack::type::MAP) throw msgpack::type_error();
 
