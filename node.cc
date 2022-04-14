@@ -108,9 +108,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
   void Update(RefStack& ref, Event& ev) noexcept override;
   void UpdateMenu(RefStack&) noexcept override;
   void UpdateCanvas(RefStack&) noexcept;
-  void UpdateCanvasMenu(RefStack&) noexcept;
+  void UpdateCanvasMenu(RefStack&, const ImVec2&) noexcept;
   template <typename T>
-  void UpdateNewIO() noexcept;
+  void UpdateNewIO(const ImVec2& pos) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
@@ -204,9 +204,10 @@ class Network : public File, public iface::DirItem, public iface::Node {
     auto itr = hmap_.find(n);
     return itr != hmap_.end()? itr->second: nullptr;
   }
-  std::unique_ptr<NodeHolder> CreateNewHolderIf(std::unique_ptr<File>&& f) noexcept
+  std::unique_ptr<NodeHolder> CreateNewHolderIf(
+      std::unique_ptr<File>&& f, const ImVec2& pos) noexcept
   try {
-    return std::make_unique<NodeHolder>(std::move(f), next_id_++);
+    return std::make_unique<NodeHolder>(std::move(f), next_id_++, pos);
   } catch (Exception& e) {
     return nullptr;
   }
@@ -465,12 +466,14 @@ void Network::UpdateMenu(RefStack&) noexcept {
   ImGui::MenuItem("NetworkEditor", nullptr, &shown_);
 }
 void Network::UpdateCanvas(RefStack& ref) noexcept {
+  const auto pos = ImGui::GetCursorScreenPos();
+
   ImNodes::BeginCanvas(&canvas_);
   gui::NodeCanvasSetZoom();
 
   gui::NodeCanvasResetZoom();
   if (ImGui::BeginPopupContextItem()) {
-    UpdateCanvasMenu(ref);
+    UpdateCanvasMenu(ref, pos);
     ImGui::EndPopup();
   }
   gui::NodeCanvasSetZoom();
@@ -523,13 +526,16 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
   gui::NodeCanvasResetZoom();
   ImNodes::EndCanvas();
 }
-void Network::UpdateCanvasMenu(RefStack&) noexcept {
+void Network::UpdateCanvasMenu(RefStack&, const ImVec2& winpos) noexcept {
+  const auto pos =
+      (ImGui::GetWindowPos()-winpos) / canvas_.Zoom - canvas_.Offset;
+
   if (ImGui::BeginMenu("New")) {
     for (auto& p : File::registry()) {
       auto& t = *p.second;
       if (!t.factory() || !t.IsImplemented<Node>()) continue;
       if (ImGui::MenuItem(t.name().c_str())) {
-        history_.AddNodeIf(CreateNewHolderIf(t.Create(&env())));
+        history_.AddNodeIf(CreateNewHolderIf(t.Create(&env()), pos));
       }
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", t.desc().c_str());
@@ -537,11 +543,11 @@ void Network::UpdateCanvasMenu(RefStack&) noexcept {
     }
     ImGui::Separator();
     if (ImGui::BeginMenu("Input")) {
-      UpdateNewIO<InNode>();
+      UpdateNewIO<InNode>(pos);
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Output")) {
-      UpdateNewIO<OutNode>();
+      UpdateNewIO<OutNode>(pos);
       ImGui::EndMenu();
     }
     ImGui::EndMenu();
@@ -564,7 +570,7 @@ void Network::UpdateCanvasMenu(RefStack&) noexcept {
   }
 }
 template <typename T>
-void Network::UpdateNewIO() noexcept {
+void Network::UpdateNewIO(const ImVec2& pos) noexcept {
   constexpr auto kFlags =
       ImGuiInputTextFlags_EnterReturnsTrue |
       ImGuiInputTextFlags_AutoSelectAll;
@@ -581,7 +587,7 @@ void Network::UpdateNewIO() noexcept {
     ImGui::TextUnformatted("empty name");
   }
   if (submit && !empty) {
-    history_.AddNodeIf(CreateNewHolderIf(std::make_unique<T>(&env(), io_new_name_)));
+    history_.AddNodeIf(CreateNewHolderIf(std::make_unique<T>(&env(), io_new_name_), pos));
     io_new_name_ = "";
     ImGui::CloseCurrentPopup();
   }
