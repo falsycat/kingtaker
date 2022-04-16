@@ -34,6 +34,12 @@ const Enum& ParseEnum(const char* name, std::span<const Enum> list, std::string_
   }
   throw E("unknown OpenGL "s+name+": "+std::string(v));
 }
+inline std::vector<std::string> GetEnumNames(std::span<const Enum> list) noexcept {
+  std::vector<std::string> ret;
+  ret.reserve(list.size());
+  for (const auto& e : list) ret.push_back(e.name);
+  return ret;
+}
 
 static inline const std::vector<Enum> kAttachments = {
   { 0, GL_COLOR_ATTACHMENT0,  "color0",  },

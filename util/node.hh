@@ -235,8 +235,8 @@ class NodeLambdaInSock final : public iface::Node::InSock {
   using Node     = iface::Node;
   using Receiver = std::function<void(const std::shared_ptr<Node::Context>&, Value&&)>;
 
-  NodeLambdaInSock(Node* o, std::string_view n, Receiver&& f) noexcept :
-      InSock(o, n), lambda_(std::move(f)) {
+  NodeLambdaInSock(Node* o, const std::shared_ptr<const Node::SockMeta>& meta, Receiver&& f) noexcept :
+      InSock(o, meta), lambda_(std::move(f)) {
   }
 
   void Receive(const std::shared_ptr<Node::Context>& ctx, Value&& v) noexcept override {
@@ -255,31 +255,13 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
   using RefStack = File::RefStack;
   using Path     = File::Path;
   using Node     = iface::Node;
+  using SockMeta = Node::SockMeta;
   using InSock   = Node::InSock;
   using OutSock  = Node::OutSock;
   using Context  = Node::Context;
 
   // static constexpr char* kTitle = "";
 
-  enum SockFlag : uint8_t {
-    kNone        = 0,
-    kPulseButton = 1 << 0,
-    kFrameHeight = 1 << 1,
-
-    kExecIn   = 1 << 2,
-    kErrorOut = 1 << 3,
-  };
-  using SockFlags = uint8_t;
-
-  struct SockMeta final {
-   public:
-    SockMeta(const std::string& n, const std::string& d, SockFlags f = kNone) noexcept :
-        name(n), desc(d), flags(f) {
-    }
-    std::string name;
-    std::string desc;
-    SockFlags   flags;
-  };
   // static inline const std::vector<SockMeta> kInSocks;
   // static inline const std::vector<SockMeta> kOutSocks;
 
@@ -301,24 +283,13 @@ class LambdaNode final : public File, public iface::Node {
   LambdaNode(Env* env) noexcept :
       File(&Driver::kType, env), Node(Node::kNone),
       life_(std::make_shared<std::monostate>()) {
-    std::shared_ptr<OutSock> err;
     for (size_t i = 0; i < Driver::kOutSocks.size(); ++i) {
       const auto& m = Driver::kOutSocks[i];
-      out_.emplace_back(new OutSock(this, m.name));
-
-      if (m.flags & LambdaNodeDriver::kErrorOut) {
-        assert(!err);
-        err = out_.back();
-      }
+      out_.emplace_back(new OutSock(this, {&m, [](auto){}}));
     }
     for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
       const auto& m = Driver::kInSocks[i];
-
-      if (m.flags & LambdaNodeDriver::kExecIn) {
-        in_.emplace_back(new ExecInSock(this, m.name, i, err));
-      } else {
-        in_.emplace_back(new CustomInSock(this, m.name, i));
-      }
+      in_.emplace_back(new CustomInSock(this, &m, i));
     }
   }
 
@@ -353,11 +324,12 @@ class LambdaNode final : public File, public iface::Node {
     return ctx->data<Driver>(this, this, std::weak_ptr<Context>(ctx));
   }
 
-  // InSock for generic inputs
-  class CustomInSock : public InSock {
+
+  class CustomInSock final : public InSock {
    public:
-    CustomInSock(LambdaNode* o, std::string_view name, size_t idx) noexcept:
-        InSock(o, name), owner_(o), life_(o->life_), idx_(idx) {
+    CustomInSock(LambdaNode* o, const SockMeta* meta, size_t idx) noexcept:
+        InSock(o, {meta, [](auto){}}),
+        owner_(o), life_(o->life_), idx_(idx) {
     }
 
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
@@ -365,18 +337,13 @@ class LambdaNode final : public File, public iface::Node {
       try {
         owner_->GetDriver(ctx)->Handle(idx_, std::move(v));
       } catch (Exception& e) {
-        OnCatch(ctx, e);
+        notify::Warn(owner_->path(), owner_,
+                     "error while handling input ("+name()+"): "s+e.msg());
       }
     }
 
     LambdaNode* owner() const noexcept { return owner_; }
     size_t idx() const noexcept { return idx_; }
-
-   protected:
-    virtual void OnCatch(const std::shared_ptr<Context>&, Exception& e) noexcept {
-      notify::Warn(owner_->path(), owner_,
-                   "error while handling input ("+name()+"): "s+e.msg());
-    }
 
    private:
     LambdaNode* owner_;
@@ -384,30 +351,6 @@ class LambdaNode final : public File, public iface::Node {
     std::weak_ptr<std::monostate> life_;
 
     size_t idx_;
-  };
-
-  // InSock for clock input
-  class ExecInSock : public CustomInSock {
-   public:
-    ExecInSock(LambdaNode*      o,
-               std::string_view name,
-               size_t           idx,
-               const std::shared_ptr<OutSock>& err) noexcept :
-        CustomInSock(o, name, idx), err_(err) {
-    }
-
-    using CustomInSock::owner;
-    using CustomInSock::name;
-
-   protected:
-    void OnCatch(const std::shared_ptr<Context>& ctx, Exception& e) noexcept {
-      notify::Error(owner()->path(), owner(),
-                    "error while handling input ("+name()+"): "s+e.msg());
-      if (err_) err_->Send(ctx, {});
-    }
-
-   private:
-    std::shared_ptr<OutSock> err_;
   };
 };
 template <typename Driver>
@@ -420,12 +363,9 @@ void LambdaNode<Driver>::UpdateNode(
   for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
     const auto& m = Driver::kInSocks[i];
     if (ImNodes::BeginInputSlot(m.name.c_str(), 1)) {
-      const bool fh = m.flags & LambdaNodeDriver::kFrameHeight;
-
-      if (m.flags & LambdaNodeDriver::kPulseButton) {
-        gui::NodeInSock(ctx, in_[i], !fh /* = small */);
+      if (m.type == SockMeta::kPulse) {
+        gui::NodeInSock(ctx, in_[i]);
       } else {
-        if (fh) ImGui::AlignTextToFramePadding();
         gui::NodeInSock(m.name);
       }
       ImNodes::EndSlot();

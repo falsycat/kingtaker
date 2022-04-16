@@ -125,12 +125,14 @@ class Device final {
 
 class Obj final : public Value::Data {
  public:
+  static inline const char* kName = "kingtaker::luajit::Obj";
+
   static std::shared_ptr<Obj> PopAndCreate(Device* dev, lua_State* L) noexcept {
     return std::make_shared<Obj>(dev, luaL_ref(L, LUA_REGISTRYINDEX));
   }
 
   Obj(Device* dev, int reg) noexcept :
-      Data("kigntaker::luajit::Obj"), dev_(dev), reg_(reg) {
+      Data(kName), dev_(dev), reg_(reg) {
   }
   ~Obj() noexcept {
     dev_->Queue([i = reg_](auto L) { luaL_unref(L, LUA_REGISTRYINDEX, i); });

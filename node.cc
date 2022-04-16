@@ -230,7 +230,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     for (auto in : in_nodes_) in_names.insert(in->name());
     for (const auto& name : in_names) {
       if (in(name)) continue;
-      in_.emplace_back(new CustomInSock(this, name));
+      in_.emplace_back(new CustomInSock(this, std::make_shared<SockMeta>(name)));
     }
     for (auto itr = in_.begin(); itr < in_.end();) {
       if (in_names.contains((*itr)->name())) {
@@ -244,7 +244,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     for (auto out : out_nodes_) out_names.insert(out->name());
     for (const auto& name : out_names) {
       if (out(name)) continue;
-      out_.emplace_back(new OutSock(this, name));
+      out_.emplace_back(new OutSock(this, std::make_shared<SockMeta>(name)));
     }
     for (auto itr = out_.begin(); itr < out_.end();) {
       if (out_names.contains((*itr)->name())) {
@@ -384,9 +384,13 @@ class Network : public File, public iface::DirItem, public iface::Node {
     static inline TypeInfo kType = TypeInfo::New<InNode>(
         "Node/Network/In", "input emitter in Node/Network", {});
 
+    static inline const SockMeta kOut = {
+      .name = "out", .type = SockMeta::kAny,
+    };
+
     InNode(Env* env, std::string_view name) noexcept :
         File(&kType, env), Node(Node::kNone), name_(name) {
-      out_.emplace_back(new OutSock(this, "out"));
+      out_.emplace_back(new OutSock(this, {&kOut, [](auto){}}));
     }
 
     InNode(Env* env, const msgpack::object& obj) : InNode(env, obj.as<std::string>()) {
@@ -413,9 +417,13 @@ class Network : public File, public iface::DirItem, public iface::Node {
     static inline TypeInfo kType = TypeInfo::New<OutNode>(
         "Node/Network/Out", "output receiver in Node/Network", {});
 
+    static inline const SockMeta kOut = {
+      .name = "in", .type = SockMeta::kAny, .trigger = true,
+    };
+
     OutNode(Env* env, std::string_view name) noexcept :
         File(&kType, env), Node(Node::kNone), name_(name) {
-      in_.emplace_back(new InSock(this, "in"));
+      in_.emplace_back(new InSock(this, {&kOut, [](auto){}}));
     }
 
     OutNode(Env* env, const msgpack::object& obj) : OutNode(env, obj.as<std::string>()) {
@@ -442,8 +450,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
   // An impl of InSock that executes Network as lambda.
   class CustomInSock final : public InSock {
    public:
-    CustomInSock(Network* owner, std::string_view name) noexcept :
-        InSock(owner, name), owner_(owner), life_(owner_->life_) {
+    CustomInSock(Network* owner, const std::shared_ptr<const SockMeta>& meta) noexcept :
+        InSock(owner, meta), owner_(owner), life_(owner_->life_) {
     }
 
     void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept override {
@@ -841,12 +849,12 @@ class Call final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "clear", "", kPulseButton },
-    { "path",  "", },
-    { "send",  "", },
+    { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
+    { .name = "path",  .type = SockMeta::kStringPath, },
+    { .name = "send",  .type = SockMeta::kTuple, .trigger = true, },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "recv", "", },
+    { .name = "recv", .type = SockMeta::kTuple, },
   };
 
   Call() = delete;
@@ -1088,14 +1096,14 @@ class Cache final : public File, public iface::DirItem {
         {typeid(iface::Node)});
 
     static inline const std::vector<SockMeta> kInSocks = {
-      { "clear",      "", kPulseButton },
-      { "node_path",  "", },
-      { "cache_path", "", },
-      { "params",     "", },
-      { "exec",       "", kPulseButton | kExecIn },
+      { .name = "clear",      .type = SockMeta::kPulse, .trigger = true, },
+      { .name = "node_path",  .type = SockMeta::kStringPath, },
+      { .name = "cache_path", .type = SockMeta::kStringPath, },
+      { .name = "params",     .type = SockMeta::kTuple, .multi = true, },
+      { .name = "exec",       .type = SockMeta::kPulse, .trigger = true, },
     };
     static inline const std::vector<SockMeta> kOutSocks = {
-      { "out", "", },
+      { .name = "out", .type = SockMeta::kTuple, },
     };
 
     Call(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :

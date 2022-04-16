@@ -24,8 +24,9 @@ class Node {
   class Context;
   class Editor;
 
-  class InSock;
-  class OutSock;
+  struct SockMeta;
+  class  InSock;
+  class  OutSock;
 
   enum Flag : uint8_t {
     kNone = 0,
@@ -140,9 +141,53 @@ class Node::Editor : public Context {
   }
 };
 
+struct Node::SockMeta final {
+ public:
+  enum Type {
+    kAny,
+    kPulse,
+    kInteger,
+    kScalar,
+    kVec2,
+    kVec3,
+    kVec4,
+    kScalarNormal,
+    kVec2Normal,
+    kVec3Normal,
+    kVec4Normal,
+    kString,
+    kStringMultiline,
+    kStringOption,
+    kStringPath,
+    kTuple,
+    kData,
+  };
+
+  std::string name;  // must be unique in the node
+  Type        type = kAny;
+  std::string desc = "";
+
+  // flags
+  unsigned trigger : 1 = false;
+  unsigned multi   : 1 = false;
+
+  // default value
+  std::optional<Value> def = std::nullopt;
+
+  // when type == kStringOption
+  std::vector<Value::String> stringOptions = {};
+
+  // when type == kTuple
+  std::vector<std::shared_ptr<SockMeta>> tupleFields = {};
+
+  // when type == kData
+  std::string dataType = "";
+};
+
 class Node::InSock {
  public:
-  InSock(Node* o, std::string_view n) noexcept : owner_(o), name_(n) {
+  InSock(Node* o, const std::shared_ptr<const SockMeta>& meta) noexcept :
+      owner_(o), meta_(meta) {
   }
   virtual ~InSock() = default;
   InSock(const InSock&) = delete;
@@ -154,16 +199,19 @@ class Node::InSock {
 
   /* it's possible that the owner dies */
   Node* owner() const noexcept { return owner_; }
-  const std::string& name() const noexcept { return name_; }
+  const std::shared_ptr<const SockMeta>& meta() const noexcept { return meta_; }
+  const std::string& name() const noexcept { return meta_->name; }
 
  private:
-  Node*       owner_;
-  std::string name_;
+  Node* owner_;
+
+  std::shared_ptr<const SockMeta> meta_;
 };
 
 class Node::OutSock {
  public:
-  OutSock(Node* o, std::string_view n) noexcept : owner_(o), name_(n) {
+  OutSock(Node* o, const std::shared_ptr<const SockMeta>& meta) noexcept :
+      owner_(o), meta_(meta) {
   }
   virtual ~OutSock() = default;
   OutSock(const OutSock&) = delete;
@@ -187,11 +235,13 @@ class Node::OutSock {
 
   /* it's possible that the owner is dead */
   Node* owner() const noexcept { return owner_; }
-  const std::string& name() const noexcept { return name_; }
+  const std::shared_ptr<const SockMeta>& meta() const noexcept { return meta_; }
+  const std::string& name() const noexcept { return meta_->name; }
 
  private:
-  Node*       owner_;
-  std::string name_;
+  Node* owner_;
+
+  std::shared_ptr<const SockMeta> meta_;
 };
 
 std::shared_ptr<Node::InSock> Node::in(std::string_view name) const noexcept {

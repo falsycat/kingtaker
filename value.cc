@@ -37,15 +37,22 @@ class Imm final : public File,
       "Value/Imm", "immediate value",
       {typeid(iface::Memento), typeid(iface::DirItem), typeid(iface::Node)});
 
+  static inline const SockMeta kIn = {
+    .name = "clk", .type = SockMeta::kPulse, .trigger = true, .def = Value::Pulse{},
+  };
+  static inline const SockMeta kOut = {
+    .name = "out", .type = SockMeta::kAny,
+  };
+
   Imm(Env* env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
       mem_(std::make_shared<Memento>(UniversalData {this, std::move(v), size})) {
-    out_.emplace_back(new OutSock(this, "out"));
+    out_.emplace_back(new OutSock(this, {&kOut, [](auto){}}));
 
     auto receiver = [out = out_[0], mem = mem_](const auto& ctx, auto&&) {
       out->Send(ctx, Value(mem->data().value));
     };
-    in_.emplace_back(new NodeLambdaInSock(this, "CLK", std::move(receiver)));
+    in_.emplace_back(new NodeLambdaInSock(this, {&kIn, [](auto){}}, std::move(receiver)));
   }
 
   Imm(Env* env, const msgpack::object& obj) :
@@ -215,145 +222,5 @@ void Imm::UpdateEditor() noexcept {
     mem_->Commit();
   }
 }
-
-
-class Tuple1 final : public LambdaNodeDriver {
- public:
-  using Owner = LambdaNode<Tuple1>;
-
-  static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "Value/Tuple1", "creates 1 element tuple",
-      {typeid(iface::Node)});
-
-  static inline const std::vector<SockMeta> kInSocks = {
-    { "item", "", },
-  };
-  static inline const std::vector<SockMeta> kOutSocks = {
-    { "tuple", "", },
-  };
-
-  Tuple1(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
-      owner_(o), ctx_(ctx) {
-  }
-
-  std::string title() const noexcept {
-    return "TUPLE1";
-  }
-
-  void Handle(size_t idx, Value&& v) {
-    switch (idx) {
-    case 0:
-      owner_->out(0)->Send(ctx_.lock(), Value::Tuple { std::move(v) });
-      return;
-    }
-    assert(false);
-  }
-
- private:
-  Owner* owner_;
-
-  std::weak_ptr<Context> ctx_;
-};
-
-
-class TuplePush final : public LambdaNodeDriver {
- public:
-  using Owner = LambdaNode<TuplePush>;
-
-  static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "Value/TuplePush", "append 1 element to tuple",
-      {typeid(iface::Node)});
-
-  static inline const std::vector<SockMeta> kInSocks = {
-    { "tuple", "", },
-    { "item",  "", },
-  };
-  static inline const std::vector<SockMeta> kOutSocks = {
-    { "tuple", "", },
-  };
-
-  TuplePush(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
-      owner_(o), ctx_(ctx) {
-  }
-
-  std::string title() const noexcept {
-    return "TUPLE PUSH";
-  }
-
-  void Handle(size_t idx, Value&& v) {
-    switch (idx) {
-    case 0:
-      tuple_ = v.tupleUniqPtr();
-      ExecIf();
-      return;
-    case 1:
-      item_ = std::move(v);
-      ExecIf();
-      return;
-    }
-    assert(false);
-  }
-  void ExecIf() noexcept {
-    if (!tuple_ || !item_) return;
-    tuple_->push_back(std::move(*item_));
-    owner_->out(0)->Send(ctx_.lock(), tuple_);
-
-    tuple_ = nullptr;
-    item_  = std::nullopt;
-  }
-
- private:
-  Owner* owner_;
-
-  std::weak_ptr<Context> ctx_;
-
-  std::shared_ptr<Value::Tuple> tuple_;
-
-  std::optional<Value> item_;
-};
-
-
-class TuplePop final : public LambdaNodeDriver {
- public:
-  using Owner = LambdaNode<TuplePop>;
-
-  static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "Value/TuplePop", "pop the last element from tuple",
-      {typeid(iface::Node)});
-
-  static inline const std::vector<SockMeta> kInSocks = {
-    { "tuple", "", kExecIn },
-  };
-  static inline const std::vector<SockMeta> kOutSocks = {
-    { "item",  "", },
-    { "tuple", "", },
-  };
-
-  TuplePop(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
-      owner_(o), ctx_(ctx) {
-  }
-
-  std::string title() const noexcept {
-    return "TUPLE POP";
-  }
-
-  void Handle(size_t idx, Value&& v) {
-    assert(idx == 0);
-    (void) idx;
-
-    auto  ctx = ctx_.lock();
-    auto& tup = v.tupleUniq();
-    if (tup.size() == 0) throw Exception("empty tuple");
-
-    owner_->out(0)->Send(ctx, Value(tup.back()));
-    tup.pop_back();
-    owner_->out(1)->Send(ctx, std::move(v));
-  }
-
- private:
-  Owner* owner_;
-
-  std::weak_ptr<Context> ctx_;
-};
 
 } }  // namespace kingtaker
