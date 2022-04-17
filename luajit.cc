@@ -41,14 +41,13 @@ class Compile final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { "clear", "", kPulseButton },
-    { "name",  "", },
-    { "src",   "", },
-    { "exec",  "", kPulseButton | kExecIn },
+    { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
+    { .name = "name",  .type = SockMeta::kString, .def = ""s, },
+    { .name = "src",   .type = SockMeta::kStringMultiline, },
+    { .name = "exec",  .type = SockMeta::kPulse, .trigger = true, },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { "out",   "", },
-    { "error", "", },
+    { .name = "out", .type = SockMeta::kPulse, },
   };
 
   Compile(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
@@ -126,21 +125,33 @@ class Exec final : public File, public iface::Node {
       "LuaJIT/Exec", "execute compiled function",
       {typeid(iface::Node)});
 
+  static inline const SockMeta kOut_Recv = {
+    .name = "recv", .type = SockMeta::kPulse,
+  };
+  static inline const SockMeta kIn_Clear = {
+    .name = "clear", .type = SockMeta::kPulse, .trigger = true,
+  };
+  static inline const SockMeta kIn_Func = {
+    .name = "func", .type = SockMeta::kData, .dataType = luajit::Obj::kName,
+  };
+  static inline const SockMeta kIn_Send = {
+    .name = "send", .type = SockMeta::kAny, .trigger = true,
+  };
+
   Exec(Env* env) noexcept :
       File(&kType, env), Node(Node::kNone),
       udata_(std::make_shared<UniversalData>()) {
-    out_.emplace_back(new OutSock(this, "recv"));
-    out_.emplace_back(new OutSock(this, "abort"));
+    out_.emplace_back(new OutSock(this, kOut_Recv.gshared()));
 
-    udata_->self      = this;
-    udata_->out_recv  = out_[0];
-    udata_->out_abort = out_[1];
+    udata_->self     = this;
+    udata_->out_recv = out_[0];
 
     auto task_clear = [udata = udata_](auto& ctx, auto&&) {
       auto cdata = ContextData::Get(udata, ctx);
       dev_.Queue([cdata](auto L) { cdata->Clear(L); });
     };
-    in_.emplace_back(new NodeLambdaInSock(this, "clear", std::move(task_clear)));
+    in_.emplace_back(new NodeLambdaInSock(
+            this, kIn_Clear.gshared(), std::move(task_clear)));
 
     auto task_func = [udata = udata_](auto& ctx, auto&& v) {
       try {
@@ -150,7 +161,8 @@ class Exec final : public File, public iface::Node {
         notify::Warn(udata->pathSync(), udata->self, e.msg());
       }
     };
-    in_.emplace_back(new NodeLambdaInSock(this, "func", std::move(task_func)));
+    in_.emplace_back(new NodeLambdaInSock(
+            this, kIn_Func.gshared(), std::move(task_func)));
 
     auto task_send = [udata = udata_](auto& ctx, auto&& v) {
       try {
@@ -159,7 +171,8 @@ class Exec final : public File, public iface::Node {
         notify::Error(udata->pathSync(), udata->self, e.msg());
       }
     };
-    in_.emplace_back(new NodeLambdaInSock(this, "send", std::move(task_send)));
+    in_.emplace_back(new NodeLambdaInSock(
+            this, kIn_Send.gshared(), std::move(task_send)));
   }
 
   Exec(Env* env, const msgpack::object&) noexcept :
@@ -197,7 +210,6 @@ class Exec final : public File, public iface::Node {
     Exec* self;
 
     std::shared_ptr<OutSock> out_recv;
-    std::shared_ptr<OutSock> out_abort;
   };
   std::shared_ptr<UniversalData> udata_;
 
@@ -331,7 +343,6 @@ class Exec final : public File, public iface::Node {
       ContextData::Push(L, cdata);
       if (dev_.SandboxCall(L, 2, 0) != 0) {
         notify::Error(udata->path, udata->self, lua_tostring(L, -1));
-        udata->out_abort->Send(ctx, {});
       }
     };
     dev_.Queue(std::move(task));
@@ -342,7 +353,7 @@ void Exec::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
 
   ImGui::BeginGroup();
   if (ImNodes::BeginInputSlot("clear", 1)) {
-    gui::NodeInSock(ctx, in_[0], true  /* = small */);
+    gui::NodeInSock(ctx, in_[0]);
     ImNodes::EndSlot();
   }
   if (ImNodes::BeginInputSlot("func", 1)) {

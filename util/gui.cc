@@ -99,16 +99,11 @@ void NodeInSock(const std::string& name) noexcept {
 }
 void NodeInSock(
     const std::shared_ptr<iface::Node::Context>& ctx,
-    const std::shared_ptr<iface::Node::InSock>&  sock,
-    bool                                         sm) noexcept {
-  if (!sm) ImGui::AlignTextToFramePadding();
+    const std::shared_ptr<iface::Node::InSock>&  sock) noexcept {
   gui::NodeSocket();
   ImGui::SameLine();
 
-  const auto press = sm?
-      ImGui::SmallButton(sock->name().c_str()):
-      ImGui::Button(sock->name().c_str());
-  if (press) {
+  if (ImGui::SmallButton(sock->name().c_str())) {
     Queue::sub().Push([sock, ctx]() { sock->Receive(ctx, {}); });
   }
 }
