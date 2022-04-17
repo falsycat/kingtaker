@@ -141,7 +141,7 @@ class Exec final : public File, public iface::Node {
   Exec(Env* env) noexcept :
       File(&kType, env), Node(Node::kNone),
       udata_(std::make_shared<UniversalData>()) {
-    out_.emplace_back(new OutSock(this, {&kOut_Recv, [](auto){}}));
+    out_.emplace_back(new OutSock(this, kOut_Recv.gshared()));
 
     udata_->self     = this;
     udata_->out_recv = out_[0];
@@ -151,7 +151,7 @@ class Exec final : public File, public iface::Node {
       dev_.Queue([cdata](auto L) { cdata->Clear(L); });
     };
     in_.emplace_back(new NodeLambdaInSock(
-            this, {&kIn_Clear, [](auto){}}, std::move(task_clear)));
+            this, kIn_Clear.gshared(), std::move(task_clear)));
 
     auto task_func = [udata = udata_](auto& ctx, auto&& v) {
       try {
@@ -162,7 +162,7 @@ class Exec final : public File, public iface::Node {
       }
     };
     in_.emplace_back(new NodeLambdaInSock(
-            this, {&kIn_Func, [](auto){}}, std::move(task_func)));
+            this, kIn_Func.gshared(), std::move(task_func)));
 
     auto task_send = [udata = udata_](auto& ctx, auto&& v) {
       try {
@@ -172,7 +172,7 @@ class Exec final : public File, public iface::Node {
       }
     };
     in_.emplace_back(new NodeLambdaInSock(
-            this, {&kIn_Send, [](auto){}}, std::move(task_send)));
+            this, kIn_Send.gshared(), std::move(task_send)));
   }
 
   Exec(Env* env, const msgpack::object&) noexcept :

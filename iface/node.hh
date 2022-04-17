@@ -182,6 +182,16 @@ struct Node::SockMeta final {
 
   // when type == kData
   std::string dataType = "";
+
+
+  static std::shared_ptr<SockMeta> shared(SockMeta&& meta) noexcept {
+    auto ret = std::make_shared<SockMeta>();
+    *ret = std::move(meta);
+    return ret;
+  }
+  std::shared_ptr<const SockMeta> gshared() const noexcept {
+    return {this, [](auto){}};
+  }
 };
 
 class Node::InSock {

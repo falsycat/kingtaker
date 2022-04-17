@@ -30,12 +30,12 @@ class Passthru final : public File, public iface::Node {
   };
 
   Passthru(Env* env) noexcept : File(&kType, env), Node(kNone) {
-    out_.emplace_back(new OutSock(this, {&kOutMeta, [](auto){}}));
+    out_.emplace_back(new OutSock(this, kOutMeta.gshared()));
 
     auto task = [out = out_[0]](const auto& ctx, auto&& v) {
       out->Send(ctx, std::move(v));
     };
-    in_.emplace_back(new NodeLambdaInSock(this, {&kInMeta, [](auto){}}, std::move(task)));
+    in_.emplace_back(new NodeLambdaInSock(this, kInMeta.gshared(), std::move(task)));
   }
 
   Passthru(Env* env, const msgpack::object&) noexcept : Passthru(env) {

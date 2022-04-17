@@ -328,7 +328,7 @@ class LambdaNode final : public File, public iface::Node {
   class CustomInSock final : public InSock {
    public:
     CustomInSock(LambdaNode* o, const SockMeta* meta, size_t idx) noexcept:
-        InSock(o, {meta, [](auto){}}),
+        InSock(o, meta->gshared()),
         owner_(o), life_(o->life_), idx_(idx) {
     }
 

@@ -230,7 +230,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     for (auto in : in_nodes_) in_names.insert(in->name());
     for (const auto& name : in_names) {
       if (in(name)) continue;
-      in_.emplace_back(new CustomInSock(this, std::make_shared<SockMeta>(name)));
+      in_.emplace_back(new InSock(this, SockMeta::shared({.name = name})));
     }
     for (auto itr = in_.begin(); itr < in_.end();) {
       if (in_names.contains((*itr)->name())) {
@@ -244,7 +244,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     for (auto out : out_nodes_) out_names.insert(out->name());
     for (const auto& name : out_names) {
       if (out(name)) continue;
-      out_.emplace_back(new OutSock(this, std::make_shared<SockMeta>(name)));
+      out_.emplace_back(new OutSock(this, SockMeta::shared({.name = name})));
     }
     for (auto itr = out_.begin(); itr < out_.end();) {
       if (out_names.contains((*itr)->name())) {
@@ -390,7 +390,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     InNode(Env* env, std::string_view name) noexcept :
         File(&kType, env), Node(Node::kNone), name_(name) {
-      out_.emplace_back(new OutSock(this, {&kOut, [](auto){}}));
+      out_.emplace_back(new OutSock(this, kOut.gshared()));
     }
 
     InNode(Env* env, const msgpack::object& obj) : InNode(env, obj.as<std::string>()) {
@@ -423,7 +423,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     OutNode(Env* env, std::string_view name) noexcept :
         File(&kType, env), Node(Node::kNone), name_(name) {
-      in_.emplace_back(new InSock(this, {&kOut, [](auto){}}));
+      in_.emplace_back(new InSock(this, kOut.gshared()));
     }
 
     OutNode(Env* env, const msgpack::object& obj) : OutNode(env, obj.as<std::string>()) {
