@@ -230,7 +230,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     for (auto in : in_nodes_) in_names.insert(in->name());
     for (const auto& name : in_names) {
       if (in(name)) continue;
-      in_.emplace_back(new InSock(this, SockMeta::shared({.name = name})));
+      in_.emplace_back(new CustomInSock(this, SockMeta::shared({.name = name})));
     }
     for (auto itr = in_.begin(); itr < in_.end();) {
       if (in_names.contains((*itr)->name())) {
@@ -620,15 +620,20 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
     if (src && dst) ctx_->Link(dst, src);
   }
 
+  // handle removed sockets
+  const auto deads = links_.CleanUp();
+  for (auto& p : deads) {
+    history_.AddSilently(std::make_unique<NodeLinkStore::SwapCommand>(
+            &links_, NodeLinkStore::SwapCommand::kUnlink,
+            p.in_node, p.in_name, p.out_node, p.out_name));
+  }
+
   // detect memento changes
-  bool update = false;
   for (auto& h : nodes_) {
     if (auto cmd = h->WatchMemento()) {
       history_.AddSilently(std::move(cmd));
-      update = true;
     }
   }
-  if (update) links_.CleanUp();
   history_.EndFrame();
 
   gui::NodeCanvasResetZoom();
@@ -1015,7 +1020,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     try_cnt_ = 0, hit_cnt_ = 0;
     last_error_ = false;
   }
-  Node* GetTargetNode(RefStack& ref) {
+  Node* GetTargetNode(const RefStack& ref) {
     auto f = &*ref.Resolve(path_);
     if (f == this) throw Exception("self reference");
 

@@ -131,18 +131,34 @@ void NodeLinkStore::Unlink(const InSock* in, const OutSock* out) noexcept {
     out_.erase(out_itr);
   }
 }
-void NodeLinkStore::CleanUp() noexcept {
+std::vector<NodeLinkStore::DeadPair> NodeLinkStore::CleanUp() noexcept {
+  std::vector<NodeLinkStore::DeadPair> deads;
+
   std::vector<InSock*> in_dead;
   for (const auto& in : in_) {
-    if (!in.second.alive()) in_dead.push_back(in.first);
+    if (in.second.alive()) continue;
+    in_dead.push_back(in.first);
+
+    const auto& self = in.second.self();
+    for (const auto& other : in.second.others()) {
+      deads.emplace_back(self->owner(), self->name(), other->owner(), other->name());
+    }
   }
   for (const auto in : in_dead) Unlink(*in);
 
   std::vector<OutSock*> out_dead;
   for (const auto& out : out_) {
-    if (!out.second.alive()) out_dead.push_back(out.first);
+    if (out.second.alive()) continue;
+    out_dead.push_back(out.first);
+
+    const auto& self = out.second.self();
+    for (const auto& other : out.second.others()) {
+      deads.emplace_back(other->owner(), other->name(), self->owner(), self->name());
+    }
   }
   for (const auto out : out_dead) Unlink(*out);
+
+  return deads;
 }
 
 }  // namespace kingtaker
