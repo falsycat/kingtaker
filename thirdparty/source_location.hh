@@ -1,5 +1,7 @@
 #pragma once
-#if defined(__clang__)
+#if defined(__cpp_lib_source_location)
+# include <source_location>
+#else
 
 #include <cstdint>
 
@@ -14,7 +16,7 @@ struct source_location {
       const char*    file = __builtin_FILE(),
       const char*    func = __builtin_FUNCTION(),
       uint_least32_t line = __builtin_LINE(),
-      uint_least32_t col  = __builtin_COLUMN()) noexcept {
+      uint_least32_t col  = 0) noexcept {
     return source_location(file, func, line, col);
   }
 
@@ -41,6 +43,4 @@ struct source_location {
 };
 
 }  // namespace std
-#else
-# include <source_location>
 #endif
