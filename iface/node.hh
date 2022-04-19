@@ -103,7 +103,7 @@ class Node::Context {
       auto ptr = std::dynamic_pointer_cast<T>(itr->second);
       if (ptr) return ptr;
     }
-    auto ret = std::make_shared<T>(args...);
+    auto ret = std::make_shared<T>(std::forward<Args>(args)...);
     itr->second = ret;
     return ret;
   }

@@ -61,7 +61,7 @@ class NodeLinkStore final {
     }
 
     bool alive() const noexcept {
-      return static_cast<size_t>(self_.use_count()) > others_.size();
+      return static_cast<size_t>(self_.use_count()) > others_.size()+1;
     }
 
     const std::shared_ptr<Self>& self() const noexcept { return self_; }
@@ -90,7 +90,17 @@ class NodeLinkStore final {
 
   void Link(const std::shared_ptr<InSock>& in, const std::shared_ptr<OutSock>& out) noexcept;
   void Unlink(const InSock*, const OutSock*) noexcept;  // deleted pointers can be passed
-  void CleanUp() noexcept;
+
+  struct DeadPair final {
+    DeadPair(Node* i, std::string_view in, Node* o, std::string_view on) noexcept :
+        in_node(i), in_name(in), out_node(o), out_name(on) {
+    }
+    Node* in_node;
+    std::string in_name;
+    Node* out_node;
+    std::string out_name;
+  };
+  std::vector<DeadPair> CleanUp() noexcept;
 
   void Unlink(const InSock& in) noexcept {
     const auto src_span = srcOf(&in);
@@ -131,9 +141,14 @@ class NodeLinkStore::SwapCommand : public HistoryCommand {
   enum Type { kLink, kUnlink, };
 
   SwapCommand(NodeLinkStore* links, Type t, const InSock& in, const OutSock& out) noexcept :
+      SwapCommand(links, t, in.owner(), in.name(), out.owner(), out.name()) {
+  }
+  SwapCommand(NodeLinkStore* links, Type t,
+              Node* in_node,  std::string_view in_name,
+              Node* out_node, std::string_view out_name) noexcept :
       links_(links), type_(t),
-      in_node_(in.owner()), in_name_(in.name()),
-      out_node_(out.owner()), out_name_(out.name()) {
+      in_node_(in_node), in_name_(in_name),
+      out_node_(out_node), out_name_(out_name) {
   }
 
   void Apply() override {

@@ -151,6 +151,8 @@ bool InputPathMenu(File::RefStack& ref, std::string* editing, std::string* path)
     auto newref = ref.Resolve(*editing);
     if (submit) {
       ImGui::CloseCurrentPopup();
+      if (*path == *editing) return false;
+
       *path = std::move(*editing);
       return true;
     }

@@ -230,7 +230,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     for (auto in : in_nodes_) in_names.insert(in->name());
     for (const auto& name : in_names) {
       if (in(name)) continue;
-      in_.emplace_back(new InSock(this, SockMeta::shared({.name = name})));
+      in_.emplace_back(new CustomInSock(this, SockMeta::shared({.name = name})));
     }
     for (auto itr = in_.begin(); itr < in_.end();) {
       if (in_names.contains((*itr)->name())) {
@@ -511,7 +511,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   // An impl of Node::Editor for Network
   class EditorContext final : public Editor {
    public:
-    EditorContext(File::Path&& basepath, Network* o) noexcept :
+    EditorContext(Path&& basepath, Network* o) noexcept :
         Editor(std::move(basepath)), owner_(o), life_(o->life_) {
     }
 
@@ -620,15 +620,20 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
     if (src && dst) ctx_->Link(dst, src);
   }
 
+  // handle removed sockets
+  const auto deads = links_.CleanUp();
+  for (auto& p : deads) {
+    history_.AddSilently(std::make_unique<NodeLinkStore::SwapCommand>(
+            &links_, NodeLinkStore::SwapCommand::kUnlink,
+            p.in_node, p.in_name, p.out_node, p.out_name));
+  }
+
   // detect memento changes
-  bool update = false;
   for (auto& h : nodes_) {
     if (auto cmd = h->WatchMemento()) {
       history_.AddSilently(std::move(cmd));
-      update = true;
     }
   }
-  if (update) links_.CleanUp();
   history_.EndFrame();
 
   gui::NodeCanvasResetZoom();
@@ -921,62 +926,163 @@ class Call final : public LambdaNodeDriver {
 
   std::weak_ptr<Context> octx_;
 
-  File::Path path_;
+  Path path_;
 
   std::weak_ptr<NodeRedirectContext> ictx_;
 };
 
 
-class Cache final : public File, public iface::DirItem {
+class Cache final : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo kType = TypeInfo::New<Cache>(
       "Node/Cache", "stores execution result of Node",
       {typeid(iface::DirItem)});
 
-  Cache(Env* env) noexcept :
-      File(&kType, env), DirItem(DirItem::kMenu | DirItem::kTooltip),
-      store_(std::make_shared<Store>()) {
+  static inline const SockMeta kInParams = {
+    .name = "params", .type = SockMeta::kTuple, .multi = true,
+  };
+  static inline const SockMeta kInExec = {
+    .name = "exec", .type = SockMeta::kPulse, .trigger = true,
+  };
+  static inline const SockMeta kOutResult = {
+    .name = "results", .type = SockMeta::kTuple, .multi = true,
+  };
+
+  Cache(Env* env, std::string_view path = "") noexcept :
+      File(&kType, env),
+      DirItem(DirItem::kMenu | DirItem::kTooltip),
+      Node(Node::kNone),
+      life_(new std::monostate), store_(new Store),
+      path_(path) {
+    std::weak_ptr<std::monostate> wlife = life_;
+
+    out_.emplace_back(new OutSock(this, kOutResult.gshared()));
+
+    auto task_param  = [this, wlife](const auto& ctx, auto&& v) {
+      if (wlife.expired()) return;
+      SetParam(ctx, std::move(v));
+    };
+    in_.emplace_back(
+        new NodeLambdaInSock(this, kInParams.gshared(), std::move(task_param)));
+
+    auto task_exec = [this, wlife](const auto& ctx, auto&&) {
+      if (wlife.expired()) return;
+      Exec(ctx);
+    };
+    in_.emplace_back(
+        new NodeLambdaInSock(this, kInExec.gshared(), std::move(task_exec)));
   }
 
-  Cache(Env* env, const msgpack::object&) noexcept :
-      Cache(env) {
+  Cache(Env* env, const msgpack::object& obj)
+  try : Cache(env, obj.as<std::string_view>()) {
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken Node/Cache");
   }
   void Serialize(Packer& pk) const noexcept override {
-    pk.pack_nil();
+    pk.pack(path_);
   }
   std::unique_ptr<File> Clone(Env* env) const noexcept override {
-    return std::make_unique<Cache>(env);
+    return std::make_unique<Cache>(env, path_);
   }
 
   void Update(RefStack& ref, Event&) noexcept override {
     basepath_ = ref.GetFullPath();
   }
-  void UpdateMenu(RefStack&) noexcept override {
-    if (ImGui::MenuItem("drop all cache")) store_->DropAll();
-  }
-  void UpdateTooltip(RefStack&) noexcept override {
-    ImGui::Indent();
-    ImGui::Text("store size  : %zu", store_->size());
-    ImGui::Text("try/hit/miss: %zu/%zu/%zu", try_cnt_, hit_cnt_, try_cnt_-hit_cnt_);
-    if (try_cnt_ > 0) {
-      ImGui::Text("hit rate    : %f%%",
-                  static_cast<float>(hit_cnt_)/static_cast<float>(try_cnt_)*100.f);
-    }
-    ImGui::Unindent();
-  }
+  void UpdateMenu(RefStack&) noexcept override;
+  void UpdateTooltip(RefStack&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem>(t).Select(this);
+    return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
   }
 
  private:
-  Path basepath_;
+  std::shared_ptr<std::monostate> life_;
 
   class Store;
   std::shared_ptr<Store> store_;
 
+  class ExecInSock;
+  std::shared_ptr<ExecInSock> in_exec_;
+
+  // permanentized
+  std::string path_;
+
+  // volatile
   size_t try_cnt_ = 0;
   size_t hit_cnt_ = 0;
+
+  std::string path_editing_;
+  Path basepath_;
+  bool last_error_ = false;
+
+
+  void ClearStat() noexcept {
+    try_cnt_ = 0, hit_cnt_ = 0;
+    last_error_ = false;
+  }
+  Node* GetTargetNode(const RefStack& ref) {
+    auto f = &*ref.Resolve(path_);
+    if (f == this) throw Exception("self reference");
+
+    auto n = File::iface<iface::Node>(f);
+    if (!n) throw Exception("it's not a Node");
+    return n;
+  }
+
+  void SetParam(const std::shared_ptr<Context>& ctx, Value&& v)
+  try {
+    auto cdata = ctx->data<ContextData>(this);
+    auto& tup = v.tuple();
+    cdata->params.emplace_back(tup[0].string(), tup[1]);
+  } catch (Exception& e) {
+    notify::Warn(basepath_, this, "error while taking parameter: "+e.msg());
+  }
+  void Exec(const std::shared_ptr<Context>& ctx) noexcept {
+    ++try_cnt_;
+
+    auto cdata  = ctx->data<ContextData>(this);
+    auto params = std::move(cdata->params);
+
+    // a lambda that passes target node's output to self output
+    std::weak_ptr<std::monostate> wlife = life_;
+    auto obs = [this, wlife, ctx](auto name, auto& value) {
+      if (wlife.expired()) return;
+
+      auto itr = std::find_if(out_.begin(), out_.end(),
+                              [&name](auto& x) { return x->name() == name; });
+      if (itr == out_.end()) return;
+
+      (*itr)->Send(ctx, Value(value));
+    };
+
+    // observe the cache item when it's found
+    if (auto item = store_->Find(cdata->params)) {
+      ++hit_cnt_;
+      item->Observe(std::move(obs));
+      return;
+    }
+
+    // if the cache item is missing, create new one
+    auto item = store_->Allocate(std::move(cdata->params));
+    item->Observe(std::move(obs));
+
+    // execute the target Node and store the result to the created item
+    try {
+      auto ref  = RefStack().Resolve(basepath_);
+      auto n    = GetTargetNode(ref);
+      auto ictx = std::make_shared<InnerContext>(Path(basepath_), ctx, n, item);
+      for (const auto& p : item->in()) {
+        const auto in = n->in();
+
+        auto itr = std::find_if(in.begin(), in.end(),
+                                [&m = p.first](auto& x) { return x->name() == m; });
+        if (itr == in.end()) continue;
+        (*itr)->Receive(ictx, Value(p.second));
+      }
+    } catch (Exception& e) {
+      notify::Warn(basepath_, this, e.msg());
+    }
+  }
 
 
   using Param = std::pair<std::string, Value>;
@@ -991,9 +1097,11 @@ class Cache final : public File, public iface::DirItem {
       for (const auto& out : out_) {
         obs(out.first, out.second);
       }
-      obs_.push_back(obs);
+      if (!finished_) obs_.push_back(obs);
     }
-    void Set(const std::string& name, Value&& v) noexcept {
+    void Set(std::string_view name, Value&& v) noexcept {
+      assert(!finished_);
+
       out_.emplace_back(name, v);
       for (const auto& obs : obs_) {
         obs(name, v);
@@ -1003,6 +1111,7 @@ class Cache final : public File, public iface::DirItem {
     // after calling this, Set() cannot be called
     void Finish() noexcept {
       obs_.clear();
+      finished_ = true;
     }
 
     const std::vector<Param>& in() const noexcept { return in_; }
@@ -1016,7 +1125,10 @@ class Cache final : public File, public iface::DirItem {
     std::vector<Param> in_, out_;
 
     std::vector<Observer> obs_;
+
+    bool finished_ = false;
   };
+
   class Store final {
    public:
     Store() noexcept { }
@@ -1046,11 +1158,11 @@ class Cache final : public File, public iface::DirItem {
    public:
     using Node = iface::Node;
 
-    InnerContext(const std::shared_ptr<Context>& octx,
+    InnerContext(Path&&                          basepath,
+                 const std::shared_ptr<Context>& octx,
                  Node*                           target,
                  const std::weak_ptr<StoreItem>& item) noexcept :
-        Context(Path(octx->basepath())),
-        octx_(octx), target_(target), item_(item) {
+        Context(std::move(basepath)), octx_(octx), target_(target), item_(item) {
     }
     ~InnerContext() {
       auto item = item_.lock();
@@ -1063,8 +1175,8 @@ class Cache final : public File, public iface::DirItem {
       auto item = item_.lock();
       if (!item) return;
 
-      auto task = [item, name = sock.name(), v = v]() mutable {
-        item->Set(name, std::move(v));
+      auto task = [item, name = sock.meta()->name, v = v]() mutable {
+        item->Set(std::move(name), std::move(v));
       };
       Queue::sub().Push(std::move(task));
     }
@@ -1086,124 +1198,37 @@ class Cache final : public File, public iface::DirItem {
     std::weak_ptr<StoreItem> item_;
   };
 
-
-  class Call final : public LambdaNodeDriver {
+  class ContextData final : public Context::Data {
    public:
-    using Owner = LambdaNode<Call>;
-
-    static inline TypeInfo kType = TypeInfo::New<Owner>(
-        "Node/Cache/Call", "redirect input or emit cached value",
-        {typeid(iface::Node)});
-
-    static inline const std::vector<SockMeta> kInSocks = {
-      { .name = "clear",      .type = SockMeta::kPulse, .trigger = true, },
-      { .name = "node_path",  .type = SockMeta::kStringPath, },
-      { .name = "cache_path", .type = SockMeta::kStringPath, },
-      { .name = "params",     .type = SockMeta::kTuple, .multi = true, },
-      { .name = "exec",       .type = SockMeta::kPulse, .trigger = true, },
-    };
-    static inline const std::vector<SockMeta> kOutSocks = {
-      { .name = "out", .type = SockMeta::kTuple, },
-    };
-
-    Call(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
-        owner_(o), ctx_(ctx) {
-    }
-
-    std::string title() const noexcept {
-      return "CACHE CALL";
-    }
-
-    void Handle(size_t idx, Value&& v) {
-      switch (idx) {
-      case 0:
-        Clear();
-        return;
-      case 1:
-        node_path_ = File::ParsePath(v.string());
-        return;
-      case 2:
-        cache_path_ = File::ParsePath(v.string());
-        return;
-      case 3:
-        SetParam(std::move(v));
-        return;
-      case 4:
-        Exec();
-        return;
-      }
-      assert(false);
-    }
-    void Clear() noexcept {
-      node_path_  = {};
-      cache_path_ = {};
-      params_     = {};
-    }
-    void SetParam(Value&& v) {
-      const auto& tup = v.tuple(2);
-      params_.emplace_back(tup[0].string(), tup[1]);
-    }
-    void Exec() {
-      auto ctx = ctx_.lock();
-      auto c   = GetCacheFile();
-      auto n   = GetNode();
-      ++c->try_cnt_;
-
-      std::weak_ptr<OutSock> wout = owner_->out(0);
-      auto obs = [ctx, wout](auto name, auto& value) {
-        auto out = wout.lock();
-        if (out) out->Send(ctx, Value::Tuple { std::string(name), value });
-      };
-
-      // use cache if found
-      auto cache = c->store_->Find(params_);
-      if (cache) {
-        ++c->hit_cnt_;
-        cache->Observe(std::move(obs));
-        return;
-      }
-
-      // allocate new cache
-      cache = c->store_->Allocate(std::vector<Param>(params_));
-      cache->Observe(std::move(obs));
-
-      // redirect input
-      auto ictx = std::make_shared<InnerContext>(ctx, n, cache);
-      for (const auto& param : params_) {
-        try {
-          const auto in = n->in(param.first);
-          if (!in) throw Exception("no such socket found: "+param.first);
-          in->Receive(ictx, Value(param.second));
-        } catch (Exception& e) {
-          notify::Warn(owner_->path(), owner_, e.msg());
-        }
-      }
-    }
-
-   private:
-    Owner* owner_;
-
-    std::weak_ptr<Context> ctx_;
-
-    Path node_path_;
-    Path cache_path_;
-
-    std::vector<Param> params_;
-
-
-    Node* GetNode() {
-      auto f = &*RefStack().Resolve(ctx_.lock()->basepath()).Resolve(node_path_);
-      auto n = File::iface<Node>(f);
-      if (!n) throw Exception("target file doesn't have Node interface");
-      return n;
-    }
-    Cache* GetCacheFile() {
-      auto c = dynamic_cast<Cache*>(
-          &*RefStack().Resolve(ctx_.lock()->basepath()).Resolve(cache_path_));
-      if (!c) throw Exception("file is not Node/Cache");
-      return c;
-    }
+    std::vector<Param> params;
   };
 };
+void Cache::UpdateMenu(RefStack& ref) noexcept {
+  if (ImGui::MenuItem("drop all cache")) {
+    store_->DropAll();
+  }
+  if (ImGui::MenuItem("clear stat")) {
+    ClearStat();
+  }
+  ImGui::Separator();
+  if (ImGui::BeginMenu("target path")) {
+    if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
+      store_->DropAll();
+      ClearStat();
+    }
+    ImGui::EndMenu();
+  }
+}
+void Cache::UpdateTooltip(RefStack&) noexcept {
+  ImGui::Indent();
+  ImGui::Text("target      : %s", path_.c_str());
+  ImGui::Text("store size  : %zu", store_->size());
+  ImGui::Text("try/hit/miss: %zu/%zu/%zu", try_cnt_, hit_cnt_, try_cnt_-hit_cnt_);
+  if (try_cnt_ > 0) {
+    ImGui::Text("hit rate    : %f%%",
+                static_cast<float>(hit_cnt_)/static_cast<float>(try_cnt_)*100.f);
+  }
+  ImGui::Unindent();
+}
 
 } }  // namespace kingtaker

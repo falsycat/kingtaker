@@ -31,7 +31,9 @@ class HistoryAggregateCommand : public HistoryCommand {
     for (const auto& cmd : cmds_) cmd->Apply();
   }
   void Revert() override {
-    for (const auto& cmd : cmds_) cmd->Revert();
+    for (auto itr = cmds_.rbegin(); itr < cmds_.rend(); ++itr) {
+      (*itr)->Revert();
+    }
   }
 
  private:
