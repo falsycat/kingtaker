@@ -803,14 +803,30 @@ class DrawArrays final : public LambdaNodeDriver {
 };
 
 
-class Preview final : public File, public iface::DirItem {
+class Preview final : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo kType = TypeInfo::New<Preview>(
       "GL/Preview", "provides OpenGL texture preview window",
       {typeid(iface::DirItem)});
 
+  static inline const SockMeta kInTex = {
+    .name = "tex", .type = SockMeta::kData, .trigger = true,
+  };
+
   Preview(Env* env, bool shown = false) noexcept :
-      File(&kType, env), DirItem(DirItem::kNone), shown_(shown) {
+      File(&kType, env), DirItem(DirItem::kNone), Node(Node::kNone),
+      life_(new std::monostate), shown_(shown) {
+    std::weak_ptr<std::monostate> wlife = life_;
+
+    auto task_tex = [this, wlife](auto&, auto&& v) {
+      if (wlife.expired()) return;
+      try {
+        tex_ = v.template dataPtr<gl::Texture>();
+      } catch (Exception& e) {
+        notify::Error(Path {}, this, "error while handling 'tex': "+e.msg());
+      }
+    };
+    in_.emplace_back(new NodeLambdaInSock(this, kInTex.gshared(), std::move(task_tex)));
   }
 
   Preview(Env* env, const msgpack::object& obj)
@@ -840,82 +856,17 @@ class Preview final : public File, public iface::DirItem {
   }
 
   void* iface(const std::type_index& t) noexcept override {
-    return PtrSelector<iface::DirItem>(t).Select(this);
+    return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
   }
 
  private:
+  std::shared_ptr<std::monostate> life_;
+
+  // permanentized
   bool shown_;
 
+  // volatile
   std::shared_ptr<gl::Texture> tex_;
-
-
-  class Show final : public LambdaNodeDriver {
-   public:
-    using Owner = LambdaNode<Show>;
-
-    static inline TypeInfo kType = TypeInfo::New<Owner>(
-        "GL/Preview/Show", "Shows received texture in a preview",
-        {typeid(iface::Node)});
-
-    static std::string title() noexcept { return "GL Preview"; }
-
-    static inline const std::vector<SockMeta> kInSocks = {
-      { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
-
-      { .name = "path", .type = SockMeta::kStringPath, },
-      { .name = "tex",  .type = SockMeta::kData, },
-
-      { .name = "exec", .type = SockMeta::kPulse, .trigger = true, },
-    };
-    static inline const std::vector<SockMeta> kOutSocks = {};
-
-    Show() = delete;
-    Show(Owner* o, const std::weak_ptr<Context>&) noexcept : owner_(o) {
-    }
-
-    void Handle(size_t idx, Value&& v) {
-      switch (idx) {
-      case 0:
-        Clear();
-        return;
-      case 1:
-        path_ = File::ParsePath(v.string());
-        return;
-      case 2:
-        tex_ = v.dataPtr<gl::Texture>();
-        return;
-      case 3:
-        Exec();
-        return;
-      }
-      assert(false);
-    }
-    void Clear() noexcept {
-      path_.clear();
-      tex_ = nullptr;
-    }
-    void Exec() {
-      auto target_file = &*RefStack().Resolve(owner_->path()).Resolve(path_);
-      auto target      = dynamic_cast<Preview*>(target_file);
-      if (!target) {
-        throw Exception("target is not a preview");
-      }
-      if (!tex_) {
-        throw Exception("tex is not specified");
-      }
-      if (tex_->gl() != GL_TEXTURE_2D) {
-        throw Exception("tex is not a GL_TEXTURE_2D");
-      }
-      target->tex_ = tex_;
-    }
-
-   private:
-    Owner* owner_;
-
-    File::Path path_;
-
-    std::shared_ptr<gl::Texture> tex_;
-  };
 };
 
 
