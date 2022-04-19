@@ -92,6 +92,9 @@ class NodeLinkStore final {
   void Unlink(const InSock*, const OutSock*) noexcept;  // deleted pointers can be passed
 
   struct DeadPair final {
+    DeadPair(Node* i, std::string_view in, Node* o, std::string_view on) noexcept :
+        in_node(i), in_name(in), out_node(o), out_name(on) {
+    }
     Node* in_node;
     std::string in_name;
     Node* out_node;
