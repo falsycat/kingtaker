@@ -37,12 +37,9 @@ bool BeginWindow(
 void EndWindow() noexcept;
 
 
-void NodeSocket() noexcept;
-void NodeInSock(const std::string&) noexcept;
-void NodeInSock(
-    const std::shared_ptr<iface::Node::Context>&,
-    const std::shared_ptr<iface::Node::InSock>&) noexcept;
-void NodeOutSock(const std::string&) noexcept;
+void NodeSockPoint() noexcept;
+void NodeInSock(const iface::Node::SockMeta&) noexcept;
+void NodeOutSock(const iface::Node::SockMeta&) noexcept;
 
 void NodeCanvasSetZoom() noexcept;
 void NodeCanvasResetZoom() noexcept;

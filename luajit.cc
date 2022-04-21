@@ -80,12 +80,11 @@ class Compile final : public LambdaNodeDriver {
     src_  = nullptr;
   }
   void Exec() {
-    auto ctx   = ctx_.lock();
-    auto out   = owner_->out(0);
-    auto error = owner_->out(1);
+    auto  ctx   = ctx_.lock();
+    auto& out   = owner_->sharedOut(0);
+    auto& error = owner_->sharedOut(1);
 
-    auto task = [owner = owner_, path = owner_->path(),
-                 ctx, name = name_, src = src_, out, error](auto L) {
+    auto task = [owner = owner_, ctx, name = name_, src = src_, out, error](auto L) {
       static const auto lua_reader = [](auto, void* data, size_t* size) -> const char* {
         auto& ptr = *reinterpret_cast<const std::string**>(data);
         if (ptr) {
@@ -101,7 +100,7 @@ class Compile final : public LambdaNodeDriver {
         auto obj = luajit::Obj::PopAndCreate(&dev_, L);
         out->Send(ctx, std::static_pointer_cast<Value::Data>(obj));
       } else {
-        notify::Error(path, owner, lua_tostring(L, -1));
+        notify::Error(ctx->basepath(), owner, lua_tostring(L, -1));
         error->Send(ctx, {});
       }
     };
@@ -125,54 +124,40 @@ class Exec final : public File, public iface::Node {
       "LuaJIT/Exec", "execute compiled function",
       {typeid(iface::Node)});
 
-  static inline const SockMeta kOut_Recv = {
+  static inline const SockMeta kOutRecv = {
     .name = "recv", .type = SockMeta::kPulse,
   };
-  static inline const SockMeta kIn_Clear = {
-    .name = "clear", .type = SockMeta::kPulse, .trigger = true,
-  };
-  static inline const SockMeta kIn_Func = {
+  static inline const SockMeta kInFunc = {
     .name = "func", .type = SockMeta::kData, .dataType = luajit::Obj::kName,
   };
-  static inline const SockMeta kIn_Send = {
+  static inline const SockMeta kInSend = {
     .name = "send", .type = SockMeta::kAny, .trigger = true,
   };
 
   Exec(Env* env) noexcept :
       File(&kType, env), Node(Node::kNone),
-      udata_(std::make_shared<UniversalData>()) {
-    out_.emplace_back(new OutSock(this, kOut_Recv.gshared()));
-
-    udata_->self     = this;
-    udata_->out_recv = out_[0];
-
-    auto task_clear = [udata = udata_](auto& ctx, auto&&) {
-      auto cdata = ContextData::Get(udata, ctx);
-      dev_.Queue([cdata](auto L) { cdata->Clear(L); });
-    };
-    in_.emplace_back(new NodeLambdaInSock(
-            this, kIn_Clear.gshared(), std::move(task_clear)));
-
-    auto task_func = [udata = udata_](auto& ctx, auto&& v) {
+      sock_recv_(std::make_shared<OutSock>(this, &kOutRecv)) {
+    auto task_func = [this](auto& ctx, auto&& v) {
       try {
-        auto cdata = ContextData::Get(udata, ctx);
+        auto cdata = ctx->template data<ContextData>(this, this, ctx);
         cdata->func = v.template dataPtr<luajit::Obj>();
       } catch (Exception& e) {
-        notify::Warn(udata->pathSync(), udata->self, e.msg());
+        notify::Warn(ctx->basepath(), this, e.msg());
       }
     };
-    in_.emplace_back(new NodeLambdaInSock(
-            this, kIn_Func.gshared(), std::move(task_func)));
+    sock_func_.emplace(this, &kInFunc, std::move(task_func));
 
-    auto task_send = [udata = udata_](auto& ctx, auto&& v) {
+    auto task_send = [this](auto& ctx, auto&& v) {
       try {
-        Send(ContextData::Get(udata, ctx), std::move(v));
+        Send(ctx->template data<ContextData>(this, this, ctx), std::move(v));
       } catch (Exception& e) {
-        notify::Error(udata->pathSync(), udata->self, e.msg());
+        notify::Error(ctx->basepath(), this, e.msg());
       }
     };
-    in_.emplace_back(new NodeLambdaInSock(
-            this, kIn_Send.gshared(), std::move(task_send)));
+    sock_send_.emplace(this, &kInSend, std::move(task_send));
+
+    out_ = {sock_recv_.get()};
+    in_  = {&*sock_func_, &*sock_send_};
   }
 
   Exec(Env* env, const msgpack::object&) noexcept :
@@ -185,10 +170,6 @@ class Exec final : public File, public iface::Node {
     return std::make_unique<Exec>(env);
   }
 
-  void Update(RefStack& ref, Event&) noexcept override {
-    std::unique_lock<std::mutex> k(udata_->mtx);
-    udata_->path = ref.GetFullPath();
-  }
   void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
@@ -196,31 +177,13 @@ class Exec final : public File, public iface::Node {
   }
 
  private:
-  class UniversalData final {
-   public:
-    std::mutex mtx;
-
-    Path path;
-    Path pathSync() const noexcept {
-      std::unique_lock<std::mutex> k(const_cast<std::mutex&>(mtx));
-      return Path(path);
-    }
-
-    // immutable
-    Exec* self;
-
-    std::shared_ptr<OutSock> out_recv;
-  };
-  std::shared_ptr<UniversalData> udata_;
+  std::shared_ptr<OutSock> sock_recv_;
+  std::optional<NodeLambdaInSock> sock_func_;
+  std::optional<NodeLambdaInSock> sock_send_;
 
 
   class ContextData final : public Context::Data {
    public:
-    static std::shared_ptr<ContextData> Get(
-        const std::shared_ptr<UniversalData>& udata,
-        const std::shared_ptr<Context>&       ctx) noexcept {
-      return ctx->data<ContextData>(udata->self, udata, ctx);
-    }
     static void Push(lua_State* L, const std::shared_ptr<ContextData>& cdata) {
       dev_.NewObjWithoutMeta<std::weak_ptr<ContextData>>(L, cdata);
       if (luaL_newmetatable(L, "Exec_ContextData")) {
@@ -256,9 +219,8 @@ class Exec final : public File, public iface::Node {
       return cdata;
     }
 
-    ContextData(const std::weak_ptr<UniversalData>& udata,
-                const std::weak_ptr<Context>&       ctx) noexcept :
-        udata_(udata), ctx_(ctx) {
+    ContextData(Exec* o, const std::weak_ptr<Context>& ctx) noexcept :
+        owner_(o), ctx_(ctx) {
     }
 
     void Clear(lua_State* L) noexcept {
@@ -266,23 +228,26 @@ class Exec final : public File, public iface::Node {
       reg_table_ = LUA_REFNIL;
     }
 
-    std::shared_ptr<UniversalData> udata() const {
-      auto ret = udata_.lock();
-      if (!ret) throw Exception("universal data is expired");
-      return ret;
-    }
+    Exec* owner() const noexcept { return owner_; }
+
     std::shared_ptr<Context> ctx() const {
       auto ret = ctx_.lock();
       if (!ret) throw Exception("context is expired");
+      return ret;
+    }
+    std::shared_ptr<OutSock> out() const {
+      auto ret = out_.lock();
+      if (!ret) throw Exception("socket is expired");
       return ret;
     }
 
     std::shared_ptr<luajit::Obj> func;
 
    private:
-    std::weak_ptr<UniversalData> udata_;
+    Exec* owner_;
 
     std::weak_ptr<Context> ctx_;
+    std::weak_ptr<OutSock> out_;
 
     int reg_table_ = LUA_REFNIL;
 
@@ -291,11 +256,11 @@ class Exec final : public File, public iface::Node {
     static int L_log(lua_State* L) {
       try {
         auto cdata = Get(L, 1);
-        auto udata = cdata->udata();
+        auto ctx   = cdata->ctx();
 
         auto msg = luaL_checkstring(L, 2);
         notify::Push({std::source_location::current(),
-                     kLv, msg, Path(udata->pathSync()), udata->self});
+                     kLv, msg, Path(ctx->basepath()), cdata->owner_});
         return 0;
       } catch (Exception& e) {
         return luaL_error(L, e.msg().c_str());
@@ -304,11 +269,11 @@ class Exec final : public File, public iface::Node {
     static int L_emit(lua_State* L) {
       try {
         auto cdata = Get(L, 1);
-        auto udata = cdata->udata();
         auto ctx   = cdata->ctx();
+        auto out   = cdata->out();
 
         const auto& v = *dev_.GetObj<Value>(L, 2, "Value");
-        udata->out_recv->Send(ctx, Value(v));
+        out->Send(ctx, Value(v));
         return 0;
       } catch (Exception& e) {
         return luaL_error(L, e.msg().c_str());
@@ -331,55 +296,35 @@ class Exec final : public File, public iface::Node {
     }
   };
 
+
   static void Send(std::shared_ptr<ContextData> cdata, Value&& v) {
     auto func = cdata->func;
     if (!func) throw Exception("func is not specified");
 
-    auto udata = cdata->udata();
-    auto ctx   = cdata->ctx();
-    auto task = [udata, ctx, cdata, func, v = std::move(v)](auto L) {
+    auto ctx  = cdata->ctx();
+    auto task = [ctx, cdata, func, v = std::move(v)](auto L) {
       lua_rawgeti(L, LUA_REGISTRYINDEX, func->reg());
       dev_.PushValue(L, v);
       ContextData::Push(L, cdata);
       if (dev_.SandboxCall(L, 2, 0) != 0) {
-        notify::Error(udata->path, udata->self, lua_tostring(L, -1));
+        notify::Error(ctx->basepath(), cdata->owner(), lua_tostring(L, -1));
       }
     };
     dev_.Queue(std::move(task));
   }
 };
-void Exec::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+void Exec::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
   ImGui::TextUnformatted("LuaJIT Exec");
 
   ImGui::BeginGroup();
-  if (ImNodes::BeginInputSlot("clear", 1)) {
-    gui::NodeInSock(ctx, in_[0]);
-    ImNodes::EndSlot();
-  }
-  if (ImNodes::BeginInputSlot("func", 1)) {
-    gui::NodeInSock("func");
-    ImNodes::EndSlot();
-  }
-  if (ImNodes::BeginInputSlot("send", 1)) {
-    gui::NodeInSock("send");
-    ImNodes::EndSlot();
-  }
+  gui::NodeInSock(kInFunc);
+  gui::NodeInSock(kInSend);
   ImGui::EndGroup();
 
   ImGui::SameLine();
 
   ImGui::BeginGroup();
-  const auto r = ImGui::GetCursorPosX() + 4*ImGui::GetFontSize();
-  ImGui::SetCursorPosX(r - ImGui::CalcTextSize("recv").x);
-  if (ImNodes::BeginOutputSlot("recv", 1)) {
-    gui::NodeOutSock("recv");
-    ImNodes::EndSlot();
-  }
-  ImGui::SetCursorPosX(r - ImGui::CalcTextSize("abort").x);
-  if (ImNodes::BeginOutputSlot("abort", 1)) {
-    gui::NodeOutSock("abort");
-    ImNodes::EndSlot();
-  }
+  gui::NodeOutSock(kOutRecv);
   ImGui::EndGroup();
 }
 

@@ -75,7 +75,7 @@ void EndWindow() noexcept {
 }
 
 
-void NodeSocket() noexcept {
+void NodeSockPoint() noexcept {
   auto win = ImGui::GetCurrentWindow();
 
   const auto em  = ImGui::GetFontSize();
@@ -92,25 +92,29 @@ void NodeSocket() noexcept {
 
   ImGui::Dummy(sz);
 }
-void NodeInSock(const std::string& name) noexcept {
-  gui::NodeSocket();
-  ImGui::SameLine();
-  ImGui::TextUnformatted(name.c_str());
-}
-void NodeInSock(
-    const std::shared_ptr<iface::Node::Context>& ctx,
-    const std::shared_ptr<iface::Node::InSock>&  sock) noexcept {
-  gui::NodeSocket();
-  ImGui::SameLine();
+void NodeInSock(const iface::Node::SockMeta& meta) noexcept {
+  if (ImNodes::BeginInputSlot(meta.name.c_str(), 1)) {
+    gui::NodeSockPoint();
+    ImGui::SameLine();
+    ImGui::TextUnformatted(meta.name.c_str());
+    ImNodes::EndSlot();
 
-  if (ImGui::SmallButton(sock->name().c_str())) {
-    Queue::sub().Push([sock, ctx]() { sock->Receive(ctx, {}); });
+    if (meta.desc.size() && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", meta.desc.c_str());
+    }
   }
 }
-void NodeOutSock(const std::string& name) noexcept {
-  ImGui::TextUnformatted(name.c_str());
-  ImGui::SameLine();
-  gui::NodeSocket();
+void NodeOutSock(const iface::Node::SockMeta& meta) noexcept {
+  if (ImNodes::BeginOutputSlot(meta.name.c_str(), 1)) {
+    ImGui::TextUnformatted(meta.name.c_str());
+    ImGui::SameLine();
+    gui::NodeSockPoint();
+    ImNodes::EndSlot();
+
+    if (meta.desc.size() && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", meta.desc.c_str());
+    }
+  }
 }
 
 void NodeCanvasSetZoom() noexcept {

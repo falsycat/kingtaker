@@ -67,6 +67,9 @@ void UpdateLogger(
 
 
 #define NOTIFY_SRCLOC_ std::source_location src = std::source_location::current()
+static inline void Trace(File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
+  Push(Item {src, kTrace, text, File::Path{}, fptr});
+}
 static inline void Trace(
     const File::Path& p, File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
   Push(Item {src, kTrace, text, File::Path(p), fptr});
@@ -74,6 +77,9 @@ static inline void Trace(
 static inline void Trace(
     const Item::RefStack& r, std::string_view text, NOTIFY_SRCLOC_) noexcept {
   Push(Item {src, kTrace, text, r});
+}
+static inline void Info(File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
+  Push(Item {src, kInfo, text, File::Path{}, fptr});
 }
 static inline void Info(
     const File::Path& p, File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
@@ -83,6 +89,9 @@ static inline void Info(
     const Item::RefStack& r, std::string_view text, NOTIFY_SRCLOC_) noexcept {
   Push(Item {src, kInfo, text, r});
 }
+static inline void Warn(File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
+  Push(Item {src, kWarn, text, File::Path{}, fptr});
+}
 static inline void Warn(
     const File::Path& p, File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
   Push(Item {src, kWarn, text, File::Path(p), fptr});
@@ -90,6 +99,9 @@ static inline void Warn(
 static inline void Warn(
     const Item::RefStack& r, std::string_view text, NOTIFY_SRCLOC_) noexcept {
   Push(Item {src, kWarn, text, r});
+}
+static inline void Error(File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {
+  Push(Item {src, kError, text, File::Path{}, fptr});
 }
 static inline void Error(
     const File::Path& p, File* fptr, std::string_view text, NOTIFY_SRCLOC_) noexcept {

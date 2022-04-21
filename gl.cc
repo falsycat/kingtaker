@@ -5,7 +5,6 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <ImNodes.h>
 
 #include "kingtaker.hh"
 
@@ -84,8 +83,7 @@ class Texture final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out   = owner_->out(0);
-    auto error = owner_->out(1);
+    auto& out = owner_->sharedOut(0);
 
     if (w_ == 0 || h_ == 0) {
       throw Exception("resolution is unspecified");
@@ -187,8 +185,7 @@ class Renderbuffer final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out   = owner_->out(0);
-    auto error = owner_->out(1);
+    auto& out = owner_->sharedOut(0);
 
     if (w_ == 0 || h_ == 0) {
       throw Exception("resolution is unspecified");
@@ -238,8 +235,7 @@ class Framebuffer final : public LambdaNodeDriver {
     { .name = "exec",   .type = SockMeta::kPulse, .trigger = true,  },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out",   .type = SockMeta::kData,  },
-    { .name = "error", .type = SockMeta::kPulse, },
+    { .name = "out",   .type = SockMeta::kData, },
   };
 
   Framebuffer() = delete;
@@ -313,18 +309,16 @@ class Framebuffer final : public LambdaNodeDriver {
       throw Exception("attach something firstly");
     }
 
-    auto out   = owner_->out(0);
-    auto error = owner_->out(1);
+    auto& out = owner_->sharedOut(0);
 
     // check status and emit result
-    auto task = [owner = owner_, path = owner_->path(), fb = fb_, ctx, out, error]() {
+    auto task = [owner = owner_, fb = fb_, ctx, out]() {
       glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
       const auto stat = glCheckFramebufferStatus(GL_FRAMEBUFFER);
       if (stat == GL_FRAMEBUFFER_COMPLETE) {
         out->Send(ctx, std::dynamic_pointer_cast<Value::Data>(fb));
       } else {
-        notify::Error(path, owner, "broken framebuffer ("+std::to_string(stat)+")");
-        error->Send(ctx, {});
+        notify::Error(owner, "broken framebuffer ("+std::to_string(stat)+")");
       }
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -379,7 +373,7 @@ class VertexArray final : public LambdaNodeDriver {
     auto ctx = ctx_.lock();
     if (!ctx) return;
 
-    auto out = owner_->out(0);
+    auto& out = owner_->sharedOut(0);
 
     auto vao  = gl::VertexArray::Create(0);
     auto task = [vao, ctx, out]() {
@@ -411,7 +405,7 @@ class Program final : public LambdaNodeDriver {
     { .name = "exec",    .type = SockMeta::kPulse, .trigger = true,  },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out",   .type = SockMeta::kData,       },
+    { .name = "out", .type = SockMeta::kData, },
   };
 
   Program() = delete;
@@ -453,12 +447,10 @@ class Program final : public LambdaNodeDriver {
 
     if (!prog_) throw Exception("attach shaders firstly");
 
-    auto out   = owner_->out(0);
-    auto error = owner_->out(1);
+    auto out = owner_->sharedOut(0);
 
     // link program and check status
-    auto task = [owner = owner_, path = owner_->path(),
-                 prog = prog_, ctx, out, error]() {
+    auto task = [owner = owner_, prog = prog_, ctx, out]() {
       const auto id = prog->id();
       glLinkProgram(id);
 
@@ -471,8 +463,7 @@ class Program final : public LambdaNodeDriver {
         char buf[1024];
         glGetProgramInfoLog(id, sizeof(buf), &len, buf);
 
-        notify::Error(path, owner, buf);
-        error->Send(ctx, {});
+        notify::Error(owner, buf);
       }
       assert(glGetError() == GL_NO_ERROR);
     };
@@ -549,12 +540,11 @@ class Shader final : public LambdaNodeDriver {
       throw Exception("src is unspecified");
     }
 
-    auto out   = owner_->out(0);
-    auto error = owner_->out(1);
+    auto& out   = owner_->sharedOut(0);
+    auto& error = owner_->sharedOut(1);
 
     auto shader = gl::Shader::Create(t_);
-    auto task = [owner = owner_, path = owner_->path(),
-                 shader, srcs = srcs_, ctx, out, error]() {
+    auto task = [owner = owner_, shader, srcs = srcs_, ctx, out, error]() {
       const auto id = shader->id();
 
       std::vector<GLchar*> ptrs;
@@ -574,7 +564,7 @@ class Shader final : public LambdaNodeDriver {
         char buf[1024];
         glGetShaderInfoLog(id, sizeof(buf), &len, buf);
 
-        notify::Error(path, owner, buf);
+        notify::Error(owner, buf);
         error->Send(ctx, {});
       }
     };
@@ -696,13 +686,13 @@ class DrawArrays final : public LambdaNodeDriver {
     }
     // TODO validate vertex count
 
-    const auto& done = owner_->out(0);
+    auto& done = owner_->sharedOut(0);
     if (count_ == 0) {
       done->Send(ctx, {});
       return;
     }
 
-    auto task = [owner = owner_, path = owner_->path(), ctx, done,
+    auto task = [owner = owner_, ctx, done,
                  prog     = prog_,
                  fb       = fb_,
                  vao      = vao_,
@@ -719,7 +709,7 @@ class DrawArrays final : public LambdaNodeDriver {
         try {
           GL_SetUniform(prog->id(), u.first, u.second);
         } catch (Exception& e) {
-          notify::Warn(path, owner, e.msg());
+          notify::Warn(owner, e.msg());
         }
       }
 
@@ -815,18 +805,15 @@ class Preview final : public File, public iface::DirItem, public iface::Node {
 
   Preview(Env* env, bool shown = false) noexcept :
       File(&kType, env), DirItem(DirItem::kNone), Node(Node::kNone),
-      life_(new std::monostate), shown_(shown) {
-    std::weak_ptr<std::monostate> wlife = life_;
-
-    auto task_tex = [this, wlife](auto&, auto&& v) {
-      if (wlife.expired()) return;
+      shown_(shown) {
+    auto task_tex = [this](auto&, auto&& v) {
       try {
         tex_ = v.template dataPtr<gl::Texture>();
       } catch (Exception& e) {
-        notify::Error(Path {}, this, "error while handling 'tex': "+e.msg());
+        notify::Error(this, "error while handling 'tex': "+e.msg());
       }
     };
-    in_.emplace_back(new NodeLambdaInSock(this, kInTex.gshared(), std::move(task_tex)));
+    in_.emplace_back(new NodeLambdaInSock(this, &kInTex, std::move(task_tex)));
   }
 
   Preview(Env* env, const msgpack::object& obj)
@@ -860,15 +847,12 @@ class Preview final : public File, public iface::DirItem, public iface::Node {
   }
 
  private:
-  std::shared_ptr<std::monostate> life_;
-
   // permanentized
   bool shown_;
 
   // volatile
   std::shared_ptr<gl::Texture> tex_;
 };
-
 
 
 }  // namespace kingtaker
