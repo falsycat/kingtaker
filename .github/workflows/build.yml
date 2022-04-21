@@ -71,7 +71,7 @@ jobs:
           elif [[ $RUNNER_OS == Windows ]]; then
             mkdir -p ~/nuget
             nuget install boost -OutputDirectory ~/nuget
-            echo "BOOSTROOT=$(realpath ~/nuget/boost*/lib/native)" >> $GITHUB_ENV
+            echo "BOOSTROOT=$(realpath ~/nuget/boost*/lib/native | tail -n1)" >> $GITHUB_ENV
           fi
           mkdir build
 
