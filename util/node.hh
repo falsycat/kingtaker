@@ -266,24 +266,17 @@ class LambdaNode final : public File, public iface::Node {
     return std::make_unique<LambdaNode>(env);
   }
 
-  void Update(RefStack& ref, Event&) noexcept override {
-    path_ = ref.GetFullPath();
-  }
   void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
   }
 
-  const Path& path() const noexcept { return path_; }
-
   const std::shared_ptr<OutSock>& sharedOut(size_t idx) const noexcept {
     return out_insts_[idx];
   }
 
  private:
-  Path path_;
-
   class CustomInSock;
   std::vector<std::optional<CustomInSock>> in_insts_;
 
@@ -305,7 +298,7 @@ class LambdaNode final : public File, public iface::Node {
       try {
         owner_->GetDriver(ctx)->Handle(idx_, std::move(v));
       } catch (Exception& e) {
-        notify::Warn(owner_->path(), owner_,
+        notify::Warn(ctx->basepath(), owner_,
                      "error while handling input ("+name()+"): "s+e.msg());
       }
     }

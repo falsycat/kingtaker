@@ -904,7 +904,9 @@ class Call final : public LambdaNodeDriver {
     path_ = {};
   }
   void Send(Value&& v) {
-    auto f = &*RefStack().Resolve(owner_->path()).Resolve(path_);
+    auto octx = octx_.lock();
+
+    auto f = &*RefStack().Resolve(octx->basepath()).Resolve(path_);
     if (f == owner_) throw Exception("self reference");
 
     auto n = File::iface<iface::Node>(f);
@@ -923,7 +925,7 @@ class Call final : public LambdaNodeDriver {
       ictx = nullptr;
     }
     if (!ictx) {
-      ictx = std::make_shared<NodeRedirectContext>(octx_.lock(), owner_->sharedOut(0), n);
+      ictx = std::make_shared<NodeRedirectContext>(octx, owner_->sharedOut(0), n);
     }
     ictx_ = ictx;
 
