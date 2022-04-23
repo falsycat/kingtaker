@@ -638,7 +638,14 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
     if (src && dst) ctx_->Link(*dst, *src);
   }
 
-  // TODO handle dead links
+  // handle dead links
+  const auto deads = links_->TakeDeadLinks();
+  for (auto& link : deads) {
+    history_.AddSilently(std::make_unique<NodeLinkStore::SwapCommand>(
+            links_.get(), NodeLinkStore::SwapCommand::kUnlink,
+            link.in.node,  link.in.name,
+            link.out.node, link.out.name));
+  }
 
   // detect memento changes
   for (auto& h : nodes_) {

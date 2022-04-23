@@ -64,6 +64,10 @@ class NodeLinkStore final {
   void Link(InSock* in, OutSock* out) noexcept;
   void Unlink(const InSock*, const OutSock*) noexcept;  // deleted pointers can be passed
 
+  std::vector<SockLink> TakeDeadLinks() noexcept {
+    return std::move(deads_);
+  }
+
   // deleted pointers can be passed
   std::vector<OutSock*> srcOf(const InSock* sock) const noexcept;
   // deleted pointers can be passed
@@ -76,6 +80,8 @@ class NodeLinkStore final {
 
   class Observer;
   std::unordered_map<Node*, std::unique_ptr<Node::Observer>> obs_;
+
+  std::vector<SockLink> deads_;
 
 
   NodeLinkStore(std::vector<SockLink>&& items) noexcept;

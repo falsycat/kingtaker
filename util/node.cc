@@ -37,7 +37,7 @@ class NodeLinkStore::Observer final : public Node::Observer {
       }
 
       if (!in.sock || !out.sock) {
-        // TODO remember dead links
+        owner_->deads_.push_back(*itr);
         std::swap(*itr, *(--term));
       } else {
         ++itr;
