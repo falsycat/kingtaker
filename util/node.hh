@@ -12,7 +12,6 @@
 #include <unordered_map>
 
 #include <imgui.h>
-#include <ImNodes.h>
 
 #include "iface/node.hh"
 
@@ -31,109 +30,61 @@ class NodeLinkStore final {
   class SwapCommand;
 
   using Node    = iface::Node;
+  using Sock    = Node::Sock;
   using InSock  = Node::InSock;
   using OutSock = Node::OutSock;
 
-  template <typename Self, typename Other>
-  struct LinkSet final {
-   public:
-    LinkSet() = delete;
-    LinkSet(const std::shared_ptr<Self>&          self,
-            std::vector<std::shared_ptr<Other>>&& others = {}) noexcept :
-        self_(self), others_(std::move(others)) {
+  template <typename T>
+  struct SockRef final {
+    SockRef(T* s) noexcept : node(s->owner()), name(s->name()), sock(s) {
     }
-    LinkSet(const LinkSet&) = delete;
-    LinkSet(LinkSet&&) = default;
-    LinkSet& operator=(const LinkSet&) = delete;
-    LinkSet& operator=(LinkSet&&) = default;
-
-    void Link(const std::shared_ptr<Other>& other) noexcept {
-      others_.push_back(other);
-    }
-    bool Unlink(const Other& other) noexcept {
-      for (auto itr = others_.begin(); itr < others_.end(); ++itr) {
-        if (itr->get() == &other) {
-          others_.erase(itr);
-          return others_.empty();
-        }
-      }
-      return false;
-    }
-
-    bool alive() const noexcept {
-      return static_cast<size_t>(self_.use_count()) > others_.size()+1;
-    }
-
-    const std::shared_ptr<Self>& self() const noexcept { return self_; }
-    std::span<const std::shared_ptr<Other>> others() const noexcept { return others_; }
-
-   private:
-    std::shared_ptr<Self> self_;
-
-    std::vector<std::shared_ptr<Other>> others_;
+    Node*       node;
+    std::string name;
+    T*          sock;
   };
-  using InSockLinkSet  = LinkSet<InSock, OutSock>;
-  using OutSockLinkSet = LinkSet<OutSock, InSock>;
-  using InSockMap      = std::unordered_map<InSock*, InSockLinkSet>;
-  using OutSockMap     = std::unordered_map<OutSock*, OutSockLinkSet>;
+  struct SockLink final {
+    SockLink(InSock* in, OutSock* out) noexcept : in(in), out(out) {
+    }
+    SockRef<InSock>  in;
+    SockRef<OutSock> out;
+  };
 
   NodeLinkStore() = default;
   NodeLinkStore(const NodeLinkStore&) = delete;
-  NodeLinkStore(NodeLinkStore&&) = default;
+  NodeLinkStore(NodeLinkStore&&) = delete;
   NodeLinkStore& operator=(const NodeLinkStore&) = delete;
-  NodeLinkStore& operator=(NodeLinkStore&&) = default;
+  NodeLinkStore& operator=(NodeLinkStore&&) = delete;
 
   NodeLinkStore(const msgpack::object&, const std::vector<Node*>&);
+  static std::vector<SockLink> DeserializeLinks(const msgpack::object&, const std::vector<Node*>&);
   void Serialize(
       Packer&, const std::unordered_map<Node*, size_t>& idxmap) const noexcept;
-  NodeLinkStore Clone(const std::unordered_map<Node*, Node*>& src_to_dst) const noexcept;
+  std::unique_ptr<NodeLinkStore> Clone(const std::unordered_map<Node*, Node*>& src_to_dst) const noexcept;
 
-  void Link(const std::shared_ptr<InSock>& in, const std::shared_ptr<OutSock>& out) noexcept;
+  void Link(InSock* in, OutSock* out) noexcept;
   void Unlink(const InSock*, const OutSock*) noexcept;  // deleted pointers can be passed
 
-  struct DeadPair final {
-    DeadPair(Node* i, std::string_view in, Node* o, std::string_view on) noexcept :
-        in_node(i), in_name(in), out_node(o), out_name(on) {
-    }
-    Node* in_node;
-    std::string in_name;
-    Node* out_node;
-    std::string out_name;
-  };
-  std::vector<DeadPair> CleanUp() noexcept;
-
-  void Unlink(const InSock& in) noexcept {
-    const auto src_span = srcOf(&in);
-    std::vector<std::shared_ptr<OutSock>> srcs(src_span.begin(), src_span.end());
-    for (const auto& out : srcs) Unlink(&in, out.get());
-  }
-  void Unlink(const OutSock& out) noexcept {
-    const auto dst_span = dstOf(&out);
-    std::vector<std::shared_ptr<InSock>> dsts(dst_span.begin(), dst_span.end());
-    for (const auto& in : dsts) Unlink(in.get(), &out);
+  std::vector<SockLink> TakeDeadLinks() noexcept {
+    return std::move(deads_);
   }
 
-  std::span<const std::shared_ptr<OutSock>> srcOf(const InSock* in) const noexcept {
-    auto itr = in_.find(const_cast<InSock*>(in));
-    if (itr == in_.end()) return {};
-    return itr->second.others();
-  }
-  std::span<const std::shared_ptr<InSock>> dstOf(const OutSock* out) const noexcept {
-    auto itr = out_.find(const_cast<OutSock*>(out));
-    if (itr == out_.end()) return {};
-    return itr->second.others();
-  }
+  // deleted pointers can be passed
+  std::vector<OutSock*> srcOf(const InSock* sock) const noexcept;
+  // deleted pointers can be passed
+  std::vector<InSock*> dstOf(const OutSock* out) const noexcept;
 
-  const InSockMap&  in () const noexcept { return in_; }
-  const OutSockMap& out() const noexcept { return out_; }
+  const std::vector<SockLink>& items() const noexcept { return items_; }
 
  private:
-  InSockMap  in_;
-  OutSockMap out_;
+  std::vector<SockLink> items_;
 
-  NodeLinkStore(InSockMap&& in, OutSockMap&& out) noexcept :
-      in_(std::move(in)), out_(std::move(out)) {
-  }
+  class Observer;
+  std::unordered_map<Node*, std::unique_ptr<Node::Observer>> obs_;
+
+  std::vector<SockLink> deads_;
+
+
+  NodeLinkStore(std::vector<SockLink>&& items) noexcept;
 };
 
 class NodeLinkStore::SwapCommand : public HistoryCommand {
@@ -184,7 +135,7 @@ class NodeLinkStore::SwapCommand : public HistoryCommand {
     auto in  = in_node_->in(in_name_);
     auto out = out_node_->out(out_name_);
     if (!in || !out) throw Exception("cannot unlink deleted sockets");
-    links_->Unlink(in.get(), out.get());
+    links_->Unlink(in, out);
   }
 };
 
@@ -198,12 +149,10 @@ class NodeSubContext : public iface::Node::Context {
       Context(File::Path(octx->basepath())), octx_(octx) {
   }
 
-  std::span<const std::shared_ptr<Node::InSock>>
-      dstOf(const Node::OutSock* out) const noexcept {
+  std::vector<Node::InSock*> dstOf(const Node::OutSock* out) const noexcept {
     return octx_->dstOf(out);
   }
-  std::span<const std::shared_ptr<Node::OutSock>>
-      srcOf(const Node::InSock* in) const noexcept {
+  std::vector<Node::OutSock*> srcOf(const Node::InSock* in) const noexcept {
     return octx_->srcOf(in);
   }
 
@@ -250,7 +199,7 @@ class NodeLambdaInSock final : public iface::Node::InSock {
   using Node     = iface::Node;
   using Receiver = std::function<void(const std::shared_ptr<Node::Context>&, Value&&)>;
 
-  NodeLambdaInSock(Node* o, const std::shared_ptr<const Node::SockMeta>& meta, Receiver&& f) noexcept :
+  NodeLambdaInSock(Node* o, const Node::SockMeta* meta, Receiver&& f) noexcept :
       InSock(o, meta), lambda_(std::move(f)) {
   }
 
@@ -297,14 +246,19 @@ class LambdaNode final : public File, public iface::Node {
  public:
   LambdaNode(Env* env) noexcept :
       File(&Driver::kType, env), Node(Node::kNone),
-      life_(std::make_shared<std::monostate>()) {
+      in_insts_(Driver::kInSocks.size()), out_insts_(Driver::kOutSocks.size()) {
+    out_.reserve(Driver::kOutSocks.size());
     for (size_t i = 0; i < Driver::kOutSocks.size(); ++i) {
       const auto& m = Driver::kOutSocks[i];
-      out_.emplace_back(new OutSock(this, {&m, [](auto){}}));
+      out_insts_[i] = std::make_shared<OutSock>(this, &m);
+      out_.push_back(out_insts_[i].get());
     }
+
+    in_.reserve(Driver::kInSocks.size());
     for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
       const auto& m = Driver::kInSocks[i];
-      in_.emplace_back(new CustomInSock(this, &m, i));
+      in_insts_[i].emplace(this, &m, i);
+      in_.push_back(&*in_insts_[i]);
     }
   }
 
@@ -318,21 +272,21 @@ class LambdaNode final : public File, public iface::Node {
     return std::make_unique<LambdaNode>(env);
   }
 
-  void Update(RefStack& ref, Event&) noexcept override {
-    path_ = ref.GetFullPath();
-  }
   void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
   }
 
-  const Path& path() const noexcept { return path_; }
+  const std::shared_ptr<OutSock>& sharedOut(size_t idx) const noexcept {
+    return out_insts_[idx];
+  }
 
  private:
-  std::shared_ptr<std::monostate> life_;
+  class CustomInSock;
+  std::vector<std::optional<CustomInSock>> in_insts_;
 
-  Path path_;
+  std::vector<std::shared_ptr<OutSock>> out_insts_;
 
 
   std::shared_ptr<Driver> GetDriver(const std::shared_ptr<Context>& ctx) noexcept {
@@ -343,16 +297,14 @@ class LambdaNode final : public File, public iface::Node {
   class CustomInSock final : public InSock {
    public:
     CustomInSock(LambdaNode* o, const SockMeta* meta, size_t idx) noexcept:
-        InSock(o, meta->gshared()),
-        owner_(o), life_(o->life_), idx_(idx) {
+        InSock(o, meta), owner_(o), idx_(idx) {
     }
 
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
-      if (life_.expired()) return;
       try {
         owner_->GetDriver(ctx)->Handle(idx_, std::move(v));
       } catch (Exception& e) {
-        notify::Warn(owner_->path(), owner_,
+        notify::Warn(ctx->basepath(), owner_,
                      "error while handling input ("+name()+"): "s+e.msg());
       }
     }
@@ -362,8 +314,6 @@ class LambdaNode final : public File, public iface::Node {
 
    private:
     LambdaNode* owner_;
-
-    std::weak_ptr<std::monostate> life_;
 
     size_t idx_;
   };
@@ -375,20 +325,8 @@ void LambdaNode<Driver>::UpdateNode(
   ImGui::TextUnformatted(driver->title().c_str());
 
   ImGui::BeginGroup();
-  for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
-    const auto& m = Driver::kInSocks[i];
-    if (ImNodes::BeginInputSlot(m.name.c_str(), 1)) {
-      if (m.type == SockMeta::kPulse) {
-        gui::NodeInSock(ctx, in_[i]);
-      } else {
-        gui::NodeInSock(m.name);
-      }
-      ImNodes::EndSlot();
-
-      if (m.desc.size() && ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", m.desc.c_str());
-      }
-    }
+  for (const auto& m : Driver::kInSocks) {
+    gui::NodeInSock(m);
   }
   ImGui::EndGroup();
 
@@ -402,13 +340,7 @@ void LambdaNode<Driver>::UpdateNode(
   const auto left = ImGui::GetCursorPosX();
   for (const auto& m : Driver::kOutSocks) {
     ImGui::SetCursorPosX(left+w-ImGui::CalcTextSize(m.name.c_str()).x);
-    if (ImNodes::BeginOutputSlot(m.name.c_str(), 1)) {
-      gui::NodeOutSock(m.name);
-      ImNodes::EndSlot();
-      if (m.desc.size() && ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", m.desc.c_str());
-      }
-    }
+    gui::NodeOutSock(m);
   }
   ImGui::EndGroup();
 }

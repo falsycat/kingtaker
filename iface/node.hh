@@ -21,10 +21,13 @@ namespace kingtaker::iface {
 
 class Node {
  public:
+  class Observer;
+
   class Context;
   class Editor;
 
   struct SockMeta;
+  class  Sock;
   class  InSock;
   class  OutSock;
 
@@ -36,7 +39,7 @@ class Node {
 
   Node(Flags f) noexcept : flags_(f) {
   }
-  virtual ~Node() = default;
+  virtual inline ~Node() noexcept;
   Node(const Node&) = delete;
   Node(Node&&) = delete;
   Node& operator=(const Node&) = delete;
@@ -45,24 +48,68 @@ class Node {
   virtual void UpdateNode(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
   virtual void UpdateMenu(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
 
-  std::span<const std::shared_ptr<InSock>> in() const noexcept { return in_; }
-  std::span<const std::shared_ptr<OutSock>> out() const noexcept { return out_; }
+  std::span<InSock* const> in() const noexcept { return in_; }
+  std::span<OutSock* const> out() const noexcept { return out_; }
 
-  const std::shared_ptr<InSock>& in(size_t i) const noexcept { return in_[i]; }
-  const std::shared_ptr<OutSock>& out(size_t i) const noexcept { return out_[i]; }
+  InSock& in(size_t i) const noexcept { return *in_[i]; }
+  OutSock& out(size_t i) const noexcept { return *out_[i]; }
 
-  inline std::shared_ptr<InSock> in(std::string_view) const noexcept;
-  inline std::shared_ptr<OutSock> out(std::string_view) const noexcept;
+  inline InSock* in(std::string_view) const noexcept;
+  inline OutSock* out(std::string_view) const noexcept;
 
   Flags flags() const noexcept { return flags_; }
 
  protected:
-  std::vector<std::shared_ptr<InSock>> in_;
-  std::vector<std::shared_ptr<OutSock>> out_;
+  std::vector<InSock*> in_;
+  std::vector<OutSock*> out_;
+
+  // after modifying in_ or out_, call this.
+  inline void NotifySockChange() const noexcept;
 
  private:
+  std::vector<Observer*> obs_;
+
   Flags flags_;
 };
+
+class Node::Observer {
+ public:
+  Observer() = delete;
+  Observer(Node* target) noexcept : target_(target) {
+    target_->obs_.push_back(this);
+  }
+  virtual ~Observer() noexcept {
+    if (!target_) return;
+
+    auto& obs = target_->obs_;
+    auto  itr = std::find(obs.begin(), obs.end(), this);
+    if (itr != obs.end()) obs.erase(itr);
+  }
+  Observer(const Observer&) = delete;
+  Observer(Observer&&) = delete;
+  Observer& operator=(const Observer&) = delete;
+  Observer& operator=(Observer&&) = delete;
+
+  virtual void ObserveSockChange() noexcept { }
+
+  // Do not forget to call this implementation of base class when override.
+  virtual void ObserveDie() noexcept { target_ = nullptr; }
+
+  Node* target() const noexcept { return target_; }
+
+ private:
+  Node* target_;
+};
+Node::~Node() noexcept {
+  for (size_t i = 0; i < obs_.size(); ++i) {
+    obs_[obs_.size()-i-1]->ObserveDie();
+  }
+}
+void Node::NotifySockChange() const noexcept {
+  for (size_t i = 0; i < obs_.size(); ++i) {
+    obs_[obs_.size()-i-1]->ObserveSockChange();
+  }
+}
 
 class Node::Context {
  public:
@@ -87,12 +134,8 @@ class Node::Context {
   virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
 
   // Returns an empty when the socket is destructed or missing.
-  virtual std::span<const std::shared_ptr<InSock>> dstOf(const OutSock*) const noexcept {
-    return {};
-  }
-  virtual std::span<const std::shared_ptr<OutSock>> srcOf(const InSock*) const noexcept {
-    return {};
-  }
+  virtual std::vector<InSock*> dstOf(const OutSock*) const noexcept { return {}; }
+  virtual std::vector<OutSock*> srcOf(const InSock*) const noexcept { return {}; }
 
   const File::Path& basepath() const noexcept { return basepath_; }
 
@@ -124,8 +167,7 @@ class Node::Editor : public Context {
   Editor& operator=(const Editor&) = delete;
   Editor& operator=(Editor&&) = delete;
 
-  virtual void Link(const std::shared_ptr<InSock>&,
-                    const std::shared_ptr<OutSock>&) noexcept = 0;
+  virtual void Link(const InSock&, const OutSock&) noexcept = 0;
 
   virtual void Unlink(const InSock&, const OutSock&) noexcept = 0;
 
@@ -182,58 +224,46 @@ struct Node::SockMeta final {
 
   // when type == kData
   std::string dataType = "";
-
-
-  static std::shared_ptr<SockMeta> shared(SockMeta&& meta) noexcept {
-    auto ret = std::make_shared<SockMeta>();
-    *ret = std::move(meta);
-    return ret;
-  }
-  std::shared_ptr<const SockMeta> gshared() const noexcept {
-    return {this, [](auto){}};
-  }
 };
 
-class Node::InSock {
+class Node::Sock {
  public:
-  InSock(Node* o, const std::shared_ptr<const SockMeta>& meta) noexcept :
-      owner_(o), meta_(meta) {
+  Sock(Node* o, const SockMeta* meta) noexcept : owner_(o), meta_(meta) {
   }
-  virtual ~InSock() = default;
-  InSock(const InSock&) = delete;
-  InSock(InSock&&) = delete;
-  InSock& operator=(const InSock&) = delete;
-  InSock& operator=(InSock&&) = delete;
+  virtual ~Sock() = default;
+  Sock(const Sock&) = delete;
+  Sock(Sock&&) = delete;
+  Sock& operator=(const Sock&) = delete;
+  Sock& operator=(Sock&&) = delete;
 
-  virtual void Receive(const std::shared_ptr<Context>&, Value&&) noexcept { }
-
-  /* it's possible that the owner dies */
   Node* owner() const noexcept { return owner_; }
-  const std::shared_ptr<const SockMeta>& meta() const noexcept { return meta_; }
+  const SockMeta& meta() const noexcept { return *meta_; }
   const std::string& name() const noexcept { return meta_->name; }
 
  private:
   Node* owner_;
 
-  std::shared_ptr<const SockMeta> meta_;
+  const SockMeta* meta_;
 };
 
-class Node::OutSock {
+class Node::InSock : public Sock {
  public:
-  OutSock(Node* o, const std::shared_ptr<const SockMeta>& meta) noexcept :
-      owner_(o), meta_(meta) {
+  InSock(Node* o, const SockMeta* meta) noexcept : Sock(o, meta) {
   }
-  virtual ~OutSock() = default;
-  OutSock(const OutSock&) = delete;
-  OutSock(OutSock&&) = delete;
-  OutSock& operator=(const OutSock&) = delete;
-  OutSock& operator=(OutSock&&) = delete;
+  virtual void Receive(const std::shared_ptr<Context>&, Value&&) noexcept { }
+};
 
+class Node::OutSock : public Sock {
+ public:
+  OutSock(Node* o, const SockMeta* meta) noexcept : Sock(o, meta) {
+  }
+
+  // thread-safe
   void Send(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
     ctx->ObserveSend(*this, v);
 
-    auto task = [self = this, ctx, v = std::move(v)]() mutable {
-      // self may be already destructed
+    auto task = [self = this, ctx, v = std::move(v)]() {
+      // self may be destructed already but dstOf can take invalid pointer
       const auto dst = ctx->dstOf(self);
       for (const auto& other : dst) {
         ctx->ObserveReceive(*other, v);
@@ -242,25 +272,15 @@ class Node::OutSock {
     };
     Queue::sub().Push(std::move(task));
   }
-
-  /* it's possible that the owner is dead */
-  Node* owner() const noexcept { return owner_; }
-  const std::shared_ptr<const SockMeta>& meta() const noexcept { return meta_; }
-  const std::string& name() const noexcept { return meta_->name; }
-
- private:
-  Node* owner_;
-
-  std::shared_ptr<const SockMeta> meta_;
 };
 
-std::shared_ptr<Node::InSock> Node::in(std::string_view name) const noexcept {
+Node::InSock* Node::in(std::string_view name) const noexcept {
   for (const auto& sock : in_) {
     if (sock->name() == name) return sock;
   }
   return nullptr;
 }
-std::shared_ptr<Node::OutSock> Node::out(std::string_view name) const noexcept {
+Node::OutSock* Node::out(std::string_view name) const noexcept {
   for (const auto& sock : out_) {
     if (sock->name() == name) return sock;
   }

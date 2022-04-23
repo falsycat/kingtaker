@@ -1,5 +1,6 @@
 #include "util/node.hh"
 
+#include <type_traits>
 #include <unordered_set>
 
 #include <msgpack.hh>
@@ -7,158 +8,171 @@
 
 namespace kingtaker {
 
-NodeLinkStore::NodeLinkStore(
-    const msgpack::object& obj, const std::vector<Node*>& nodes) {
-  if (obj.type != msgpack::type::MAP) throw msgpack::type_error();
+class NodeLinkStore::Observer final : public Node::Observer {
+ public:
+  static void Register(NodeLinkStore* owner, Node* node) noexcept {
+    auto& obs = owner->obs_;
+    auto& ptr = obs[node];
+    if (!ptr) ptr = std::make_unique<Observer>(owner, node);
+  }
+  Observer(NodeLinkStore* owner, Node* node) noexcept:
+      Node::Observer(node), owner_(owner) {
+  }
 
-  for (size_t i = 0; i < obj.via.map.size; ++i) {
-    const auto& src_node_obj = obj.via.map.ptr[i];
-    const auto  src_node_idx = src_node_obj.key.as<size_t>();
-    const auto& srcs_obj     = obj.via.map.ptr[i].val;
-    if (srcs_obj.type != msgpack::type::MAP) throw msgpack::type_error();
+  void ObserveSockChange() noexcept override {
+    auto& items = owner_->items_;
 
-    if (src_node_idx >= nodes.size()) continue;
-    auto src_node = nodes[src_node_idx];
+    auto itr  = items.begin();
+    auto term = items.end();
 
-    for (size_t j = 0; j < srcs_obj.via.map.size; ++j) {
-      const auto& src_obj  = srcs_obj.via.map.ptr[j];
-      const auto  src_name = src_obj.key.as<std::string>();
-      const auto& dsts_obj = src_obj.val;
-      if (dsts_obj.type != msgpack::type::ARRAY) throw msgpack::type_error();
+    while (itr < term) {
+      auto& in  = itr->in;
+      auto& out = itr->out;
 
-      auto src = src_node->out(src_name);
-      if (!src) continue;
+      if (in.node == target()) {
+        in.sock = target()->in(in.name);
+      }
+      if (out.node == target()) {
+        out.sock = target()->out(out.name);
+      }
 
-      for (size_t k = 0; k < dsts_obj.via.array.size; ++k) {
-        const auto& dst_obj = dsts_obj.via.array.ptr[k];
-        if (dst_obj.type != msgpack::type::ARRAY) throw msgpack::type_error();
-        if (dst_obj.via.array.size != 2) throw msgpack::type_error();
-
-        const auto dst_node_idx = dst_obj.via.array.ptr[0].as<size_t>();
-        const auto dst_name     = dst_obj.via.array.ptr[1].as<std::string>();
-
-        if (dst_node_idx >= nodes.size()) continue;
-        auto dst_node = nodes[dst_node_idx];
-
-        auto dst = dst_node->in(dst_name);
-        if (!dst) continue;
-
-        Link(dst, src);
+      if (!in.sock || !out.sock) {
+        owner_->deads_.push_back(*itr);
+        std::swap(*itr, *(--term));
+      } else {
+        ++itr;
       }
     }
+    items.erase(term, items.end());
   }
+  void ObserveDie() noexcept override {
+    // copy params on the stack because `this` will be deleted before escaping
+    // this func
+    auto owner = owner_;
+    auto node  = target();
+    Node::Observer::ObserveDie();
+
+    owner->obs_.erase(node);
+  }
+
+ private:
+  NodeLinkStore* owner_;
+};
+
+NodeLinkStore::NodeLinkStore(std::vector<SockLink>&& items) noexcept :
+    items_(std::move(items)) {
+  for (auto link : items_) {
+    Observer::Register(this, link.in.node);
+    Observer::Register(this, link.out.node);
+  }
+}
+
+std::vector<NodeLinkStore::SockLink> NodeLinkStore::DeserializeLinks(
+    const msgpack::object& obj, const std::vector<Node*>& nodes) {
+  if (obj.type != msgpack::type::ARRAY) throw msgpack::type_error();
+
+  std::vector<SockLink> ret;
+  ret.reserve(obj.via.array.size);
+  for (size_t i = 0; i < obj.via.array.size; ++i) {
+    const auto& link_obj = obj.via.array.ptr[i];
+
+    std::tuple<size_t, std::string, size_t, std::string> link_tup;
+    if (!link_obj.convert_if_not_nil(link_tup)) continue;
+
+    const auto in_node_idx = std::get<0>(link_tup);
+    if (in_node_idx >= nodes.size()) {
+      throw DeserializeException("node index overflow");
+    }
+    const auto out_node_idx = std::get<2>(link_tup);
+    if (in_node_idx >= nodes.size()) {
+      throw DeserializeException("node index overflow");
+    }
+
+    auto in_node  = nodes[in_node_idx];
+    auto out_node = nodes[out_node_idx];
+
+    auto in_sock  = in_node->in(std::get<1>(link_tup));
+    auto out_sock = out_node->out(std::get<3>(link_tup));
+    if (!in_sock || !out_sock) continue;
+
+    ret.emplace_back(in_sock, out_sock);
+  }
+  return ret;
+}
+NodeLinkStore::NodeLinkStore(
+    const msgpack::object& obj, const std::vector<Node*>& nodes)
+try : NodeLinkStore(DeserializeLinks(obj, nodes)) {
+} catch (msgpack::type_error&) {
+  throw DeserializeException("broken NodeLinkStore");
 }
 void NodeLinkStore::Serialize(
     Packer& pk, const std::unordered_map<Node*, size_t>& idxmap) const noexcept {
-  std::unordered_set<Node*> nodes;
-  for (const auto& p : out_) {
-    nodes.insert(p.first->owner());
-  }
+  pk.pack_array(static_cast<uint32_t>(items_.size()));
+  for (const auto& link : items_) {
+    auto in_itr = idxmap.find(link.in.node);
+    if (in_itr == idxmap.end()) continue;
 
-  pk.pack_map(static_cast<uint32_t>(nodes.size()));
-  for (auto n : nodes) {
-    const auto idx_itr = idxmap.find(n);
-    assert(idx_itr != idxmap.end());
-    pk.pack(idx_itr->second);
+    auto out_itr = idxmap.find(link.out.node);
+    if (out_itr == idxmap.end()) continue;
 
-    pk.pack_map(static_cast<uint32_t>(n->out().size()));
-    for (const auto& s : n->out()) {
-      pk.pack(s->name());
-
-      const auto linkset_itr = out_.find(s.get());
-      if (linkset_itr == out_.end()) {
-        pk.pack_array(0);
-        continue;
-      }
-      const auto& others = linkset_itr->second.others();
-      pk.pack_array(static_cast<uint32_t>(others.size()));
-
-      for (const auto& other : others) {
-        const auto other_idx_itr = idxmap.find(other->owner());
-        assert(other_idx_itr != idxmap.end());
-        pk.pack_array(2);
-        pk.pack(other_idx_itr->second);
-        pk.pack(other->name());
-      }
-    }
+    pk.pack(std::make_tuple(in_itr->second, link.in.name,
+                            out_itr->second, link.out.name));
   }
 }
-NodeLinkStore NodeLinkStore::Clone(
+std::unique_ptr<NodeLinkStore> NodeLinkStore::Clone(
     const std::unordered_map<Node*, Node*>& src_to_dst) const noexcept {
-  NodeLinkStore ret;
-  for (const auto& p : out_) {
-    auto out_node_itr = src_to_dst.find(p.second.self()->owner());
+  std::vector<SockLink> ret;
+
+  ret.reserve(items_.size());
+  for (const auto& link : items_) {
+    auto in_node_itr = src_to_dst.find(link.in.node);
+    if (in_node_itr == src_to_dst.end()) continue;
+
+    auto out_node_itr = src_to_dst.find(link.out.node);
     if (out_node_itr == src_to_dst.end()) continue;
 
-    const auto& out_name = p.second.self()->name();
+    auto in_node  = in_node_itr->second;
     auto out_node = out_node_itr->second;
 
-    for (const auto& in : p.second.others()) {
-      auto in_node_itr = src_to_dst.find(in->owner());
-      if (in_node_itr == src_to_dst.end()) continue;
+    auto in_sock  = in_node->in(link.in.name);
+    auto out_sock = out_node->out(link.out.name);
+    if (!in_sock || !out_sock) continue;
 
-      auto in_node = in_node_itr->second;
+    ret.emplace_back(in_sock, out_sock);
+  }
+  return std::unique_ptr<NodeLinkStore>(new NodeLinkStore(std::move(ret)));
+}
 
-      auto insock  = in_node->in(in->name());
-      auto outsock = out_node->out(out_name);
-      if (insock && outsock) ret.Link(insock, outsock);
+void NodeLinkStore::Link(InSock* in, OutSock* out) noexcept {
+  items_.emplace_back(in, out);
+  Observer::Register(this, in->owner());
+  Observer::Register(this, out->owner());
+}
+void NodeLinkStore::Unlink(const InSock* in, const OutSock* out) noexcept {
+  auto term = std::remove_if(items_.begin(), items_.end(),
+                             [in, out](auto& x) { return x.in.sock == in && x.out.sock == out; });
+  items_.erase(term, items_.end());
+}
+
+std::vector<NodeLinkStore::OutSock*> NodeLinkStore::srcOf(const InSock* sock) const noexcept {
+  std::vector<OutSock*> ret;
+  for (const auto& link : items_) {
+    if (link.in.sock == sock) {
+      const auto& out = link.out;
+      ret.push_back(out.node->out(out.name));
     }
   }
   return ret;
 }
-
-void NodeLinkStore::Link(const std::shared_ptr<InSock>&  in,
-                         const std::shared_ptr<OutSock>& out) noexcept {
-  auto in_set = in_.try_emplace(in.get(), in).first;
-  in_set->second.Link(out);
-
-  auto out_set = out_.try_emplace(out.get(), out).first;
-  out_set->second.Link(in);
-}
-void NodeLinkStore::Unlink(const InSock* in, const OutSock* out) noexcept {
-  auto in_itr  = in_.find(const_cast<InSock*>(in));
-  auto out_itr = out_.find(const_cast<OutSock*>(out));
-
-  const bool in_found  = in_itr  != in_.end();
-  const bool out_found = out_itr != out_.end();
-  assert(in_found == out_found);
-  if (!in_found && !out_found) return;
-
-  if (in_itr->second.Unlink(*out)) {
-    in_.erase(in_itr);
-  }
-  if (out_itr->second.Unlink(*in)) {
-    out_.erase(out_itr);
-  }
-}
-std::vector<NodeLinkStore::DeadPair> NodeLinkStore::CleanUp() noexcept {
-  std::vector<NodeLinkStore::DeadPair> deads;
-
-  std::vector<InSock*> in_dead;
-  for (const auto& in : in_) {
-    if (in.second.alive()) continue;
-    in_dead.push_back(in.first);
-
-    const auto& self = in.second.self();
-    for (const auto& other : in.second.others()) {
-      deads.emplace_back(self->owner(), self->name(), other->owner(), other->name());
+std::vector<NodeLinkStore::InSock*> NodeLinkStore::dstOf(const OutSock* sock) const noexcept {
+  std::vector<InSock*> ret;
+  for (const auto& link : items_) {
+    if (link.out.sock == sock) {
+      const auto& in = link.in;
+      ret.push_back(in.node->in(in.name));
     }
   }
-  for (const auto in : in_dead) Unlink(*in);
-
-  std::vector<OutSock*> out_dead;
-  for (const auto& out : out_) {
-    if (out.second.alive()) continue;
-    out_dead.push_back(out.first);
-
-    const auto& self = out.second.self();
-    for (const auto& other : out.second.others()) {
-      deads.emplace_back(other->owner(), other->name(), self->owner(), self->name());
-    }
-  }
-  for (const auto out : out_dead) Unlink(*out);
-
-  return deads;
+  return ret;
 }
 
 }  // namespace kingtaker

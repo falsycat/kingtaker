@@ -23,6 +23,7 @@
 
 #include "util/gui.hh"
 #include "util/history.hh"
+#include "util/life.hh"
 #include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
@@ -38,7 +39,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       {typeid(iface::DirItem)});
 
   Network(Env* env) noexcept :
-      Network(env, Clock::now(), {}, {}, false, {0, 0}, 1.f) {
+      Network(env, Clock::now(), {}, std::make_unique<NodeLinkStore>(), false, {0, 0}, 1.f) {
   }
 
   Network(Env* env, const msgpack::object& obj) :
@@ -58,7 +59,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     }
 
     pk.pack("links"s);
-    links_.Serialize(pk, idxmap);
+    links_->Serialize(pk, idxmap);
 
     pk.pack("lastmod"s);
     pk.pack(lastmod_);
@@ -85,7 +86,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     }
 
     return std::unique_ptr<File>(new Network(
-        env, Clock::now(), std::move(nodes), links_.Clone(nmap),
+        env, Clock::now(), std::move(nodes), links_->Clone(nmap),
         shown_, canvas_.Offset, canvas_.Zoom));
   }
 
@@ -121,22 +122,25 @@ class Network : public File, public iface::DirItem, public iface::Node {
   class NodeHolder;
   using NodeHolderList = std::vector<std::unique_ptr<NodeHolder>>;
 
-  class InNode;
-  class OutNode;
-
   // permanentized params
-  NodeHolderList nodes_;
-  NodeLinkStore  links_;
-  size_t         next_id_ = 0;
+  NodeHolderList                 nodes_;
+  std::unique_ptr<NodeLinkStore> links_;
+  size_t                         next_id_ = 0;
 
   bool shown_;
   ImNodes::CanvasState canvas_;
 
   // volatile params
-  std::shared_ptr<std::monostate> life_;
+  Life life_;
 
+  class InNode;
+  class OutNode;
   std::unordered_set<InNode*>  in_nodes_;
   std::unordered_set<OutNode*> out_nodes_;
+
+  class CustomInSock;
+  std::vector<std::unique_ptr<OutSock>>      out_socks_;
+  std::vector<std::unique_ptr<CustomInSock>> in_socks_;
 
   std::unordered_map<Node*, NodeHolder*> hmap_;
 
@@ -149,16 +153,16 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
 
   // private ctors
-  Network(Env*             env,
-          Time             lastmod,
-          NodeHolderList&& nodes,
-          NodeLinkStore&&  links,
-          bool             shown,
-          ImVec2           pos,
-          float            zoom) noexcept :
+  Network(Env*                             env,
+          Time                             lastmod,
+          NodeHolderList&&                 nodes,
+          std::unique_ptr<NodeLinkStore>&& links,
+          bool                             shown,
+          ImVec2                           pos,
+          float                            zoom) noexcept :
       File(&kType, env, lastmod), DirItem(DirItem::kMenu), Node(Node::kNone),
       nodes_(std::move(nodes)), links_(std::move(links)), shown_(shown),
-      life_(std::make_shared<std::monostate>()), history_(this) {
+      history_(this) {
     canvas_.Zoom   = zoom;
     canvas_.Offset = pos;
     canvas_.Style.NodeRounding = 0.f;
@@ -174,7 +178,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   try : Network(env,
                 msgpack::find(obj, "lastmod"s).as<Time>(),
                 std::move(nodes.first),
-                NodeLinkStore(msgpack::find(obj, "links"s), nodes.second),
+                std::make_unique<NodeLinkStore>(msgpack::find(obj, "links"s), nodes.second),
                 msgpack::find(obj, "shown"s).as<bool>(),
                 msgpack::as_if<ImVec2>(msgpack::find(obj, "pos"s), {0, 0}),
                 msgpack::find(obj, "zoom"s).as<float>()) {
@@ -225,34 +229,35 @@ class Network : public File, public iface::DirItem, public iface::Node {
     shown_ = true;
   }
 
-  void RebuildSocks() noexcept {
-    std::set<std::string> in_names;
-    for (auto in : in_nodes_) in_names.insert(in->name());
-    for (const auto& name : in_names) {
-      if (in(name)) continue;
-      in_.emplace_back(new CustomInSock(this, SockMeta::shared({.name = name})));
-    }
-    for (auto itr = in_.begin(); itr < in_.end();) {
-      if (in_names.contains((*itr)->name())) {
-        ++itr;
-      } else {
-        itr = in_.erase(itr);
-      }
-    }
+  template <typename T>
+  void SyncSocks(const auto& nodes, auto& socks, auto& sock_ptrs) noexcept {
+    std::set<std::string> names;
+    for (auto in : nodes) names.insert(in->name());
 
-    std::set<std::string> out_names;
-    for (auto out : out_nodes_) out_names.insert(out->name());
-    for (const auto& name : out_names) {
-      if (out(name)) continue;
-      out_.emplace_back(new OutSock(this, SockMeta::shared({.name = name})));
-    }
-    for (auto itr = out_.begin(); itr < out_.end();) {
-      if (out_names.contains((*itr)->name())) {
-        ++itr;
-      } else {
-        itr = out_.erase(itr);
+    auto term_idx = std::remove_if(
+        socks.begin(), socks.end(),
+        [&names](auto& x) { return !names.contains(x->name()); }) - socks.begin();
+
+    sock_ptrs.clear();
+    socks.resize(names.size());
+
+    size_t idx = 0;
+    for (const auto& name : names) {
+      auto itr = std::find_if(socks.begin(), socks.end(),
+                              [&name](auto& x) { return x && x->name() == name; });
+      if (itr == socks.end()) {
+        assert(static_cast<size_t>(term_idx) < socks.size());
+        itr  = socks.begin() + (term_idx++);
+        *itr = std::make_unique<T>(this, name);
       }
+      std::swap(socks[idx], *itr);
+      sock_ptrs.push_back(itr->get());
     }
+  }
+  void RebuildSocks() noexcept {
+    SyncSocks<CustomInSock>(in_nodes_, in_socks_, in_);
+    SyncSocks<CustomOutSock>(out_nodes_, out_socks_, out_);
+    NotifySockChange();
   }
 
 
@@ -379,6 +384,110 @@ class Network : public File, public iface::DirItem, public iface::Node {
   } history_;
 
 
+  // An impl of InSock that executes Network as lambda.
+  class CustomInSock final : public InSock {
+   public:
+    CustomInSock(Network* owner, const std::string& name) noexcept :
+        InSock(owner, &meta_),
+        owner_(owner), life_(owner_->life_), meta_({.name = name}) {
+    }
+
+    void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept override {
+      if (!*life_) return;
+      auto ictx = octx->data<LambdaContext>(owner_, owner_, octx);
+      for (auto in : owner_->in_nodes_) {
+        if (in->name() == name()) in->out(0).Send(ictx, Value(v));
+      }
+    }
+
+   private:
+    Network* owner_;
+
+    Life::Ref life_;
+
+    SockMeta meta_;
+  };
+  class CustomOutSock final : public OutSock {
+   public:
+    CustomOutSock(Network* owner, const std::string& name) noexcept :
+        OutSock(owner, &meta_), meta_({.name = name}) {
+    }
+
+   private:
+    SockMeta meta_;
+  };
+
+
+  // An impl of Context to execute Network as lambda.
+  class LambdaContext : public Context, public Context::Data {
+   public:
+    LambdaContext(Network* owner, const std::shared_ptr<Context>& octx) noexcept :
+        Context(Path(owner->ctx_->basepath())),  // FIXME: ctx_ may not be created yet
+        owner_(owner), life_(owner_->life_), octx_(octx) {
+    }
+
+    void ObserveReceive(const InSock& in, const Value& v) noexcept override {
+      if (!*life_) return;
+      auto itr = owner_->out_nodes_.find(dynamic_cast<OutNode*>(in.owner()));
+      if (itr == owner_->out_nodes_.end()) return;
+
+      const auto& out_sock = owner_->out((*itr)->name());
+      if (!out_sock) return;
+
+      out_sock->Send(octx_, Value(v));
+    }
+
+    std::vector<InSock*> dstOf(const OutSock* out) const noexcept override {
+      if (!*life_) return {};
+      return owner_->links_->dstOf(out);
+    }
+    std::vector<OutSock*> srcOf(const InSock* in) const noexcept override {
+      if (!*life_) return {};
+      return owner_->links_->srcOf(in);
+    }
+
+   private:
+    Network* owner_;
+
+    Life::Ref life_;
+
+    std::shared_ptr<Context> octx_;
+  };
+
+  // An impl of Node::Editor for Network
+  class EditorContext final : public Editor {
+   public:
+    EditorContext(Path&& basepath, Network* o) noexcept :
+        Editor(std::move(basepath)), owner_(o), life_(o->life_) {
+    }
+
+    void Link(const InSock& in, const OutSock& out) noexcept override {
+      if (!*life_) return;
+      owner_->history_.Queue(std::make_unique<NodeLinkStore::SwapCommand>(
+          owner_->links_.get(), NodeLinkStore::SwapCommand::kLink, in, out));
+    }
+    void Unlink(const InSock& in, const OutSock& out) noexcept override {
+      if (!*life_) return;
+      owner_->history_.Queue(std::make_unique<NodeLinkStore::SwapCommand>(
+          owner_->links_.get(), NodeLinkStore::SwapCommand::kUnlink, in, out));
+    }
+
+    std::vector<InSock*> dstOf(const OutSock* out) const noexcept override {
+      if (!*life_) return {};
+      return owner_->links_->dstOf(out);
+    }
+    std::vector<OutSock*> srcOf(const InSock* in) const noexcept override {
+      if (!*life_) return {};
+      return owner_->links_->srcOf(in);
+    }
+
+   private:
+    Network* owner_;
+
+    Life::Ref life_;
+  };
+
+
   class InNode : public File, public iface::Node {
    public:
     static inline TypeInfo kType = TypeInfo::New<InNode>(
@@ -389,8 +498,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
     };
 
     InNode(Env* env, std::string_view name) noexcept :
-        File(&kType, env), Node(Node::kNone), name_(name) {
-      out_.emplace_back(new OutSock(this, kOut.gshared()));
+        File(&kType, env), Node(Node::kNone), sock_(this, &kOut), name_(name) {
+      out_ = {&sock_};
     }
 
     InNode(Env* env, const msgpack::object& obj) : InNode(env, obj.as<std::string>()) {
@@ -410,20 +519,24 @@ class Network : public File, public iface::DirItem, public iface::Node {
     const std::string& name() const noexcept { return name_; }
 
    private:
+    OutSock sock_;
+
     std::string name_;
   };
+
+
   class OutNode : public File, public iface::Node {
    public:
     static inline TypeInfo kType = TypeInfo::New<OutNode>(
         "Node/Network/Out", "output receiver in Node/Network", {});
 
-    static inline const SockMeta kOut = {
+    static inline const SockMeta kIn = {
       .name = "in", .type = SockMeta::kAny, .trigger = true,
     };
 
     OutNode(Env* env, std::string_view name) noexcept :
-        File(&kType, env), Node(Node::kNone), name_(name) {
-      in_.emplace_back(new InSock(this, kOut.gshared()));
+        File(&kType, env), Node(Node::kNone), sock_(this, &kIn), name_(name) {
+      in_ = {&sock_};
     }
 
     OutNode(Env* env, const msgpack::object& obj) : OutNode(env, obj.as<std::string>()) {
@@ -443,102 +556,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
     const std::string& name() const noexcept { return name_; }
 
    private:
+    InSock sock_;
+
     std::string name_;
-  };
-
-
-  // An impl of InSock that executes Network as lambda.
-  class CustomInSock final : public InSock {
-   public:
-    CustomInSock(Network* owner, const std::shared_ptr<const SockMeta>& meta) noexcept :
-        InSock(owner, meta), owner_(owner), life_(owner_->life_) {
-    }
-
-    void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept override {
-      if (life_.expired()) return;
-
-      auto ictx = octx->data<LambdaContext>(owner_, octx, owner_);
-      for (auto in : owner_->in_nodes_) {
-        if (in->name() == name()) in->out(0)->Send(ictx, Value(v));
-      }
-    }
-
-   private:
-    Network* owner_;
-
-    std::weak_ptr<std::monostate> life_;
-  };
-
-
-  // An impl of Context to execute Network as lambda.
-  class LambdaContext : public Context, public Context::Data {
-   public:
-    LambdaContext(const std::shared_ptr<Context>& octx,
-                  Network*                        owner) noexcept :
-        Context(Path(owner->ctx_->basepath())),  // FIXME: ctx_ may not be created yet
-        owner_(owner), life_(owner->life_), octx_(octx) {
-    }
-
-    void ObserveReceive(const InSock& in, const Value& v) noexcept override {
-      if (life_.expired()) return;
-
-      auto itr = owner_->out_nodes_.find(dynamic_cast<OutNode*>(in.owner()));
-      if (itr == owner_->out_nodes_.end()) return;
-
-      const auto& out_sock = owner_->out((*itr)->name());
-      if (!out_sock) return;
-
-      out_sock->Send(octx_, Value(v));
-    }
-
-    std::span<const std::shared_ptr<InSock>> dstOf(const OutSock* out) const noexcept override {
-      if (life_.expired()) return {};
-      return owner_->links_.dstOf(out);
-    }
-    std::span<const std::shared_ptr<OutSock>> srcOf(const InSock* in) const noexcept override {
-      if (life_.expired()) return {};
-      return owner_->links_.srcOf(in);
-    }
-
-   private:
-    Network* owner_;
-
-    std::weak_ptr<std::monostate> life_;
-
-    std::shared_ptr<Context> octx_;
-  };
-
-  // An impl of Node::Editor for Network
-  class EditorContext final : public Editor {
-   public:
-    EditorContext(Path&& basepath, Network* o) noexcept :
-        Editor(std::move(basepath)), owner_(o), life_(o->life_) {
-    }
-
-    void Link(const std::shared_ptr<InSock>& in, const std::shared_ptr<OutSock>& out) noexcept override {
-      if (life_.expired()) return;
-      owner_->history_.Queue(std::make_unique<NodeLinkStore::SwapCommand>(
-          &owner_->links_, NodeLinkStore::SwapCommand::kLink, *in, *out));
-    }
-    void Unlink(const InSock& in, const OutSock& out) noexcept override {
-      if (life_.expired()) return;
-      owner_->history_.Queue(std::make_unique<NodeLinkStore::SwapCommand>(
-          &owner_->links_, NodeLinkStore::SwapCommand::kUnlink, in, out));
-    }
-
-    std::span<const std::shared_ptr<InSock>> dstOf(const OutSock* out) const noexcept override {
-      if (life_.expired()) return {};
-      return owner_->links_.dstOf(out);
-    }
-    std::span<const std::shared_ptr<OutSock>> srcOf(const InSock* in) const noexcept override {
-      if (life_.expired()) return {};
-      return owner_->links_.srcOf(in);
-    }
-
-   private:
-    Network* owner_;
-
-    std::weak_ptr<std::monostate> life_;
   };
 };
 
@@ -592,17 +612,15 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
   }
 
   // handle existing connections
-  for (auto& src : links_.out()) {
-    for (const auto& dst : src.second.others()) {
-      auto srch = FindHolder(src.second.self()->owner());
-      auto srcs = src.second.self()->name().c_str();
-      auto dsth = FindHolder(dst->owner());
-      auto dsts = dst->name().c_str();
-      if (!srch || !dsth) continue;
+  for (auto& link : links_->items()) {
+    auto srch = FindHolder(link.out.node);
+    auto srcs = link.out.name.c_str();
+    auto dsth = FindHolder(link.in.node);
+    auto dsts = link.in.name.c_str();
+    if (!srch || !dsth) continue;
 
-      if (!ImNodes::Connection(dsth, dsts, srch, srcs)) {
-        ctx_->Unlink(*dst, *src.second.self());
-      }
+    if (!ImNodes::Connection(dsth, dsts, srch, srcs)) {
+      ctx_->Unlink(*link.in.sock, *link.out.sock);
     }
   }
 
@@ -617,15 +635,16 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
 
     auto src = srcn->node().out(srcs);
     auto dst = dstn->node().in(dsts);
-    if (src && dst) ctx_->Link(dst, src);
+    if (src && dst) ctx_->Link(*dst, *src);
   }
 
-  // handle removed sockets
-  const auto deads = links_.CleanUp();
-  for (auto& p : deads) {
+  // handle dead links
+  const auto deads = links_->TakeDeadLinks();
+  for (auto& link : deads) {
     history_.AddSilently(std::make_unique<NodeLinkStore::SwapCommand>(
-            &links_, NodeLinkStore::SwapCommand::kUnlink,
-            p.in_node, p.in_name, p.out_node, p.out_name));
+            links_.get(), NodeLinkStore::SwapCommand::kUnlink,
+            link.in.node,  link.in.name,
+            link.out.node, link.out.name));
   }
 
   // detect memento changes
@@ -748,13 +767,13 @@ void Network::InNode::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noex
 
   ImGui::SameLine();
   if (ImNodes::BeginOutputSlot("out", 1)) {
-    gui::NodeSocket();
+    gui::NodeSockPoint();
     ImNodes::EndSlot();
   }
 }
 void Network::OutNode::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
   if (ImNodes::BeginInputSlot("in", 1)) {
-    gui::NodeSocket();
+    gui::NodeSockPoint();
     ImNodes::EndSlot();
   }
 
@@ -830,15 +849,15 @@ void Network::History::AddNode(std::unique_ptr<NodeHolder>&& h) noexcept {
 }
 void Network::History::RemoveNode(NodeHolder* h) noexcept {
   for (const auto& in : h->node().in()) {
-    for (const auto& out : owner_->links_.srcOf(in.get())) {
+    for (const auto& out : owner_->links_->srcOf(in)) {
       Queue(std::make_unique<NodeLinkStore::SwapCommand>(
-              &owner_->links_, NodeLinkStore::SwapCommand::kUnlink, *in, *out));
+              owner_->links_.get(), NodeLinkStore::SwapCommand::kUnlink, *in, *out));
     }
   }
   for (const auto& out : h->node().out()) {
-    for (const auto& in : owner_->links_.dstOf(out.get())) {
+    for (const auto& in : owner_->links_->dstOf(out)) {
       Queue(std::make_unique<NodeLinkStore::SwapCommand>(
-              &owner_->links_, NodeLinkStore::SwapCommand::kUnlink, *in, *out));
+              owner_->links_.get(), NodeLinkStore::SwapCommand::kUnlink, *in, *out));
     }
   }
   Queue(std::make_unique<NodeSwapCommand>(owner_, std::move(h)));
@@ -892,7 +911,9 @@ class Call final : public LambdaNodeDriver {
     path_ = {};
   }
   void Send(Value&& v) {
-    auto f = &*RefStack().Resolve(owner_->path()).Resolve(path_);
+    auto octx = octx_.lock();
+
+    auto f = &*RefStack().Resolve(octx->basepath()).Resolve(path_);
     if (f == owner_) throw Exception("self reference");
 
     auto n = File::iface<iface::Node>(f);
@@ -911,7 +932,7 @@ class Call final : public LambdaNodeDriver {
       ictx = nullptr;
     }
     if (!ictx) {
-      ictx = std::make_shared<NodeRedirectContext>(octx_.lock(), owner_->out(0), n);
+      ictx = std::make_shared<NodeRedirectContext>(octx, owner_->sharedOut(0), n);
     }
     ictx_ = ictx;
 
@@ -922,6 +943,8 @@ class Call final : public LambdaNodeDriver {
   }
 
  private:
+  Life life_;
+
   Owner* owner_;
 
   std::weak_ptr<Context> octx_;
@@ -952,25 +975,14 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       File(&kType, env),
       DirItem(DirItem::kMenu | DirItem::kTooltip),
       Node(Node::kNone),
-      life_(new std::monostate), store_(new Store),
+      store_(new Store),
+      out_result_(this, &kOutResult),
+      in_params_(this, &kInParams,
+                 [this](auto& ctx, auto&& v) { SetParam(ctx, std::move(v)); }),
+      in_exec_(this, &kInExec, [this](auto& ctx, auto&&) { Exec(ctx); }),
       path_(path) {
-    std::weak_ptr<std::monostate> wlife = life_;
-
-    out_.emplace_back(new OutSock(this, kOutResult.gshared()));
-
-    auto task_param  = [this, wlife](const auto& ctx, auto&& v) {
-      if (wlife.expired()) return;
-      SetParam(ctx, std::move(v));
-    };
-    in_.emplace_back(
-        new NodeLambdaInSock(this, kInParams.gshared(), std::move(task_param)));
-
-    auto task_exec = [this, wlife](const auto& ctx, auto&&) {
-      if (wlife.expired()) return;
-      Exec(ctx);
-    };
-    in_.emplace_back(
-        new NodeLambdaInSock(this, kInExec.gshared(), std::move(task_exec)));
+    in_  = {&in_params_, &in_exec_};
+    out_ = {&out_result_};
   }
 
   Cache(Env* env, const msgpack::object& obj)
@@ -996,13 +1008,12 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
   }
 
  private:
-  std::shared_ptr<std::monostate> life_;
-
   class Store;
   std::shared_ptr<Store> store_;
 
-  class ExecInSock;
-  std::shared_ptr<ExecInSock> in_exec_;
+  OutSock          out_result_;
+  NodeLambdaInSock in_params_;
+  NodeLambdaInSock in_exec_;
 
   // permanentized
   std::string path_;
@@ -1044,15 +1055,8 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     auto params = std::move(cdata->params);
 
     // a lambda that passes target node's output to self output
-    std::weak_ptr<std::monostate> wlife = life_;
-    auto obs = [this, wlife, ctx](auto name, auto& value) {
-      if (wlife.expired()) return;
-
-      auto itr = std::find_if(out_.begin(), out_.end(),
-                              [&name](auto& x) { return x->name() == name; });
-      if (itr == out_.end()) return;
-
-      (*itr)->Send(ctx, Value(value));
+    auto obs = [this, ctx](auto name, auto& value) {
+      out_result_.Send(ctx, Value::Tuple { Value::String(name), Value(value) });
     };
 
     // observe the cache item when it's found
@@ -1175,18 +1179,16 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       auto item = item_.lock();
       if (!item) return;
 
-      auto task = [item, name = sock.meta()->name, v = v]() mutable {
+      auto task = [item, name = sock.name(), v = v]() mutable {
         item->Set(std::move(name), std::move(v));
       };
       Queue::sub().Push(std::move(task));
     }
 
-    std::span<const std::shared_ptr<Node::InSock>>
-        dstOf(const Node::OutSock* out) const noexcept override {
+    std::vector<Node::InSock*> dstOf(const Node::OutSock* out) const noexcept override {
       return octx_->dstOf(out);
     }
-    std::span<const std::shared_ptr<Node::OutSock>>
-        srcOf(const Node::InSock* in) const noexcept override {
+    std::vector<Node::OutSock*> srcOf(const Node::InSock* in) const noexcept override {
       return octx_->srcOf(in);
     }
 

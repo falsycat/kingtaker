@@ -46,13 +46,14 @@ class Imm final : public File,
 
   Imm(Env* env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
-      mem_(std::make_shared<Memento>(UniversalData {this, std::move(v), size})) {
-    out_.emplace_back(new OutSock(this, {&kOut, [](auto){}}));
-
-    auto receiver = [out = out_[0], mem = mem_](const auto& ctx, auto&&) {
-      out->Send(ctx, Value(mem->data().value));
-    };
-    in_.emplace_back(new NodeLambdaInSock(this, {&kIn, [](auto){}}, std::move(receiver)));
+      mem_({this, std::move(v), size}),
+      sock_out_(this, &kOut),
+      sock_clk_(this, &kIn,
+                [this](auto& ctx, auto&&) {
+                  sock_out_.Send(ctx, Value(mem_.data().value));
+                }) {
+    in_  = {&sock_clk_};
+    out_ = {&sock_out_};
   }
 
   Imm(Env* env, const msgpack::object& obj) :
@@ -63,7 +64,7 @@ class Imm final : public File,
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);
 
-    const auto& data = mem_->data();
+    const auto& data = mem_.data();
 
     pk.pack("size");
     pk.pack(std::make_pair(data.size.x, data.size.y));
@@ -72,7 +73,7 @@ class Imm final : public File,
     data.value.Serialize(pk);
   }
   std::unique_ptr<File> Clone(Env* env) const noexcept override {
-    const auto& data = mem_->data();
+    const auto& data = mem_.data();
     return std::make_unique<Imm>(env, Value(data.value), data.size);
   }
 
@@ -83,7 +84,7 @@ class Imm final : public File,
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Memento, iface::Node>(t).
-        Select(this, mem_.get());
+        Select(this, &mem_);
   }
 
  private:
@@ -110,7 +111,10 @@ class Imm final : public File,
     Imm* owner_;
   };
   using Memento = SimpleMemento<UniversalData>;
-  std::shared_ptr<Memento> mem_;
+  Memento mem_;
+
+  OutSock          sock_out_;
+  NodeLambdaInSock sock_clk_;
 
 
   void OnUpdate() noexcept {
@@ -129,10 +133,10 @@ void Imm::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
 
   if (ImNodes::BeginInputSlot("CLK", 1)) {
     ImGui::AlignTextToFramePadding();
-    gui::NodeSocket();
+    gui::NodeSockPoint();
     ImGui::SameLine();
     if (ImGui::Button("CLK")) {
-      Queue::sub().Push([clk = in_[0], ctx]() { clk->Receive(ctx, {}); });
+      Queue::main().Push([this, ctx]() { sock_clk_.Receive(ctx, {}); });
     }
     ImNodes::EndSlot();
   }
@@ -145,12 +149,12 @@ void Imm::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
 
   if (ImNodes::BeginOutputSlot("out", 1)) {
     ImGui::AlignTextToFramePadding();
-    gui::NodeSocket();
+    gui::NodeSockPoint();
     ImNodes::EndSlot();
   }
 }
 void Imm::UpdateTypeChanger(bool mini) noexcept {
-  auto& v = mem_->data().value;
+  auto& v = mem_.data().value;
 
   const char* type =
       v.isInteger()? "Int":
@@ -185,7 +189,7 @@ void Imm::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
 
-  auto& data = mem_->data();
+  auto& data = mem_.data();
   auto& v    = data.value;
 
   ImGui::SameLine();
@@ -218,8 +222,8 @@ void Imm::UpdateEditor() noexcept {
     ImGui::TextUnformatted("UNKNOWN TYPE X(");
   }
 
-  if (!ImGui::IsAnyItemActive() && data != mem_->commitData()) {
-    mem_->Commit();
+  if (!ImGui::IsAnyItemActive() && data != mem_.commitData()) {
+    mem_.Commit();
   }
 }
 
