@@ -174,12 +174,12 @@ class Node::Editor : public Context {
 
   void Unlink(const InSock& in) noexcept {
     const auto src_span = srcOf(&in);
-    std::vector<std::shared_ptr<OutSock>> srcs(src_span.begin(), src_span.end());
+    std::vector<OutSock*> srcs(src_span.begin(), src_span.end());
     for (const auto& out : srcs) Unlink(in, *out);
   }
   void Unlink(const OutSock& out) noexcept {
     const auto dst_span = dstOf(&out);
-    std::vector<std::shared_ptr<InSock>> dsts(dst_span.begin(), dst_span.end());
+    std::vector<InSock*> dsts(dst_span.begin(), dst_span.end());
     for (const auto& in : dsts) Unlink(*in, out);
   }
 };
