@@ -72,7 +72,7 @@ std::vector<NodeLinkStore::SockLink> NodeLinkStore::DeserializeLinks(
   if (obj.type != msgpack::type::ARRAY) throw msgpack::type_error();
 
   std::vector<SockLink> ret;
-  ret.reserve(obj.via.array.size);
+  ret.resize(obj.via.array.size);
   for (size_t i = 0; i < obj.via.array.size; ++i) {
     const auto& link_obj = obj.via.array.ptr[i];
 
@@ -91,11 +91,22 @@ std::vector<NodeLinkStore::SockLink> NodeLinkStore::DeserializeLinks(
     auto in_node  = nodes[in_node_idx];
     auto out_node = nodes[out_node_idx];
 
-    auto in_sock  = in_node->in(std::get<1>(link_tup));
-    auto out_sock = out_node->out(std::get<3>(link_tup));
-    if (!in_sock || !out_sock) continue;
+    const auto& in_name  = std::get<1>(link_tup);
+    const auto& out_name = std::get<3>(link_tup);
 
-    ret.emplace_back(in_sock, out_sock);
+    auto in_sock  = in_node->in(in_name);
+    auto out_sock = out_node->out(out_name);
+
+    if (in_sock) {
+      ret[i].in = {in_sock};
+    } else {
+      ret[i].in = {in_node, in_name};
+    }
+    if (out_sock) {
+      ret[i].out = {out_sock};
+    } else {
+      ret[i].out = {out_node, out_name};
+    }
   }
   return ret;
 }

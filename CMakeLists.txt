@@ -69,6 +69,7 @@ target_sources(kingtaker
     util/history.hh
     util/keymap.hh
     util/keymap.cc
+    util/life.hh
     util/luajit.hh
     util/luajit.cc
     util/memento.hh

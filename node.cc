@@ -24,6 +24,7 @@
 #include "util/gui.hh"
 #include "util/history.hh"
 #include "util/life.hh"
+#include "util/memento.hh"
 #include "util/node.hh"
 #include "util/notify.hh"
 #include "util/ptr_selector.hh"
@@ -324,7 +325,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     std::unique_ptr<HistoryCommand> WatchMemento() noexcept;
 
-    void Update(RefStack&, Event&) noexcept;
+    void Update(Network&, RefStack&, Event&) noexcept;
     void UpdateNode(Network&, RefStack&) noexcept;
 
     File& file() const noexcept { return *file_; }
@@ -576,7 +577,7 @@ void Network::Update(RefStack& ref, Event& ev) noexcept {
   // update children
   for (auto& h : nodes_) {
     if (ev.IsFocused(&h->file())) Focus(ref, h.get());
-    h->Update(ref, ev);
+    h->Update(*this, ref, ev);
   }
 
   // display window
@@ -724,11 +725,12 @@ void Network::UpdateNewIO(const ImVec2& pos) noexcept {
     ImGui::CloseCurrentPopup();
   }
 }
-void Network::NodeHolder::Update(RefStack& ref, Event& ev) noexcept {
+void Network::NodeHolder::Update(Network& owner, RefStack& ref, Event& ev) noexcept {
   ref.Push({std::to_string(id_), file_.get()});
   ImGui::PushID(file_.get());
 
   file_->Update(ref, ev);
+  node_->Update(ref, owner.ctx_);
 
   ImGui::PopID();
   ref.Pop();
@@ -869,11 +871,10 @@ class Call final : public LambdaNodeDriver {
   using Owner = LambdaNode<Call>;
 
   static inline TypeInfo kType = TypeInfo::New<Owner>(
-      "Node/Call", "redirect input to a specific Node on filesystem with sub context",
+      "Node/Call", "redirects input to a specific Node on filesystem with sub context",
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
     { .name = "path",  .type = SockMeta::kStringPath, },
     { .name = "send",  .type = SockMeta::kTuple, .trigger = true, },
   };
@@ -893,22 +894,13 @@ class Call final : public LambdaNodeDriver {
   void Handle(size_t idx, Value&& v) {
     switch (idx) {
     case 0:
-      Clear();
-      return;
-    case 1:
       path_ = File::ParsePath(v.string());
       return;
-    case 2:
+    case 1:
       Send(std::move(v));
       return;
     }
     assert(false);
-  }
-  void Clear() noexcept {
-    auto ictx = ictx_.lock();
-    if (ictx) ictx->Attach(nullptr);
-    ictx_.reset();
-    path_ = {};
   }
   void Send(Value&& v) {
     auto octx = octx_.lock();
@@ -953,6 +945,284 @@ class Call final : public LambdaNodeDriver {
 
   std::weak_ptr<NodeRedirectContext> ictx_;
 };
+
+
+class SugarCall final : public File, public iface::Node {
+ public:
+  static inline TypeInfo kType = TypeInfo::New<SugarCall>(
+      "Node/SugarCall", "sugar syntax of Node/Call",
+      {typeid(iface::Memento), typeid(iface::Node)});
+
+  SugarCall(Env* env, std::string_view path = "") noexcept :
+      File(&kType, env), Node(Node::kMenu), memento_({this, path}) {
+  }
+
+  SugarCall(Env* env, const msgpack::object& obj)
+  try : SugarCall(env, obj.as<std::string>()) {
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken Node/SugarCall");
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(memento_.data().path);
+  }
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
+    return std::make_unique<SugarCall>(env, memento_.data().path);
+  }
+
+  void Update(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept override {
+    if (first_) {
+      SyncSocks(ctx->basepath());
+      memento_.Overwrite();
+      first_ = false;
+    }
+  }
+  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateMenu(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Memento, iface::Node>(t).
+        Select(this, &memento_);
+  }
+
+ private:
+  struct UniversalData {
+   public:
+    UniversalData(SugarCall* owner, std::string_view p) noexcept :
+        path(p), owner_(owner) {
+    }
+    void Restore(const UniversalData& other) noexcept {
+      path      = other.path;
+      in_socks  = other.in_socks;
+      out_socks = other.out_socks;
+      owner_->Rebuild(in_socks, out_socks);
+    }
+
+    // permanentized
+    std::string path;
+
+    // volatile
+    std::vector<std::string> in_socks;
+    std::vector<std::string> out_socks;
+
+   private:
+    SugarCall* owner_;
+  };
+  SimpleMemento<UniversalData> memento_;
+
+  // volatile
+  Life life_;
+
+  std::string path_editing_;
+
+  bool first_ = true;
+
+  class CustomInSock;
+  class CustomOutSock;
+  std::vector<std::unique_ptr<CustomInSock>>  in_socks_;
+  std::vector<std::unique_ptr<CustomOutSock>> out_socks_;
+
+
+  Node* GetNode(const Path& basepath) const {
+    const auto& udata = memento_.data();
+
+    auto target = &*RefStack().Resolve(basepath).Resolve(udata.path);
+    if (target == this) throw Exception("recursive reference");
+
+    auto node = File::iface<iface::Node>(target);
+    if (!node) throw Exception("target is not a Node");
+
+    return node;
+  }
+  bool SyncSocks(const Path& basepath) noexcept
+  try {
+    auto& udata = memento_.data();
+    auto  node  = GetNode(basepath);
+
+    const auto in_names_bk  = std::move(udata.in_socks);
+    const auto out_names_bk = std::move(udata.out_socks);
+
+    auto  in       = node->in();
+    auto& in_names = udata.in_socks;
+    in_names.resize(in.size());
+    in_socks_.resize(in.size());
+    in_.resize(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+      in_names[i] = in[i]->name();
+      in_socks_[i] = std::make_unique<CustomInSock>(this, in[i]->meta());
+      in_[i] = &*in_socks_[i];
+    }
+    auto  out       = node->out();
+    auto& out_names = udata.out_socks;
+    out_names.resize(out.size());
+    out_socks_.resize(out.size());
+    out_.resize(out.size());
+    for (size_t i = 0; i < out.size(); ++i) {
+      out_names[i] = out[i]->name();
+      out_socks_[i] = std::make_unique<CustomOutSock>(this, out[i]->meta());
+      out_[i] = &*out_socks_[i];
+    }
+    NotifySockChange();
+
+    return in_names_bk != in_names || out_names_bk != out_names;
+  } catch (Exception& e) {
+    notify::Warn(basepath, this, e.msg());
+    return false;
+  }
+  void Rebuild(std::span<const std::string> in_names,
+               std::span<const std::string> out_names) noexcept {
+    in_socks_.resize(in_names.size());
+    in_.resize(in_names.size());
+    for (size_t i = 0; i < in_names.size(); ++i) {
+      in_socks_[i] = std::make_unique<CustomInSock>(this, in_names[i]);
+      in_[i] = in_socks_[i].get();
+    }
+    out_socks_.resize(out_names.size());
+    out_.resize(out_names.size());
+    for (size_t i = 0; i < out_names.size(); ++i) {
+      out_socks_[i] = std::make_unique<CustomOutSock>(this, out_names[i]);
+      out_[i] = out_socks_[i].get();
+    }
+    NotifySockChange();
+  }
+
+
+  class InnerContext final : public Context, public Context::Data {
+   public:
+    InnerContext(SugarCall* owner, const std::shared_ptr<Context>& octx, Node* target) noexcept :
+        Context(Path(octx->basepath())),
+        owner_(owner), life_(owner->life_), octx_(octx), target_(target) {
+    }
+
+    void ObserveSend(const OutSock& sock, const Value& v) noexcept
+    try {
+      if (!*life_) throw Exception("received value in sub context but life is expired");
+      if (sock.owner() != target_) return;
+
+      auto dst = owner_->out(sock.name());
+      if (!dst) throw Exception("missing output socket: "+sock.name());
+
+      dst->Send(octx_, Value(v));
+    } catch (Exception& e) {
+      notify::Error(octx_->basepath(), owner_, e.msg());
+    }
+
+   private:
+    SugarCall* owner_;
+
+    Life::Ref life_;
+
+    std::shared_ptr<Context> octx_;
+
+    Node* target_;
+  };
+  class CustomInSock final : public InSock {
+   public:
+    CustomInSock(SugarCall* owner, const SockMeta& meta) noexcept :
+        InSock(owner, &meta_), owner_(owner), meta_(meta) {
+    }
+    CustomInSock(SugarCall* owner, const std::string& name) noexcept :
+        CustomInSock(owner, {.name = name}) {
+    }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override
+    try {
+      auto node = owner_->GetNode(ctx->basepath());
+
+      auto sock = node->in(meta_.name);
+      if (!sock) throw Exception("missing input socket: " + meta_.name);
+
+      auto ictx = ctx->data<InnerContext>(owner_, owner_, ctx, node);
+      sock->Receive(ictx, std::move(v));
+    } catch (Exception& e) {
+      notify::Error(ctx->basepath(), owner_, e.msg());
+    }
+
+   private:
+    SugarCall* owner_;
+
+    SockMeta meta_;
+  };
+  class CustomOutSock final : public OutSock {
+   public:
+    CustomOutSock(SugarCall* owner, const SockMeta& meta) noexcept :
+        OutSock(owner, &meta_), owner_(owner), meta_(meta) {
+    }
+    CustomOutSock(SugarCall* owner, const std::string& name) noexcept :
+        CustomOutSock(owner, {.name = name}) {
+    }
+
+   private:
+    SockMeta meta_;
+  };
+};
+void SugarCall::UpdateNode(RefStack& ref, const std::shared_ptr<Editor>& ctx) noexcept {
+  const float em        = ImGui::GetFontSize();
+  const float max_width = 8*em;
+
+  auto& udata = memento_.data();
+
+  ImGui::TextUnformatted("SUGAR CALL");
+
+  const auto left = ImGui::GetCursorPosX();
+  const auto top  = ImGui::GetCursorPosY();
+  ImGui::AlignTextToFramePadding();
+  ImGui::NewLine();
+
+  ImGui::BeginGroup();
+  {
+    ImGui::BeginGroup();
+    for (auto sock : in_) {
+      gui::NodeInSock(sock->meta());
+    }
+    ImGui::EndGroup();
+
+    float w = 0;
+    for (auto sock : out_) {
+      w = std::max(w, ImGui::CalcTextSize(sock->name().c_str()).x);
+    }
+
+    ImGui::SameLine();
+    const auto x = ImGui::GetCursorPosX() - left;
+    ImGui::Dummy({std::max(0.f, max_width-x-w), 1});
+    ImGui::SameLine();
+
+    ImGui::BeginGroup();
+    for (auto sock : out_) {
+      const float tw = ImGui::CalcTextSize(sock->name().c_str()).x;
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + w-tw);
+      gui::NodeOutSock(sock->meta());
+    }
+    ImGui::EndGroup();
+  }
+  ImGui::EndGroup();
+
+  ImGui::SetCursorPosY(top);
+  const float w = std::max(ImGui::GetItemRectSize().x, 8*em);
+  ImGui::Button(udata.path.c_str(), {w, 0});
+  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+    UpdateMenu(ref, ctx);
+    ImGui::EndPopup();
+  }
+}
+void SugarCall::UpdateMenu(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+  auto& udata = memento_.data();
+
+  if (ImGui::MenuItem("sync socks")) {
+    if (SyncSocks(ctx->basepath())) {
+      memento_.Commit();
+    }
+  }
+
+  ImGui::Separator();
+
+  if (ImGui::BeginMenu("path")) {
+    if (gui::InputPathMenu(ctx->basepath(), &path_editing_, &udata.path)) {
+      if (SyncSocks(ctx->basepath())) {
+        memento_.Commit();
+      }
+    }
+    ImGui::EndMenu();
+  }
+}
 
 
 class Cache final : public File, public iface::DirItem, public iface::Node {

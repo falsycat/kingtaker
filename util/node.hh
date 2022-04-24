@@ -36,13 +36,18 @@ class NodeLinkStore final {
 
   template <typename T>
   struct SockRef final {
+    SockRef() = default;
     SockRef(T* s) noexcept : node(s->owner()), name(s->name()), sock(s) {
+    }
+    SockRef(Node* n, std::string_view na) noexcept :
+        node(n), name(na), sock(nullptr) {
     }
     Node*       node;
     std::string name;
     T*          sock;
   };
   struct SockLink final {
+    SockLink() = default;
     SockLink(InSock* in, OutSock* out) noexcept : in(in), out(out) {
     }
     SockRef<InSock>  in;

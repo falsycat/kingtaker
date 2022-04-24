@@ -141,6 +141,10 @@ void NodeCanvasResetZoom() noexcept {
 }
 
 
+bool InputPathMenu(const File::Path& basepath, std::string* editing, std::string* path) noexcept {
+  auto ref = File::RefStack().Resolve(basepath);
+  return InputPathMenu(ref, editing, path);
+}
 bool InputPathMenu(File::RefStack& ref, std::string* editing, std::string* path) noexcept {
   constexpr auto kFlags = 
       ImGuiInputTextFlags_EnterReturnsTrue |
