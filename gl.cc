@@ -231,7 +231,7 @@ class Framebuffer final : public LambdaNodeDriver {
   static inline const std::vector<SockMeta> kInSocks = {
     { .name = "clear",  .type = SockMeta::kPulse, .trigger = true, },
     { .name = "reso",   .type = SockMeta::kVec2,  },
-    { .name = "attach", .type = SockMeta::kTuple, },
+    { .name = "attach", .type = SockMeta::kNamedValue, },
     { .name = "exec",   .type = SockMeta::kPulse, .trigger = true,  },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
@@ -601,7 +601,7 @@ class DrawArrays final : public LambdaNodeDriver {
     { .name = "fb",   .type = SockMeta::kData, },
     { .name = "vao",  .type = SockMeta::kData, },
 
-    { .name = "uniforms", .type = SockMeta::kTuple, },
+    { .name = "uniforms", .type = SockMeta::kNamedValue, },
 
     { .name = "viewport", .type = SockMeta::kVec4, },
     { .name = "mode",     .type = SockMeta::kStringOption,

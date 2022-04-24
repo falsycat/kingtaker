@@ -45,6 +45,7 @@ void NodeCanvasSetZoom() noexcept;
 void NodeCanvasResetZoom() noexcept;
 
 
+bool InputPathMenu(const File::Path&, std::string* editing, std::string* path) noexcept;
 bool InputPathMenu(File::RefStack&, std::string* editing, std::string* path) noexcept;
 
 void TextCenterChopped(std::string_view, float w) noexcept;

@@ -45,6 +45,7 @@ class Node {
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
+  virtual void Update(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
   virtual void UpdateNode(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
   virtual void UpdateMenu(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
 
@@ -173,12 +174,12 @@ class Node::Editor : public Context {
 
   void Unlink(const InSock& in) noexcept {
     const auto src_span = srcOf(&in);
-    std::vector<std::shared_ptr<OutSock>> srcs(src_span.begin(), src_span.end());
+    std::vector<OutSock*> srcs(src_span.begin(), src_span.end());
     for (const auto& out : srcs) Unlink(in, *out);
   }
   void Unlink(const OutSock& out) noexcept {
     const auto dst_span = dstOf(&out);
-    std::vector<std::shared_ptr<InSock>> dsts(dst_span.begin(), dst_span.end());
+    std::vector<InSock*> dsts(dst_span.begin(), dst_span.end());
     for (const auto& in : dsts) Unlink(*in, out);
   }
 };
@@ -197,11 +198,11 @@ struct Node::SockMeta final {
     kVec2Normal,
     kVec3Normal,
     kVec4Normal,
+    kNamedValue,
     kString,
     kStringMultiline,
     kStringOption,
     kStringPath,
-    kTuple,
     kData,
   };
 
@@ -218,9 +219,6 @@ struct Node::SockMeta final {
 
   // when type == kStringOption
   std::vector<Value::String> stringOptions = {};
-
-  // when type == kTuple
-  std::vector<std::shared_ptr<SockMeta>> tupleFields = {};
 
   // when type == kData
   std::string dataType = "";

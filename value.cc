@@ -29,9 +29,7 @@
 namespace kingtaker {
 namespace {
 
-class Imm final : public File,
-    public iface::DirItem,
-    public iface::Node {
+class Imm final : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo type_ = TypeInfo::New<Imm>(
       "Value/Imm", "immediate value",
@@ -224,6 +222,166 @@ void Imm::UpdateEditor() noexcept {
 
   if (!ImGui::IsAnyItemActive() && data != mem_.commitData()) {
     mem_.Commit();
+  }
+}
+
+
+class Name final : public File, public iface::Node {
+ public:
+  static inline TypeInfo kType = TypeInfo::New<Name>(
+      "Value/Name", "name",
+      {typeid(iface::Memento), typeid(iface::Node)});
+
+  static inline const SockMeta kOut = {
+    .name = "out", .type = SockMeta::kNamedValue,
+  };
+
+  Name(Env* env, std::vector<std::string>&& n = {}) noexcept :
+      File(&kType, env), Node(Node::kNone),
+      memento_({this, std::move(n)}), out_sock_(this, &kOut) {
+    Rebuild();
+  }
+
+  Name(Env* env, const msgpack::object& obj)
+  try : Name(env, obj.as<std::vector<std::string>>()) {
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken Value/Name");
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(memento_.data().names);
+  }
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
+    return std::make_unique<Name>(env, std::vector<std::string>(memento_.data().names));
+  }
+
+  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Memento, iface::Node>(t).
+        Select(this, &memento_);
+  }
+
+ private:
+  struct UniversalData final {
+   public:
+    UniversalData(Name* owner, std::vector<std::string>&& n) noexcept :
+        names(std::move(n)), owner_(owner) {
+    }
+    void Restore(const UniversalData& other) {
+      names = other.names;
+      owner_->Rebuild();
+    }
+
+    // permanentized
+    std::vector<std::string> names;
+
+   private:
+    Name* owner_;
+  };
+  SimpleMemento<UniversalData> memento_;
+
+  // volatile
+  std::vector<std::unique_ptr<InSock>> in_socks_;
+  OutSock out_sock_;
+
+  std::string new_name_;
+
+
+  void Rebuild() noexcept {
+    const auto& udata = memento_.data();
+
+    in_socks_.resize(udata.names.size());
+    in_.resize(udata.names.size());
+    for (size_t i = 0; i < udata.names.size(); ++i) {
+      in_socks_[i] = std::make_unique<CustomInSock>(this, &out_sock_, udata.names[i]);
+      in_[i]       = in_socks_[i].get();
+    }
+    out_ = {&out_sock_};
+    NotifySockChange();
+  }
+
+
+  class CustomInSock final : public InSock {
+   public:
+    CustomInSock(Name* owner, OutSock* out, const std::string& name) noexcept :
+        InSock(owner, &meta_), out_(out), meta_({.name = name}) {
+    }
+    void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
+      out_->Send(ctx, Value::Tuple { meta_.name, std::move(v) });
+    }
+   private:
+    OutSock* out_;
+    SockMeta meta_;
+  };
+};
+void Name::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+  auto& udata = memento_.data();
+  auto& names = udata.names;
+
+  const auto em = ImGui::GetFontSize();
+
+  ImGui::TextUnformatted("NAME");
+
+  ImGui::BeginGroup();
+  ImGui::PushItemWidth(6*em);
+  {
+    for (auto itr = names.begin(); itr < names.end();) {
+      const size_t idx = static_cast<size_t>(itr-names.begin());
+      auto& name = *(itr++);
+
+      ImGui::PushID(static_cast<int>(idx));
+      if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
+        gui::NodeSockPoint();
+        ImGui::SameLine();
+        ImGui::TextUnformatted(name.c_str());
+        ImNodes::EndSlot();
+
+        if (ImGui::BeginPopupContextItem()) {
+          if (ImGui::BeginMenu("rename")) {
+            ImGui::SetKeyboardFocusHere();
+            const bool submit = ImGui::InputTextWithHint(
+                "##renamer", "new name...", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue);
+
+            const bool empty = new_name_.empty();
+            const bool same  = new_name_ == name;
+            const bool dup   = names.end() != std::find(names.begin(), names.end(), new_name_);
+            if (empty) {
+              ImGui::Bullet(); ImGui::TextUnformatted("empty name");
+            }
+            if (same) {
+              ImGui::Bullet(); ImGui::TextUnformatted("nothing changes");
+            } else if (dup) {
+              ImGui::Bullet(); ImGui::TextUnformatted("duplicated");
+            }
+            if (!empty && !dup && submit) {
+              name = std::move(new_name_);
+              if (!same) {
+                memento_.Commit();
+                Rebuild();
+              }
+              ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndMenu();
+          }
+          if (ImGui::MenuItem("remove")) {
+            itr = names.erase(--itr);
+            memento_.Commit();
+            Rebuild();
+          }
+          ImGui::EndPopup();
+        }
+      }
+      ImGui::PopID();
+    }
+  }
+  ImGui::PopItemWidth();
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+  if (ImNodes::BeginOutputSlot("out", 1)) {
+    ImGui::AlignTextToFramePadding();
+    gui::NodeSockPoint();
+    ImNodes::EndSlot();
   }
 }
 

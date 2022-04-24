@@ -36,6 +36,9 @@ class SimpleMemento : public iface::Memento {
   void Commit() noexcept {
     committed_ = true;
   }
+  void Overwrite() noexcept {
+    tag_->data() = data_;
+  }
 
   const T& data() const noexcept { return data_; }
   T& data() noexcept { return data_; }
@@ -90,6 +93,7 @@ class SimpleMemento : public iface::Memento {
     }
 
     const T& data() const noexcept { return data_; }
+    T& data() noexcept { return data_; }
 
    private:
     SimpleMemento* owner_;
