@@ -876,10 +876,10 @@ class Call final : public LambdaNodeDriver {
 
   static inline const std::vector<SockMeta> kInSocks = {
     { .name = "path",  .type = SockMeta::kStringPath, },
-    { .name = "send",  .type = SockMeta::kTuple, .trigger = true, },
+    { .name = "send",  .type = SockMeta::kNamedValue, .trigger = true, },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "recv", .type = SockMeta::kTuple, },
+    { .name = "recv", .type = SockMeta::kNamedValue, },
   };
 
   Call() = delete;
@@ -1121,7 +1121,7 @@ class SugarCall final : public File, public iface::Node {
         InSock(owner, &meta_), owner_(owner), meta_(meta) {
     }
     CustomInSock(SugarCall* owner, const std::string& name) noexcept :
-        CustomInSock(owner, {.name = name}) {
+        CustomInSock(owner, SockMeta {.name = name}) {
     }
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override
     try {
@@ -1144,10 +1144,10 @@ class SugarCall final : public File, public iface::Node {
   class CustomOutSock final : public OutSock {
    public:
     CustomOutSock(SugarCall* owner, const SockMeta& meta) noexcept :
-        OutSock(owner, &meta_), owner_(owner), meta_(meta) {
+        OutSock(owner, &meta_), meta_(meta) {
     }
     CustomOutSock(SugarCall* owner, const std::string& name) noexcept :
-        CustomOutSock(owner, {.name = name}) {
+        CustomOutSock(owner, SockMeta {.name = name}) {
     }
 
    private:
@@ -1232,13 +1232,13 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       {typeid(iface::DirItem)});
 
   static inline const SockMeta kInParams = {
-    .name = "params", .type = SockMeta::kTuple, .multi = true,
+    .name = "params", .type = SockMeta::kNamedValue, .multi = true,
   };
   static inline const SockMeta kInExec = {
     .name = "exec", .type = SockMeta::kPulse, .trigger = true,
   };
   static inline const SockMeta kOutResult = {
-    .name = "results", .type = SockMeta::kTuple, .multi = true,
+    .name = "results", .type = SockMeta::kNamedValue, .multi = true,
   };
 
   Cache(Env* env, std::string_view path = "") noexcept :

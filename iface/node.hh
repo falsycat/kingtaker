@@ -198,11 +198,11 @@ struct Node::SockMeta final {
     kVec2Normal,
     kVec3Normal,
     kVec4Normal,
+    kNamedValue,
     kString,
     kStringMultiline,
     kStringOption,
     kStringPath,
-    kTuple,
     kData,
   };
 
@@ -219,9 +219,6 @@ struct Node::SockMeta final {
 
   // when type == kStringOption
   std::vector<Value::String> stringOptions = {};
-
-  // when type == kTuple
-  std::vector<std::shared_ptr<SockMeta>> tupleFields = {};
 
   // when type == kData
   std::string dataType = "";
