@@ -285,7 +285,6 @@ class Name final : public File, public iface::Node {
   OutSock out_sock_;
 
   std::string new_name_;
-  std::vector<std::string> names_editing_;
 
 
   void Rebuild() noexcept {
@@ -298,8 +297,6 @@ class Name final : public File, public iface::Node {
       in_[i]       = in_socks_[i].get();
     }
     out_ = {&out_sock_};
-
-    names_editing_ = udata.names;
     NotifySockChange();
   }
 
@@ -318,8 +315,8 @@ class Name final : public File, public iface::Node {
   };
 };
 void Name::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
-  auto& udata  = memento_.data();
-  auto& enames = names_editing_;
+  auto& udata = memento_.data();
+  auto& names = udata.names;
 
   const auto em = ImGui::GetFontSize();
 
@@ -328,50 +325,54 @@ void Name::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
   ImGui::BeginGroup();
   ImGui::PushItemWidth(6*em);
   {
-    int      id = 0;
-    intmax_t i  = 0;
-    for (; i < static_cast<intmax_t>(enames.size()); ++i) {
-      ImGui::PushID(id++);
-      auto& name = enames[static_cast<size_t>(i)];
+    for (auto itr = names.begin(); itr < names.end();) {
+      const size_t idx = static_cast<size_t>(itr-names.begin());
+      auto& name = *(itr++);
+
+      ImGui::PushID(static_cast<int>(idx));
       if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
-        ImGui::AlignTextToFramePadding();
         gui::NodeSockPoint();
         ImGui::SameLine();
-        ImGui::InputText("##name", &name);
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
-          if (name.empty()) {
-            names_editing_.erase(enames.begin()+i);
-            --i;
-          } else {
-            while (std::count(enames.begin(), enames.end(), name) >= 2) {
-              name += "_";
+        ImGui::TextUnformatted(name.c_str());
+        ImNodes::EndSlot();
+
+        if (ImGui::BeginPopupContextItem()) {
+          if (ImGui::BeginMenu("rename")) {
+            ImGui::SetKeyboardFocusHere();
+            const bool submit = ImGui::InputTextWithHint(
+                "##renamer", "new name...", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue);
+
+            const bool empty = new_name_.empty();
+            const bool same  = new_name_ == name;
+            const bool dup   = names.end() != std::find(names.begin(), names.end(), new_name_);
+            if (empty) {
+              ImGui::Bullet(); ImGui::TextUnformatted("empty name");
             }
+            if (same) {
+              ImGui::Bullet(); ImGui::TextUnformatted("nothing changes");
+            } else if (dup) {
+              ImGui::Bullet(); ImGui::TextUnformatted("duplicated");
+            }
+            if (!empty && !dup && submit) {
+              name = std::move(new_name_);
+              if (!same) {
+                memento_.Commit();
+                Rebuild();
+              }
+              ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndMenu();
           }
-          if (udata.names != enames) {
-            udata.names = enames;
+          if (ImGui::MenuItem("remove")) {
+            itr = names.erase(--itr);
             memento_.Commit();
             Rebuild();
           }
+          ImGui::EndPopup();
         }
-        ImNodes::EndSlot();
       }
       ImGui::PopID();
     }
-
-    ImGui::PushID(id);
-    ImGui::Dummy({em, em});
-    ImGui::SameLine();
-    ImGui::InputTextWithHint("##name", "new name", &new_name_);
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-      while (std::count(enames.begin(), enames.end(), new_name_) >= 1) {
-        new_name_ += "_";
-      }
-      enames.push_back(new_name_);
-      udata.names.push_back(std::move(new_name_));
-      memento_.Commit();
-      Rebuild();
-    }
-    ImGui::PopID();
   }
   ImGui::PopItemWidth();
   ImGui::EndGroup();
