@@ -30,6 +30,7 @@
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
+
 namespace kingtaker {
 namespace {
 
@@ -597,7 +598,6 @@ void Network::UpdateMenu(RefStack&) noexcept {
 void Network::UpdateCanvas(RefStack& ref) noexcept {
   const auto pos = ImGui::GetCursorScreenPos();
 
-  ImGui::BeginGroup();
   ImNodes::BeginCanvas(&canvas_);
   gui::NodeCanvasSetZoom();
 
@@ -652,12 +652,11 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
 
   gui::NodeCanvasResetZoom();
   ImNodes::EndCanvas();
-  ImGui::EndGroup();
 
   constexpr auto kFlags =
       ImGuiPopupFlags_MouseButtonRight |
       ImGuiPopupFlags_NoOpenOverExistingPopup;
-  if (ImGui::BeginPopupContextItem("##canvas_menu", kFlags)) {
+  if (ImGui::BeginPopupContextWindow(nullptr, kFlags)) {
     UpdateCanvasMenu(ref, pos);
     ImGui::EndPopup();
   }
