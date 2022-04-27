@@ -170,9 +170,16 @@ class Network : public File, public iface::DirItem, public iface::Node {
     canvas_.Style.NodeRounding = 0.f;
 
     for (auto& node : nodes_) {
-      node->SetUp(*this);
+      node->SetUp(this);
       next_id_ = std::max(next_id_, node->id()+1);
     }
+
+    auto listener = [this](const auto& link) {
+      auto cmd = std::make_unique<NodeLinkStore::SwapCommand>(
+          links_.get(), NodeLinkStore::SwapCommand::kUnlink, link);
+      history_.AddSilently(std::move(cmd));
+    };
+    links_->ListenDeadLink(std::move(listener));
   }
   Network(Env*                                            env,
           const msgpack::object&                          obj,
@@ -276,6 +283,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
         memento_(File::iface<iface::Memento>(file_.get())),
         id_(id) {
       if (!node_) throw Exception("File doesn't have Node interface");
+      if (memento_) obs_.emplace(this);
     }
 
     NodeHolder(Env* env, const msgpack::object& obj)
@@ -305,26 +313,28 @@ class Network : public File, public iface::DirItem, public iface::Node {
       return std::make_unique<NodeHolder>(file_->Clone(env), id, pos, select);
     }
 
-    void SetUp(Network& owner) noexcept {
-      if (auto in = dynamic_cast<InNode*>(node_)) {
-        owner.in_nodes_.insert(in);
-      } else if (auto out = dynamic_cast<OutNode*>(node_)) {
-        owner.out_nodes_.insert(out);
-      }
-      owner.hmap_[node_] = this;
-      owner.RebuildSocks();
-    }
-    void TearDown(Network& owner) noexcept {
-      if (auto in = dynamic_cast<InNode*>(node_)) {
-        owner.in_nodes_.erase(in);
-      } else if (auto out = dynamic_cast<OutNode*>(node_)) {
-        owner.out_nodes_.erase(out);
-      }
-      owner.hmap_.erase(node_);
-      owner.RebuildSocks();
-    }
+    void SetUp(Network* owner) noexcept {
+      owner_ = owner;
 
-    std::unique_ptr<HistoryCommand> WatchMemento() noexcept;
+      if (auto in = dynamic_cast<InNode*>(node_)) {
+        owner->in_nodes_.insert(in);
+      } else if (auto out = dynamic_cast<OutNode*>(node_)) {
+        owner->out_nodes_.insert(out);
+      }
+      owner->hmap_[node_] = this;
+      owner->RebuildSocks();
+    }
+    void TearDown(Network* owner) noexcept {
+      if (auto in = dynamic_cast<InNode*>(node_)) {
+        owner->in_nodes_.erase(in);
+      } else if (auto out = dynamic_cast<OutNode*>(node_)) {
+        owner->out_nodes_.erase(out);
+      }
+      owner->hmap_.erase(node_);
+      owner->RebuildSocks();
+
+      owner_ = nullptr;
+    }
 
     void Update(Network&, RefStack&, Event&) noexcept;
     void UpdateNode(Network&, RefStack&) noexcept;
@@ -339,6 +349,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
     bool select;
 
    private:
+    Network* owner_ = nullptr;
+
     std::unique_ptr<File> file_;
     Node*                 node_;
     iface::Memento*       memento_;
@@ -346,8 +358,45 @@ class Network : public File, public iface::DirItem, public iface::Node {
     // permanentized
     size_t id_;
 
-    // volatile
-    std::shared_ptr<iface::Memento::Tag> last_tag_;
+
+    class MementoObserver final : public iface::Memento::Observer {
+     public:
+      MementoObserver(NodeHolder* owner) noexcept :
+          Observer(owner->memento_), owner_(owner), tag_(owner->memento_->tag()) {
+      }
+      void ObserveCommit() noexcept override {
+        owner_->owner_->history_.AddSilently(
+            std::make_unique<RestoreCommand>(this, tag_));
+        tag_ = owner_->memento_->tag();
+      }
+
+     private:
+      NodeHolder* owner_;
+      std::shared_ptr<iface::Memento::Tag> tag_;
+
+      class RestoreCommand : public HistoryCommand {
+       public:
+        using Tag = iface::Memento::Tag;
+        RestoreCommand(MementoObserver* owner, const std::shared_ptr<Tag>& tag) noexcept :
+            owner_(owner), tag_(tag) {
+        }
+        void Apply() noexcept override {
+          auto prev = owner_->tag_;
+
+          tag_->Restore();
+          owner_->tag_ = tag_;
+
+          tag_ = prev;
+        }
+        void Revert() noexcept override {
+          Apply();
+        }
+       private:
+        MementoObserver* owner_;
+        std::shared_ptr<Tag> tag_;
+      };
+    };
+    std::optional<MementoObserver> obs_;
   };
 
 
@@ -465,13 +514,17 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     void Link(const InSock& in, const OutSock& out) noexcept override {
       if (!*life_) return;
-      owner_->history_.Queue(std::make_unique<NodeLinkStore::SwapCommand>(
-          owner_->links_.get(), NodeLinkStore::SwapCommand::kLink, in, out));
+      auto cmd = std::make_unique<NodeLinkStore::SwapCommand>(
+          owner_->links_.get(), NodeLinkStore::SwapCommand::kLink, in, out);
+      cmd->Apply();
+      owner_->history_.AddSilently(std::move(cmd));
     }
     void Unlink(const InSock& in, const OutSock& out) noexcept override {
       if (!*life_) return;
-      owner_->history_.Queue(std::make_unique<NodeLinkStore::SwapCommand>(
-          owner_->links_.get(), NodeLinkStore::SwapCommand::kUnlink, in, out));
+      auto cmd = std::make_unique<NodeLinkStore::SwapCommand>(
+          owner_->links_.get(), NodeLinkStore::SwapCommand::kUnlink, in, out);
+      cmd->Apply();
+      owner_->history_.AddSilently(std::move(cmd));
     }
 
     std::vector<InSock*> dstOf(const OutSock* out) const noexcept override {
@@ -607,6 +660,7 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
   }
 
   // handle existing connections
+  std::vector<NodeLinkStore::SockLink> rm_links;
   for (auto& link : links_->items()) {
     auto srch = FindHolder(link.out.node);
     auto srcs = link.out.name.c_str();
@@ -615,8 +669,11 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
     if (!srch || !dsth) continue;
 
     if (!ImNodes::Connection(dsth, dsts, srch, srcs)) {
-      ctx_->Unlink(*link.in.sock, *link.out.sock);
+      rm_links.push_back(link);
     }
+  }
+  for (const auto& link : rm_links) {
+    ctx_->Unlink(*link.in.sock, *link.out.sock);
   }
 
   // handle new connection
@@ -631,22 +688,6 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
     auto src = srcn->node().out(srcs);
     auto dst = dstn->node().in(dsts);
     if (src && dst) ctx_->Link(*dst, *src);
-  }
-
-  // handle dead links
-  const auto deads = links_->TakeDeadLinks();
-  for (auto& link : deads) {
-    history_.AddSilently(std::make_unique<NodeLinkStore::SwapCommand>(
-            links_.get(), NodeLinkStore::SwapCommand::kUnlink,
-            link.in.node,  link.in.name,
-            link.out.node, link.out.name));
-  }
-
-  // detect memento changes
-  for (auto& h : nodes_) {
-    if (auto cmd = h->WatchMemento()) {
-      history_.AddSilently(std::move(cmd));
-    }
   }
   history_.EndFrame();
 
@@ -788,36 +829,6 @@ void Network::OutNode::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noe
   ImGui::Text("%s >OUT", name_.c_str());
 }
 
-std::unique_ptr<HistoryCommand> Network::NodeHolder::WatchMemento() noexcept {
-  if (!memento_) return nullptr;
-
-  class MementoCommand final : public HistoryCommand {
-   public:
-    MementoCommand(NodeHolder* h, const std::shared_ptr<iface::Memento::Tag>& tag) noexcept :
-        holder_(h), tag_(tag) {
-    }
-    void Apply() override { Exec(); }
-    void Revert() override { Exec(); }
-   private:
-    NodeHolder* holder_;
-    std::shared_ptr<iface::Memento::Tag> tag_;
-
-    void Exec() noexcept {
-      if (holder_->last_tag_.get() == tag_.get()) return;
-      holder_->last_tag_ = tag_;
-      tag_ = tag_->Restore();
-    }
-  };
-
-  const auto ptag = std::move(last_tag_);
-  last_tag_ = memento_->Save();
-
-  if (ptag && ptag.get() != last_tag_.get()) {
-    return std::make_unique<MementoCommand>(this, ptag);
-  }
-  return nullptr;
-}
-
 // a command for node creation or removal
 class Network::History::NodeSwapCommand : public HistoryCommand {
  public:
@@ -830,7 +841,7 @@ class Network::History::NodeSwapCommand : public HistoryCommand {
   void Exec() {
     auto& nodes = owner_->nodes_;
     if (holder_) {
-      holder_->SetUp(*owner_);
+      holder_->SetUp(owner_);
       nodes.push_back(std::move(holder_));
     } else {
       auto itr = std::find_if(nodes.begin(), nodes.end(),
@@ -839,7 +850,7 @@ class Network::History::NodeSwapCommand : public HistoryCommand {
         throw Exception("NodeSwapCommand history collapsed");
       }
       holder_ = std::move(*itr);
-      holder_->TearDown(*owner_);
+      holder_->TearDown(owner_);
       nodes.erase(itr);
     }
   }

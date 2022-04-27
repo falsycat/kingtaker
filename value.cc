@@ -235,7 +235,7 @@ class NameOrPick : public File, public iface::Node {
   }
 
   void UpdateMenu(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
-  void UpdateNames() noexcept;
+  void UpdateNames(const std::shared_ptr<Editor>&) noexcept;
   virtual void UpdateSock(const std::string&) noexcept = 0;
   bool UpdateNamingMenu(const std::string&) noexcept;
   void UpdateAddMenu(size_t idx) noexcept;
@@ -267,6 +267,12 @@ class NameOrPick : public File, public iface::Node {
 
 
   virtual void Rebuild() noexcept = 0;
+  virtual void Rename(Editor&, size_t idx, std::string&& name) noexcept {
+    auto& udata = NameOrPick::udata();
+    udata.names[idx] = std::move(name);
+    Rebuild();
+    memento_.Commit();
+  }
 
  private:
   SimpleMemento<UniversalData> memento_;
@@ -280,7 +286,7 @@ void NameOrPick::UpdateMenu(RefStack&, const std::shared_ptr<Editor>&) noexcept 
     ImGui::EndMenu();
   }
 }
-void NameOrPick::UpdateNames() noexcept {
+void NameOrPick::UpdateNames(const std::shared_ptr<Editor>& ctx) noexcept {
   auto& names = udata().names;
 
   const auto em = ImGui::GetFontSize();
@@ -298,15 +304,13 @@ void NameOrPick::UpdateNames() noexcept {
       if (ImGui::BeginPopupContextItem("##sock_menu")) {
         if (names.size() >= 2 && ImGui::MenuItem("remove")) {
           names.erase(names.begin() + static_cast<intmax_t>(--idx));
-          memento_.Commit();
           Rebuild();
+          memento_.Commit();
         }
         if (ImGui::BeginMenu("rename")) {
           if (UpdateNamingMenu(name)) {
             if (name != new_name_) {
-              name = std::move(new_name_);
-              memento_.Commit();
-              Rebuild();
+              Rename(*ctx, idx-1, std::move(new_name_));
             }
           }
           ImGui::EndMenu();
@@ -351,8 +355,8 @@ void NameOrPick::UpdateAddMenu(size_t idx) noexcept {
   auto& names = udata().names;
   if (UpdateNamingMenu("")) {
     names.insert(names.begin()+static_cast<intmax_t>(idx), std::move(new_name_));
-    memento_.Commit();
     Rebuild();
+    memento_.Commit();
   }
 }
 
@@ -404,6 +408,12 @@ class Name final : public NameOrPick {
     out_ = {&out_sock_};
     NotifySockChange();
   }
+  void Rename(Editor& ctx, size_t idx, std::string&& name) noexcept override {
+    auto socks = ctx.srcOf(in_[idx]);
+    ctx.Unlink(*in_[idx]);
+    NameOrPick::Rename(ctx, idx, std::move(name));
+    for (auto sock : socks) ctx.Link(*in_[idx], *sock);
+  }
 
 
   class CustomInSock final : public InSock {
@@ -419,10 +429,10 @@ class Name final : public NameOrPick {
     SockMeta meta_;
   };
 };
-void Name::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void Name::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::TextUnformatted("NAME");
 
-  UpdateNames();
+  UpdateNames(ctx);
   ImGui::SameLine();
   if (ImNodes::BeginOutputSlot("out", 1)) {
     gui::NodeSockPoint();
@@ -490,6 +500,12 @@ class Pick final : public NameOrPick {
     in_ = {&in_sock_};
     NotifySockChange();
   }
+  void Rename(Editor& ctx, size_t idx, std::string&& name) noexcept override {
+    auto socks = ctx.dstOf(out_[idx]);
+    ctx.Unlink(*out_[idx]);
+    NameOrPick::Rename(ctx, idx, std::move(name));
+    for (auto sock : socks) ctx.Link(*sock, *out_[idx]);
+  }
 
   void Handle(const std::shared_ptr<Context>& ctx, Value&& v) noexcept
   try {
@@ -514,7 +530,7 @@ class Pick final : public NameOrPick {
     SockMeta meta_;
   };
 };
-void Pick::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void Pick::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
   auto& names = udata().names;
   w_ = 0;
   for (const auto& name : names) {
@@ -528,7 +544,7 @@ void Pick::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
     ImNodes::EndSlot();
   }
   ImGui::SameLine();
-  UpdateNames();
+  UpdateNames(ctx);
 }
 void Pick::UpdateSock(const std::string& name) noexcept {
   const auto tw = ImGui::CalcTextSize(name.c_str()).x;

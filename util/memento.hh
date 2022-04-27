@@ -1,8 +1,12 @@
 #pragma once
 
-#include <unordered_map>
+#include <cassert>
+#include <memory>
+#include <utility>
 
 #include "iface/memento.hh"
+
+#include "util/history.hh"
 
 
 namespace kingtaker {
@@ -10,31 +14,19 @@ namespace kingtaker {
 template <typename T>
 class SimpleMemento : public iface::Memento {
  public:
-  SimpleMemento(T&& data) noexcept :
-      data_(T(data)),
-      tag_(std::make_shared<WrappedTag>(this, std::move(data))) {
-    tags_[tag_.get()] = tag_;
+  SimpleMemento() = delete;
+  SimpleMemento(T&& data) noexcept : data_(T(data)) {
+    CommitForcibly();
   }
-  ~SimpleMemento() noexcept {
-    tag_ = nullptr;
-    CleanUp();
-    assert(tags_.size() == 0 && "all tags should be deleted before file deletion");
-  }
-  SimpleMemento(const SimpleMemento&) = delete;
-  SimpleMemento(SimpleMemento&&) = delete;
-  SimpleMemento& operator=(const SimpleMemento&) = delete;
-  SimpleMemento& operator=(SimpleMemento&&) = delete;
 
-  std::shared_ptr<Tag> Save() noexcept override {
-    if (!committed_) return tag_;
-    committed_ = false;
-
-    tag_ = std::make_shared<WrappedTag>(this, T(data_));
-    tags_[tag_.get()] = tag_;
-    return tag_;
-  }
   void Commit() noexcept {
-    committed_ = true;
+    if (!observed()) return;
+    CommitForcibly();
+  }
+  void CommitForcibly() noexcept {
+    tag_       = std::make_shared<WrappedTag>(this, T(data_));
+    tag_->self = tag_;
+    iface::Memento::Commit(tag_);
   }
   void Overwrite() noexcept {
     tag_->data() = data_;
@@ -51,29 +43,6 @@ class SimpleMemento : public iface::Memento {
   class WrappedTag;
   std::shared_ptr<WrappedTag> tag_;
 
-  bool committed_ = false;
-
-  std::unordered_map<WrappedTag*, std::weak_ptr<WrappedTag>> tags_;
-
-
-  void CleanUp() noexcept {
-    for (auto itr = tags_.begin(); itr != tags_.end();) {
-      if (itr->second.expired()) {
-        itr = tags_.erase(itr);
-      } else {
-        ++itr;
-      }
-    }
-  }
-  std::shared_ptr<WrappedTag> Upgrade(WrappedTag* t) const noexcept {
-    auto itr = tags_.find(t);
-    if (itr != tags_.end()) {
-      return itr->second.lock();
-    }
-    assert(false);
-    return nullptr;
-  }
-
 
   class WrappedTag : public Tag {
    public:
@@ -81,19 +50,16 @@ class SimpleMemento : public iface::Memento {
     WrappedTag(SimpleMemento* o, T&& d) noexcept :
         owner_(o), data_(std::move(d)) {
     }
-    ~WrappedTag() noexcept {
-      owner_->CleanUp();
-    }
 
-    std::shared_ptr<Tag> Restore() noexcept override {
-      auto ret = owner_->tag_;
-      owner_->tag_ = owner_->Upgrade(this);
+    void Restore() noexcept override {
+      owner_->tag_ = self.lock();
       owner_->data_.Restore(data_);
-      return ret;
     }
 
-    const T& data() const noexcept { return data_; }
     T& data() noexcept { return data_; }
+    const T& data() const noexcept { return data_; }
+
+    std::weak_ptr<WrappedTag> self;
 
    private:
     SimpleMemento* owner_;

@@ -69,8 +69,9 @@ class NodeLinkStore final {
   void Link(InSock* in, OutSock* out) noexcept;
   void Unlink(const InSock*, const OutSock*) noexcept;  // deleted pointers can be passed
 
-  std::vector<SockLink> TakeDeadLinks() noexcept {
-    return std::move(deads_);
+  using DeadLinkListener = std::function<void(const SockLink&)>;
+  void ListenDeadLink(DeadLinkListener&& f) noexcept {
+    dead_listener_ = std::move(f);
   }
 
   // deleted pointers can be passed
@@ -81,12 +82,12 @@ class NodeLinkStore final {
   const std::vector<SockLink>& items() const noexcept { return items_; }
 
  private:
+  DeadLinkListener dead_listener_;
+
   std::vector<SockLink> items_;
 
   class Observer;
   std::unordered_map<Node*, std::unique_ptr<Node::Observer>> obs_;
-
-  std::vector<SockLink> deads_;
 
 
   NodeLinkStore(std::vector<SockLink>&& items) noexcept;
@@ -98,6 +99,9 @@ class NodeLinkStore::SwapCommand : public HistoryCommand {
 
   SwapCommand(NodeLinkStore* links, Type t, const InSock& in, const OutSock& out) noexcept :
       SwapCommand(links, t, in.owner(), in.name(), out.owner(), out.name()) {
+  }
+  SwapCommand(NodeLinkStore* links, Type t, const SockLink& link) noexcept :
+      SwapCommand(links, t, link.in.node, link.in.name, link.out.node, link.out.name) {
   }
   SwapCommand(NodeLinkStore* links, Type t,
               Node* in_node,  std::string_view in_name,
