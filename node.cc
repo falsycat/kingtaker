@@ -159,7 +159,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
           float                            zoom) noexcept :
       File(&kType, env), DirItem(DirItem::kMenu), Node(Node::kNone),
       nodes_(std::move(nodes)), links_(std::move(links)), shown_(shown),
-      history_(this) {
+      obs_(this), history_(this)  {
     canvas_.Zoom   = zoom;
     canvas_.Offset = pos;
     canvas_.Style.NodeRounding = 0.f;
@@ -263,6 +263,19 @@ class Network : public File, public iface::DirItem, public iface::Node {
     NotifySockChange();
   }
 
+
+  // propagate move notification
+  class SelfObserver final : public File::Observer {
+   public:
+    SelfObserver(Network* target) noexcept : Observer(target), target_(target) {
+    }
+    void ObserveMove() noexcept override {
+      for (auto& item : target_->nodes_) item->file().MoveUnder(target_);
+    }
+   private:
+    Network* target_;
+  };
+  SelfObserver obs_;
 
   // a wrapper for node files
   class NodeHolder final {

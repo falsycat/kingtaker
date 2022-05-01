@@ -40,7 +40,10 @@ class GenericDir : public File,
              ItemList&& items   = {},
              bool       shown   = false) :
       File(&kType, env), DirItem(kTree | kMenu),
-      items_(std::move(items)), shown_(shown) {
+      items_(std::move(items)), shown_(shown), obs_(this) {
+    for (auto& item : items) {
+      item.second->MoveUnder(this);
+    }
   }
 
   GenericDir(Env* env, const msgpack::object& obj) :
@@ -139,6 +142,20 @@ class GenericDir : public File,
 
   // volatile params
   std::string name_for_new_;
+
+
+  // propagate move notification
+  class SelfObserver final : public File::Observer {
+   public:
+    SelfObserver(GenericDir* target) noexcept : Observer(target), target_(target) {
+    }
+    void ObserveMove() noexcept override {
+      for (auto& item : target_->items_) item.second->MoveUnder(target_);
+    }
+   private:
+    GenericDir* target_;
+  };
+  SelfObserver obs_;
 };
 void GenericDir::Update(RefStack& ref, Event& ev) noexcept {
   for (auto& child : items_) {
