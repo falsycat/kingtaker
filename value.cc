@@ -99,7 +99,7 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
     }
     void Restore(const UniversalData& src) noexcept {
       *this = src;
-      owner_->OnUpdate();
+      owner_->Touch();
     }
 
     Value  value;
@@ -113,11 +113,6 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
 
   OutSock          sock_out_;
   NodeLambdaInSock sock_clk_;
-
-
-  void OnUpdate() noexcept {
-    lastmod_ = Clock::now();
-  }
 };
 void Imm::UpdateTree(RefStack&) noexcept {
   UpdateTypeChanger();
@@ -165,19 +160,19 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
     if (ImGui::MenuItem("integer", nullptr, v.isInteger())) {
       v = Value::Integer {0};
-      OnUpdate();
+      Touch();
     }
     if (ImGui::MenuItem("scalar", nullptr, v.isScalar())) {
       v = Value::Scalar {0};
-      OnUpdate();
+      Touch();
     }
     if (ImGui::MenuItem("boolean", nullptr, v.isBoolean())) {
       v = Value::Boolean {false};
-      OnUpdate();
+      Touch();
     }
     if (ImGui::MenuItem("string", nullptr, v.isString())) {
       v = ""s;
-      OnUpdate();
+      Touch();
     }
     ImGui::EndPopup();
   }
@@ -195,25 +190,25 @@ void Imm::UpdateEditor() noexcept {
     gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(data.size.x*em);
     if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.integer())) {
-      OnUpdate();
+      Touch();
     }
 
   } else if (v.isScalar()) {
     gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(data.size.x*em);
     if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.scalar())) {
-      OnUpdate();
+      Touch();
     }
 
   } else if (v.isBoolean()) {
     if (ImGui::Checkbox("##editor", &v.boolean())) {
-      OnUpdate();
+      Touch();
     }
 
   } else if (v.isString()) {
     gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {24, 24}, em);
     if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), data.size*em)) {
-      OnUpdate();
+      Touch();
     }
 
   } else {

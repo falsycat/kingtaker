@@ -41,7 +41,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       {typeid(iface::DirItem)});
 
   Network(Env* env) noexcept :
-      Network(env, Clock::now(), {}, std::make_unique<NodeLinkStore>(), false, {0, 0}, 1.f) {
+      Network(env, {}, std::make_unique<NodeLinkStore>(), false, {0, 0}, 1.f) {
   }
 
   Network(Env* env, const msgpack::object& obj) :
@@ -50,7 +50,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   void Serialize(Packer& pk) const noexcept override {
     std::unordered_map<Node*, size_t> idxmap;
 
-    pk.pack_map(6);
+    pk.pack_map(5);
 
     pk.pack("nodes"s);
     pk.pack_array(static_cast<uint32_t>(nodes_.size()));
@@ -62,9 +62,6 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     pk.pack("links"s);
     links_->Serialize(pk, idxmap);
-
-    pk.pack("lastmod"s);
-    pk.pack(lastmod_);
 
     pk.pack("shown"s);
     pk.pack(shown_);
@@ -88,8 +85,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     }
 
     return std::unique_ptr<File>(new Network(
-        env, Clock::now(), std::move(nodes), links_->Clone(nmap),
-        shown_, canvas_.Offset, canvas_.Zoom));
+        env, std::move(nodes), links_->Clone(nmap), shown_, canvas_.Offset, canvas_.Zoom));
   }
 
   File* Find(std::string_view name) const noexcept override {
@@ -156,13 +152,12 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
   // private ctors
   Network(Env*                             env,
-          Time                             lastmod,
           NodeHolderList&&                 nodes,
           std::unique_ptr<NodeLinkStore>&& links,
           bool                             shown,
           ImVec2                           pos,
           float                            zoom) noexcept :
-      File(&kType, env, lastmod), DirItem(DirItem::kMenu), Node(Node::kNone),
+      File(&kType, env), DirItem(DirItem::kMenu), Node(Node::kNone),
       nodes_(std::move(nodes)), links_(std::move(links)), shown_(shown),
       history_(this) {
     canvas_.Zoom   = zoom;
@@ -185,7 +180,6 @@ class Network : public File, public iface::DirItem, public iface::Node {
           const msgpack::object&                          obj,
           std::pair<NodeHolderList, std::vector<Node*>>&& nodes)
   try : Network(env,
-                msgpack::find(obj, "lastmod"s).as<Time>(),
                 std::move(nodes.first),
                 std::make_unique<NodeLinkStore>(msgpack::find(obj, "links"s), nodes.second),
                 msgpack::find(obj, "shown"s).as<bool>(),
@@ -323,6 +317,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
       }
       owner->hmap_[node_] = this;
       owner->RebuildSocks();
+
+      file_->MoveUnder(owner);
     }
     void TearDown(Network* owner) noexcept {
       if (auto in = dynamic_cast<InNode*>(node_)) {
@@ -334,6 +330,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       owner->RebuildSocks();
 
       owner_ = nullptr;
+      file_->MoveUnder(nullptr);
     }
 
     void Update(Network&, RefStack&, Event&) noexcept;

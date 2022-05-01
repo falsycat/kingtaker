@@ -55,6 +55,14 @@ std::string File::StringifyPath(const Path& p) noexcept {
   return ret;
 }
 
+File::File(const TypeInfo* type, Env* env, Time lastmod) noexcept :
+    type_(type), env_(env), lastmod_(lastmod) {
+}
+File::~File() noexcept {
+  for (auto& obs : obs_) obs->ObserveDie();
+  assert(obs_.size() == 0);
+}
+
 const File::Registry& File::registry() noexcept { return registry_(); }
 const File::TypeInfo* File::Lookup(const std::string& name) noexcept {
   auto& reg = registry_();
@@ -89,6 +97,15 @@ void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
   Serialize(pk);
 }
 
+void File::Touch() noexcept {
+  lastmod_ = Clock::now();
+  for (auto& obs : obs_) obs->ObserveChange();
+}
+void File::MoveUnder(File* parent) noexcept {
+  parent_ = parent;
+  for (auto& obs : obs_) obs->ObserveMove();
+}
+
 
 File::TypeInfo::TypeInfo(std::string_view name,
                          std::string_view desc,
@@ -105,6 +122,19 @@ File::TypeInfo::TypeInfo(std::string_view name,
 
 File::TypeInfo::~TypeInfo() noexcept {
   registry_().erase(name_);
+}
+
+
+File::Observer::Observer(File* target) noexcept : target_(target) {
+  target->obs_.push_back(this);
+}
+File::Observer::~Observer() noexcept {
+  if (target_) ObserveDie();
+}
+void File::Observer::ObserveDie() noexcept {
+  auto& obs = target_->obs_;
+  obs.erase(std::remove(obs.begin(), obs.end(), this), obs.end());
+  target_ = nullptr;
 }
 
 

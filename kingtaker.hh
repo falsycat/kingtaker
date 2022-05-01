@@ -109,6 +109,7 @@ class Queue {
 class File {
  public:
   class TypeInfo;
+  class Observer;
   class RefStack;
   class Env;
   class Event;
@@ -134,11 +135,9 @@ class File {
   static File& root() noexcept;
   static const Registry& registry() noexcept;
 
-  File(const TypeInfo* type, Env* env, Time lastmod = Clock::now()) noexcept :
-      lastmod_(lastmod), type_(type), env_(env) {
-  }
+  File(const TypeInfo*, Env*, Time lastmod = {}) noexcept;
   File() = delete;
-  virtual ~File() = default;
+  virtual ~File() noexcept;
   File(const File&) = delete;
   File(File&&) = delete;
   File& operator=(const File&) = delete;
@@ -162,17 +161,27 @@ class File {
   // use this instead of Serialize().
   void SerializeWithTypeInfo(Packer&) const noexcept;
 
+  // Calls Observer::ObserveChange()
+  void Touch() noexcept;
+
+  // Moves this file to under the parent
+  void MoveUnder(File* parent) noexcept;
+
   const TypeInfo& type() const noexcept { return *type_; }
   Env& env() const noexcept { return *env_; }
+  File* parent() const noexcept { return parent_; }
   Time lastmod() const noexcept { return lastmod_; }
-
- protected:
-  Time lastmod_;
 
  private:
   const TypeInfo* type_;
 
   Env* env_;
+
+  File* parent_;
+
+  Time lastmod_;
+
+  std::vector<Observer*> obs_;
 };
 
 class File::TypeInfo final {
@@ -240,6 +249,25 @@ class File::TypeInfo final {
   Factory factory_;
 
   Deserializer deserializer_;
+};
+
+class File::Observer {
+ public:
+  Observer(File*) noexcept;
+  virtual ~Observer() noexcept;
+  Observer(const Observer&) = delete;
+  Observer(Observer&&) = delete;
+  Observer& operator=(const Observer&) = delete;
+  Observer& operator=(Observer&&) = delete;
+
+  virtual void ObserveMove() noexcept { }
+  virtual void ObserveChange() noexcept { }
+  virtual void ObserveDie() noexcept;
+
+  File* target() const noexcept { return target_; }
+
+ private:
+  File* target_;
 };
 
 class File::RefStack final {
