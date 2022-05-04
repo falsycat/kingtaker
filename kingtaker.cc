@@ -82,6 +82,24 @@ File& File::Resolve(const Path& p) const {
   return *ret;
 }
 
+void File::Touch() noexcept {
+  lastmod_ = Clock::now();
+}
+void File::Move(File* parent, std::string_view name) noexcept {
+  parent_ = parent;
+  name_   = name;
+}
+
+File::Path File::abspath() const noexcept {
+  Path ret;
+  for (auto f = this; f->parent_; f = f->parent_) {
+    ret.push_back(f->name_);
+  }
+  ret.push_back(":");
+  std::reverse(ret.begin(), ret.end());
+  return ret;
+}
+
 
 File::TypeInfo::TypeInfo(std::string_view name,
                          std::string_view desc,

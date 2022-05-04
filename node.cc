@@ -315,7 +315,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     void SetUp(Network* owner) noexcept {
       owner_ = owner;
-      file_->Move(owner);
+      file_->Move(owner, std::to_string(id_));
 
       if (auto in = dynamic_cast<InNode*>(node_)) {
         owner->in_nodes_.insert(in);
@@ -334,7 +334,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       owner->hmap_.erase(node_);
       owner->RebuildSocks();
 
-      file_->Move(nullptr);
+      file_->Move(nullptr, "");
       owner_ = nullptr;
     }
 

@@ -41,7 +41,7 @@ class GenericDir : public File,
              bool       shown   = false) :
       File(&kType, env), DirItem(kTree | kMenu),
       items_(std::move(items)), shown_(shown) {
-    for (auto& item : items_) item.second->Move(this);
+    for (auto& item : items_) item.second->Move(this, item.first);
   }
 
   GenericDir(Env* env, const msgpack::object& obj) :
@@ -107,7 +107,7 @@ class GenericDir : public File,
     if (!uniq) return nullptr;
 
     Touch();
-    itr->second->Move(this);
+    itr->second->Move(this, name);
     return itr->second.get();
   }
   std::unique_ptr<File> Remove(std::string_view name) noexcept override {
@@ -120,7 +120,7 @@ class GenericDir : public File,
     items.erase(itr);
 
     Touch();
-    ret->Move(nullptr);
+    ret->Move(nullptr, "");
     return ret;
   }
 

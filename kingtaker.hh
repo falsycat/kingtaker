@@ -160,19 +160,22 @@ class File {
   File& Resolve(const Path&) const;
 
   // Sets lastmod to current time.
-  void Touch() noexcept { lastmod_ = Clock::now(); }
+  void Touch() noexcept;
 
-  // Notifies this file is moved under new parent.
-  void Move(File* parent) noexcept { parent_ = parent; }
+  // Notifies this file is moved under new parent with new name.
+  void Move(File*, std::string_view) noexcept;
 
   // Takes typeinfo of the requested interface and
   // returns a pointer of the implementation or nullptr if not implemented.
   virtual void* iface(const std::type_index&) noexcept { return nullptr; }
 
+  Path abspath() const noexcept;
+
   const TypeInfo& type() const noexcept { return *type_; }
   Env& env() const noexcept { return *env_; }
   Time lastmod() const noexcept { return lastmod_; }
   File* parent() const noexcept { return parent_; }
+  const std::string& name() const noexcept { return name_; }
 
  private:
   const TypeInfo* type_;
@@ -182,6 +185,8 @@ class File {
   Time lastmod_;
 
   File* parent_ = nullptr;
+
+  std::string name_;
 };
 
 class File::TypeInfo final {
