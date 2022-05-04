@@ -153,7 +153,11 @@ class File {
   virtual void Update(RefStack&, Event&) noexcept { }
 
   // To make children referrable by path specification, returns them.
+  // If there's no such child, throw NotFoundException.
   virtual File& Find(std::string_view) const;
+
+  // Returns a file specified by the relative path or throws NotFoundException.
+  File& Resolve(const Path&) const;
 
   // Sets lastmod to current time.
   void Touch() noexcept { lastmod_ = Clock::now(); }

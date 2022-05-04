@@ -66,6 +66,21 @@ void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
 File& File::Find(std::string_view) const {
   throw NotFoundException("no children");
 }
+File& File::Resolve(const Path& p) const {
+  auto ret = const_cast<File*>(this);
+  for (const auto& term : p) {
+    if (term == "..") {
+      ret = parent_;
+    } else if (term == ".") {
+      // do nothing
+    } else if (term == ":") {
+      ret = &root();
+    } else {
+      ret = &ret->Find(term);
+    }
+  }
+  return *ret;
+}
 
 
 File::TypeInfo::TypeInfo(std::string_view name,
