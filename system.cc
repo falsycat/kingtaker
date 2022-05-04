@@ -385,7 +385,9 @@ void ClockPulseGenerator::UpdateEditor() noexcept {
         ImGui::SetTooltip("%s", path_.c_str());
       }
       if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-        gui::InputPathMenu(this, &path_editing_, &path_);
+        if (gui::InputPathMenu("##path_input", this, &path_editing_)) {
+          path_ = std::move(path_editing_);
+        }
         ImGui::EndPopup();
       }
     }

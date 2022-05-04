@@ -1227,8 +1227,12 @@ void SugarCall::UpdateMenu(const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::Separator();
 
   if (ImGui::BeginMenu("path")) {
-    if (gui::InputPathMenu(this, &path_editing_, &udata.path)) {
-      if (SyncSocks(ctx)) memento_.Commit();
+    if (gui::InputPathMenu("##path_edit", this, &path_editing_)) {
+      if (path_editing_ != udata.path) {
+        udata.path = std::move(path_editing_);
+        SyncSocks(ctx);
+        memento_.Commit();
+      }
     }
     ImGui::EndMenu();
   }
@@ -1486,9 +1490,12 @@ void Cache::UpdateMenu() noexcept {
   }
   ImGui::Separator();
   if (ImGui::BeginMenu("target path")) {
-    if (gui::InputPathMenu(this, &path_editing_, &path_)) {
-      store_->DropAll();
-      ClearStat();
+    if (gui::InputPathMenu("##path_edit", this, &path_editing_)) {
+      if (path_ != path_editing_) {
+        path_ = std::move(path_editing_);
+        store_->DropAll();
+        ClearStat();
+      }
     }
     ImGui::EndMenu();
   }

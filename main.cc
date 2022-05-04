@@ -297,9 +297,10 @@ void UpdateAppMenu() noexcept {
         next_.focus.insert(root_.get());
       }
       if (ImGui::BeginMenu("focus by path")) {
-        static std::string path, path_editing;
-        if (gui::InputPathMenu(root_.get(), &path_editing, &path)) {
-          next_.focus.insert(&root_->Resolve(path));
+        static std::string path;
+        if (auto f = gui::InputPathMenu("##path_edit", root_.get(), &path)) {
+          path = "";
+          next_.focus.insert(f);
         }
         ImGui::EndMenu();
       }
