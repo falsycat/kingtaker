@@ -75,8 +75,6 @@ target_sources(kingtaker
     util/memento.hh
     util/node.hh
     util/node.cc
-    util/notify.hh
-    util/notify.cc
     util/ptr_selector.hh
     util/queue.hh
     util/value.hh

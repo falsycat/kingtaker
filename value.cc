@@ -21,7 +21,6 @@
 #include "util/gui.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -513,7 +512,7 @@ class Pick final : public NameOrPick {
       sock->Send(ctx, Value(value));
     }
   } catch (Exception& e) {
-    notify::Warn(ctx->basepath(), this, e.msg());
+    ctx->Notify(this, e.msg());
   }
 
   class CustomOutSock final : public OutSock {

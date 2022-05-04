@@ -18,7 +18,6 @@
 #include "util/gui.hh"
 #include "util/keymap.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -291,44 +290,6 @@ class ImGuiConfig : public File {
 };
 
 
-class LogView : public File {
- public:
-  static inline TypeInfo kType = TypeInfo::New<LogView>(
-      "System/LogView", "provides system log viewer", {});
-
-  LogView(Env* env, bool shown = true) noexcept :
-      File(&kType, env), shown_(shown) {
-  }
-
-  LogView(Env* env, const msgpack::object& obj) :
-      LogView(env, obj.as<bool>()) {
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack(shown_);
-  }
-  std::unique_ptr<File> Clone(Env* env) const noexcept override {
-    return std::make_unique<LogView>(env, shown_);
-  }
-
-  void Update(RefStack& ref, Event& ev) noexcept override {
-    if (gui::BeginWindow(this, "LogView", ref, ev, &shown_)) {
-      ImGui::InputTextWithHint("##filter", "filter", &filter_);
-      ImGui::SameLine();
-      ImGui::Checkbox("auto-scroll", &autoscroll_);
-
-      notify::UpdateLogger(ev, filter_, autoscroll_);
-    }
-    gui::EndWindow();
-  }
-
- private:
-  std::string filter_;
-
-  bool shown_      = true;
-  bool autoscroll_ = true;
-};
-
-
 class ClockPulseGenerator final : public File, public iface::DirItem {
  public:
   static inline TypeInfo kType = TypeInfo::New<ClockPulseGenerator>(
@@ -408,8 +369,8 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
 
       auto ctx = std::make_shared<iface::Node::Context>(target.GetFullPath());
       sock->Receive(ctx, Value::Pulse());
-    } catch (Exception& e) {
-      notify::Warn(ref, e.msg());
+    } catch (Exception&) {
+      // TODO: logging
       enable_ = false;
     }
   }

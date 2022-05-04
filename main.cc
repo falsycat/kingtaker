@@ -18,7 +18,6 @@
 
 #include "util/gl.hh"
 #include "util/gui.hh"
-#include "util/notify.hh"
 #include "util/queue.hh"
 
 // To prevent conflicts because of fucking windows.h, include GLFW last.
@@ -70,10 +69,9 @@ class Event final : public File::Event {
   Event() noexcept : File::Event(next_.st, std::move(next_.focus)) {
     next_.st = closing()? kClosed: kNone;
   }
-  void CancelClosing(File* f, std::string_view msg) noexcept override {
+  void CancelClosing(File*, std::string_view) noexcept override {
     next_.st &= static_cast<Status>(~kClosed);
-    notify::Warn(
-        {}, f, "closing is refused by a file\nreason: "+std::string(msg));
+    // TODO: logging
   }
   void Focus(File* f) noexcept override {
     next_.focus.insert(f);

@@ -9,7 +9,6 @@
 
 #include "util/gui.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 

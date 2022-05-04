@@ -14,7 +14,6 @@
 #include "util/gl.hh"
 #include "util/gui.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -318,7 +317,7 @@ class Framebuffer final : public LambdaNodeDriver {
       if (stat == GL_FRAMEBUFFER_COMPLETE) {
         out->Send(ctx, std::dynamic_pointer_cast<Value::Data>(fb));
       } else {
-        notify::Error(owner, "broken framebuffer ("+std::to_string(stat)+")");
+        ctx->Notify(owner, "broken framebuffer ("+std::to_string(stat)+")");
       }
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -462,8 +461,7 @@ class Program final : public LambdaNodeDriver {
         GLsizei len = 0;
         char buf[1024];
         glGetProgramInfoLog(id, sizeof(buf), &len, buf);
-
-        notify::Error(owner, buf);
+        ctx->Notify(owner, buf);
       }
       assert(glGetError() == GL_NO_ERROR);
     };
@@ -563,8 +561,7 @@ class Shader final : public LambdaNodeDriver {
         GLsizei len = 0;
         char buf[1024];
         glGetShaderInfoLog(id, sizeof(buf), &len, buf);
-
-        notify::Error(owner, buf);
+        ctx->Notify(owner, buf);
         error->Send(ctx, {});
       }
     };
@@ -709,7 +706,7 @@ class DrawArrays final : public LambdaNodeDriver {
         try {
           GL_SetUniform(prog->id(), u.first, u.second);
         } catch (Exception& e) {
-          notify::Warn(owner, e.msg());
+          ctx->Notify(owner, e.msg());
         }
       }
 
@@ -806,11 +803,11 @@ class Preview final : public File, public iface::DirItem, public iface::Node {
   Preview(Env* env, bool shown = false) noexcept :
       File(&kType, env), DirItem(DirItem::kNone), Node(Node::kNone),
       shown_(shown) {
-    auto task_tex = [this](auto&, auto&& v) {
+    auto task_tex = [this](auto& ctx, auto&& v) {
       try {
         tex_ = v.template dataPtr<gl::Texture>();
       } catch (Exception& e) {
-        notify::Error(this, "error while handling 'tex': "+e.msg());
+        ctx->Notify(this, "error while handling 'tex': "+e.msg());
       }
     };
     in_.emplace_back(new NodeLambdaInSock(this, &kInTex, std::move(task_tex)));

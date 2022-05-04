@@ -2,7 +2,6 @@
   "type": "System/GenericDir",
   "param": { "items": {
     "_imgui": { "type": "System/ImGuiConfig", "param": "" },
-    "_logger": { "type": "System/LogView", "param": true },
     "home": { "type": "System/GenericDir", "param": { "shown": true, "items": {} } }
   } }
 }

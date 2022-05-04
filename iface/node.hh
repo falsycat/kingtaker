@@ -133,6 +133,7 @@ class Node::Context {
 
   // must be thread-safe
   virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
+  virtual void Notify(File*, std::string_view) noexcept { }
 
   // Returns an empty when the socket is destructed or missing.
   virtual std::vector<InSock*> dstOf(const OutSock*) const noexcept { return {}; }

@@ -26,7 +26,6 @@
 #include "util/life.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -223,6 +222,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   try {
     return std::make_unique<NodeHolder>(std::move(f), next_id_++, pos);
   } catch (Exception&) {
+    // TODO: logging
     return nullptr;
   }
   void Focus(RefStack& ref, NodeHolder* target) noexcept {
@@ -625,7 +625,7 @@ void Network::Update(RefStack& ref, Event& ev) noexcept {
   // update editor context
   if (!ctx_ || ctx_->basepath() != path) {
     if (ctx_) {
-      notify::Info(path, this, "path change detected, editor context is cleared");
+      ctx_->Notify(this, "path change detected, editor context is cleared");
     }
     ctx_ = std::make_shared<EditorContext>(std::move(path), this);
   }
@@ -1082,8 +1082,8 @@ class SugarCall final : public File, public iface::Node {
     NotifySockChange();
 
     return in_names_bk != in_names || out_names_bk != out_names;
-  } catch (Exception& e) {
-    notify::Warn(basepath, this, e.msg());
+  } catch (Exception&) {
+    // TODO: logging
     return false;
   }
   void Rebuild(std::span<const std::string> in_names,
@@ -1121,7 +1121,7 @@ class SugarCall final : public File, public iface::Node {
 
       dst->Send(octx_, Value(v));
     } catch (Exception& e) {
-      notify::Error(octx_->basepath(), owner_, e.msg());
+      octx_->Notify(owner_, e.msg());
     }
 
    private:
@@ -1151,7 +1151,7 @@ class SugarCall final : public File, public iface::Node {
       auto ictx = ctx->data<InnerContext>(owner_, owner_, ctx, node);
       sock->Receive(ictx, std::move(v));
     } catch (Exception& e) {
-      notify::Error(ctx->basepath(), owner_, e.msg());
+      ctx->Notify(owner_, e.msg());
     }
 
    private:
@@ -1334,7 +1334,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     auto& tup = v.tuple();
     cdata->params.emplace_back(tup[0].string(), tup[1]);
   } catch (Exception& e) {
-    notify::Warn(basepath_, this, "error while taking parameter: "+e.msg());
+    ctx->Notify(this, "error while taking parameter: "+e.msg());
   }
   void Exec(const std::shared_ptr<Context>& ctx) noexcept {
     ++try_cnt_;
@@ -1372,7 +1372,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
         (*itr)->Receive(ictx, Value(p.second));
       }
     } catch (Exception& e) {
-      notify::Warn(basepath_, this, e.msg());
+      ctx->Notify(this, e.msg());
     }
   }
 
