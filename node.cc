@@ -912,7 +912,7 @@ class Call final : public LambdaNodeDriver {
   void Handle(size_t idx, Value&& v) {
     switch (idx) {
     case 0:
-      path_ = File::ParsePath(v.string());
+      path_ = File::Path::Parse(v.string());
       return;
     case 1:
       Send(std::move(v));

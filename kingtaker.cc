@@ -29,32 +29,6 @@ std::string HeavyException::Stringify() const noexcept {
 }
 
 
-File::Path File::ParsePath(std::string_view path) noexcept {
-  Path ret;
-  while (path.size()) {
-    const auto a = path.find_first_not_of('/');
-    if (a != std::string::npos) {
-      path.remove_prefix(a);
-    } else {
-      return ret;
-    }
-
-    const auto name = path.substr(0, path.find('/'));
-    path.remove_prefix(name.size());
-
-    if (name.size()) ret.emplace_back(name);
-  }
-  return ret;
-}
-std::string File::StringifyPath(const Path& p) noexcept {
-  std::string ret;
-  for (const auto& name : p) {
-    ret.push_back('/');
-    ret += name;
-  }
-  return ret;
-}
-
 const File::Registry& File::registry() noexcept { return registry_(); }
 const File::TypeInfo* File::Lookup(const std::string& name) noexcept {
   auto& reg = registry_();
@@ -109,6 +83,33 @@ File::TypeInfo::TypeInfo(std::string_view name,
 
 File::TypeInfo::~TypeInfo() noexcept {
   registry_().erase(name_);
+}
+
+
+File::Path File::Path::Parse(std::string_view path) noexcept {
+  Path ret;
+  while (path.size()) {
+    const auto a = path.find_first_not_of('/');
+    if (a != std::string::npos) {
+      path.remove_prefix(a);
+    } else {
+      return ret;
+    }
+
+    const auto name = path.substr(0, path.find('/'));
+    path.remove_prefix(name.size());
+
+    if (name.size()) ret.emplace_back(name);
+  }
+  return ret;
+}
+std::string File::Path::Stringify() const noexcept {
+  std::string ret;
+  for (const auto& name : *this) {
+    ret.push_back('/');
+    ret += name;
+  }
+  return ret;
 }
 
 

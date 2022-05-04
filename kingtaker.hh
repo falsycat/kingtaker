@@ -110,16 +110,13 @@ class File {
  public:
   class TypeInfo;
   class RefStack;
+  class Path;
   class Env;
   class Event;
 
   class NotFoundException;
 
-  using Path     = std::vector<std::string>;
   using Registry = std::map<std::string, TypeInfo*>;
-
-  static Path ParsePath(std::string_view) noexcept;
-  static std::string StringifyPath(const Path&) noexcept;
 
   static const TypeInfo* Lookup(const std::string&) noexcept;
   static std::unique_ptr<File> Deserialize(Env*, const msgpack::object&);
@@ -250,6 +247,14 @@ class File::TypeInfo final {
   Deserializer deserializer_;
 };
 
+class File::Path final : public std::vector<std::string> {
+ public:
+  using vector::vector;
+
+  static Path Parse(std::string_view) noexcept;
+  std::string Stringify() const noexcept;
+};
+
 class File::RefStack final {
  public:
   struct Term {
@@ -282,7 +287,7 @@ class File::RefStack final {
   void Pop() noexcept;
 
   RefStack Resolve(const Path& p) const;
-  RefStack Resolve(std::string_view p) const { return Resolve(ParsePath(p)); }
+  RefStack Resolve(std::string_view p) const { return Resolve(Path::Parse(p)); }
 
   Path GetFullPath() const noexcept;
   std::string Stringify() const noexcept;

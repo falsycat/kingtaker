@@ -47,7 +47,7 @@ static void CopyAll() noexcept {
     ret << StringifyTime(item.time)       << "|";
     ret << StringifyLevel(item.lv)        << "|";
     ret << item.text                      << "|";
-    ret << File::StringifyPath(item.path) << "|";
+    ret << item.path.Stringify()          << "|";
     ret << item.src.file_name()           << ":";
     ret << item.src.line()                << ":";
     ret << item.src.column()              << "|";
@@ -162,7 +162,7 @@ void UpdateLogger(
       }
     }
     if (ImGui::TableNextColumn()) {
-      const auto path = File::StringifyPath(item.path);
+      const auto path = item.path.Stringify();
       ImGui::TextUnformatted(path.c_str());
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", path.c_str());
