@@ -159,7 +159,10 @@ class File {
   virtual File& Find(std::string_view) const;
 
   // Sets lastmod to current time.
-  void Touch() noexcept;
+  void Touch() noexcept { lastmod_ = Clock::now(); }
+
+  // Notifies this file is moved under new parent.
+  void Move(File* parent) noexcept { parent_ = parent; }
 
   // Takes typeinfo of the requested interface and
   // returns a pointer of the implementation or nullptr if not implemented.
@@ -168,6 +171,7 @@ class File {
   const TypeInfo& type() const noexcept { return *type_; }
   Env& env() const noexcept { return *env_; }
   Time lastmod() const noexcept { return lastmod_; }
+  File* parent() const noexcept { return parent_; }
 
  private:
   const TypeInfo* type_;
@@ -175,6 +179,8 @@ class File {
   Env* env_;
 
   Time lastmod_;
+
+  File* parent_ = nullptr;
 };
 
 class File::TypeInfo final {

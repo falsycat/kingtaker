@@ -92,9 +92,6 @@ void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
 File& File::Find(std::string_view) const {
   throw NotFoundException("no children");
 }
-void File::Touch() noexcept {
-  lastmod_ = Clock::now();
-}
 
 
 File::TypeInfo::TypeInfo(std::string_view name,
