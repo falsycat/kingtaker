@@ -50,9 +50,9 @@ class DirItem {
   DirItem& operator=(const DirItem&) = delete;
   DirItem& operator=(DirItem&&) = delete;
 
-  virtual void UpdateTree(File::RefStack&) noexcept { }
-  virtual void UpdateMenu(File::RefStack&) noexcept { }
-  virtual void UpdateTooltip(File::RefStack&) noexcept { }
+  virtual void UpdateTree() noexcept { }
+  virtual void UpdateMenu() noexcept { }
+  virtual void UpdateTooltip() noexcept { }
 
   Flags flags() const noexcept { return flags_; }
  private:

@@ -240,9 +240,8 @@ void Update() noexcept {
   if (UpdatePanic()) return;
 
   // update GUI
-  File::RefStack path;
-  Event          ev;
-  root_->Update(path, ev);
+  Event ev;
+  root_->Update(ev);
   UpdateAppMenu();
 }
 bool UpdatePanic() noexcept {
@@ -295,13 +294,12 @@ void UpdateAppMenu() noexcept {
     }
     if (ImGui::BeginMenu("View")) {
       if (ImGui::MenuItem("focus root")) {
-        next_.focus.insert(&*File::RefStack());
+        next_.focus.insert(root_.get());
       }
       if (ImGui::BeginMenu("focus by path")) {
         static std::string path, path_editing;
-        File::RefStack ref;
-        if (gui::InputPathMenu(ref, &path_editing, &path)) {
-          next_.focus.insert(&*ref.Resolve(path));
+        if (gui::InputPathMenu(root_.get(), &path_editing, &path)) {
+          next_.focus.insert(&root_->Resolve(path));
         }
         ImGui::EndMenu();
       }

@@ -109,7 +109,6 @@ class Queue {
 class File {
  public:
   class TypeInfo;
-  class RefStack;
   class Path;
   class Env;
   class Event;
@@ -150,7 +149,7 @@ class File {
   void SerializeWithTypeInfo(Packer&) const noexcept;
 
   // Be called on each GUI updates.
-  virtual void Update(RefStack&, Event&) noexcept { }
+  virtual void Update(Event&) noexcept { }
 
   // To make children referrable by path specification, returns them.
   // If there's no such child, throw NotFoundException.
@@ -158,6 +157,7 @@ class File {
 
   // Returns a file specified by the relative path or throws NotFoundException.
   File& Resolve(const Path&) const;
+  File& Resolve(std::string_view p) const;
 
   // Sets lastmod to current time.
   void Touch() noexcept;
@@ -262,53 +262,6 @@ class File::Path final : public std::vector<std::string> {
 
   static Path Parse(std::string_view) noexcept;
   std::string Stringify() const noexcept;
-};
-
-class File::RefStack final {
- public:
-  struct Term {
-   public:
-    Term(std::string_view name, File* file) noexcept : name_(name), file_(file) { }
-    Term() = default;
-    Term(const Term&) = default;
-    Term(Term&&) = default;
-    Term& operator=(const Term&) = default;
-    Term& operator=(Term&&) = default;
-
-    const std::string& name() const noexcept { return name_; }
-    File& file() const noexcept { return *file_; }
-
-   private:
-    std::string name_;
-
-    File* file_;
-  };
-
-  RefStack() = default;
-  RefStack(const RefStack&) = default;
-  RefStack(RefStack&&) = default;
-  RefStack& operator=(const RefStack&) = default;
-  RefStack& operator=(RefStack&&) = default;
-
-  File& operator*() const noexcept { return terms_.empty()? root(): terms_.back().file(); }
-
-  void Push(Term&&) noexcept;
-  void Pop() noexcept;
-
-  RefStack Resolve(const Path& p) const;
-  RefStack Resolve(std::string_view p) const { return Resolve(Path::Parse(p)); }
-
-  Path GetFullPath() const noexcept;
-  std::string Stringify() const noexcept;
-
-  const Term& top() const noexcept { return terms_.back(); }
-  const Term& terms(std::size_t i) const noexcept { return terms_[i]; }
-  std::size_t size() const noexcept { return terms_.size(); }
-
- private:
-  void ResolveInplace(const Path& p);
-
-  std::vector<Term> terms_;
 };
 
 class File::Env final {

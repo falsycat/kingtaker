@@ -49,7 +49,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
   void Serialize(Packer& pk) const noexcept override {
     std::unordered_map<Node*, size_t> idxmap;
 
-    pk.pack_map(6);
+    pk.pack_map(5);
 
     pk.pack("nodes"s);
     pk.pack_array(static_cast<uint32_t>(nodes_.size()));
@@ -110,10 +110,10 @@ class Network : public File, public iface::DirItem, public iface::Node {
     }
   }
 
-  void Update(RefStack& ref, Event& ev) noexcept override;
-  void UpdateMenu(RefStack&) noexcept override;
-  void UpdateCanvas(RefStack&) noexcept;
-  void UpdateCanvasMenu(RefStack&, const ImVec2&) noexcept;
+  void Update(Event& ev) noexcept override;
+  void UpdateMenu() noexcept override;
+  void UpdateCanvas() noexcept;
+  void UpdateCanvasMenu(const ImVec2&) noexcept;
   template <typename T>
   void UpdateNewIO(const ImVec2& pos) noexcept;
 
@@ -225,7 +225,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     // TODO: logging
     return nullptr;
   }
-  void Focus(RefStack& ref, NodeHolder* target) noexcept {
+  void Focus(NodeHolder* target) noexcept {
     for (auto& h : nodes_) h->select = false;
     target->select = true;
 
@@ -233,7 +233,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
     canvas_.Offset = (target->pos*canvas_.Zoom - canvas_size_/2.f)*-1.f;
 
     // focus the editor
-    const auto id = ref.Stringify() + ": NetworkEditor";
+    const auto id = abspath().Stringify() + ": NetworkEditor";
     ImGui::SetWindowFocus(id.c_str());
     shown_ = true;
   }
@@ -338,8 +338,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
       owner_ = nullptr;
     }
 
-    void Update(Network&, RefStack&, Event&) noexcept;
-    void UpdateNode(Network&, RefStack&) noexcept;
+    void Update(Network&, Event&) noexcept;
+    void UpdateNode(Network&) noexcept;
 
     File& file() const noexcept { return *file_; }
     Node& node() const noexcept { return *node_; }
@@ -568,7 +568,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       return std::make_unique<InNode>(env, name_);
     }
 
-    void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+    void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
     void* iface(const std::type_index& t) noexcept override {
       return PtrSelector<iface::Node>(t).Select(this);
@@ -605,7 +605,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
       return std::make_unique<OutNode>(env, name_);
     }
 
-    void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+    void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
     void* iface(const std::type_index& t) noexcept override {
       return PtrSelector<iface::Node>(t).Select(this);
@@ -619,8 +619,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
   };
 };
 
-void Network::Update(RefStack& ref, Event& ev) noexcept {
-  auto path = ref.GetFullPath();
+void Network::Update(Event& ev) noexcept {
+  auto path = abspath();
 
   // update editor context
   if (!ctx_ || ctx_->basepath() != path) {
@@ -632,8 +632,8 @@ void Network::Update(RefStack& ref, Event& ev) noexcept {
 
   // update children
   for (auto& h : nodes_) {
-    if (ev.IsFocused(&h->file())) Focus(ref, h.get());
-    h->Update(*this, ref, ev);
+    if (ev.IsFocused(&h->file())) Focus(h.get());
+    h->Update(*this, ev);
   }
 
   // display window
@@ -641,16 +641,16 @@ void Network::Update(RefStack& ref, Event& ev) noexcept {
   ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
 
   constexpr auto kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-  if (gui::BeginWindow(this, "NetworkEditor", ref, ev, &shown_, kFlags)) {
+  if (gui::BeginWindow(this, "NetworkEditor", ev, &shown_, kFlags)) {
     canvas_size_ = ImGui::GetWindowSize();
-    UpdateCanvas(ref);
+    UpdateCanvas();
   }
   gui::EndWindow();
 }
-void Network::UpdateMenu(RefStack&) noexcept {
+void Network::UpdateMenu() noexcept {
   ImGui::MenuItem("NetworkEditor", nullptr, &shown_);
 }
-void Network::UpdateCanvas(RefStack& ref) noexcept {
+void Network::UpdateCanvas() noexcept {
   const auto pos = ImGui::GetCursorScreenPos();
 
   ImNodes::BeginCanvas(&canvas_);
@@ -658,7 +658,7 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
 
   // update children
   for (auto& h : nodes_) {
-    h->UpdateNode(*this, ref);
+    h->UpdateNode(*this);
   }
 
   // handle existing connections
@@ -700,11 +700,11 @@ void Network::UpdateCanvas(RefStack& ref) noexcept {
       ImGuiPopupFlags_MouseButtonRight |
       ImGuiPopupFlags_NoOpenOverExistingPopup;
   if (ImGui::BeginPopupContextWindow(nullptr, kFlags)) {
-    UpdateCanvasMenu(ref, pos);
+    UpdateCanvasMenu(pos);
     ImGui::EndPopup();
   }
 }
-void Network::UpdateCanvasMenu(RefStack&, const ImVec2& winpos) noexcept {
+void Network::UpdateCanvasMenu(const ImVec2& winpos) noexcept {
   const auto pos =
       (ImGui::GetWindowPos()-winpos) / canvas_.Zoom - canvas_.Offset;
 
@@ -770,22 +770,19 @@ void Network::UpdateNewIO(const ImVec2& pos) noexcept {
     ImGui::CloseCurrentPopup();
   }
 }
-void Network::NodeHolder::Update(Network& owner, RefStack& ref, Event& ev) noexcept {
-  ref.Push({std::to_string(id_), file_.get()});
+void Network::NodeHolder::Update(Network& owner, Event& ev) noexcept {
   ImGui::PushID(file_.get());
 
-  file_->Update(ref, ev);
-  node_->Update(ref, owner.ctx_);
+  file_->Update(ev);
+  node_->Update(owner.ctx_);
 
   ImGui::PopID();
-  ref.Pop();
 }
-void Network::NodeHolder::UpdateNode(Network& owner, RefStack& ref) noexcept {
-  ref.Push({std::to_string(id_), file_.get()});
+void Network::NodeHolder::UpdateNode(Network& owner) noexcept {
   ImGui::PushID(file_.get());
 
   if (ImNodes::BeginNode(this, &pos, &select)) {
-    node_->UpdateNode(ref, owner.ctx_);
+    node_->UpdateNode(owner.ctx_);
   }
   ImNodes::EndNode();
 
@@ -802,17 +799,16 @@ void Network::NodeHolder::UpdateNode(Network& owner, RefStack& ref) noexcept {
     }
     if (node_->flags() & Node::kMenu) {
       ImGui::Separator();
-      node_->UpdateMenu(ref, owner.ctx_);
+      node_->UpdateMenu(owner.ctx_);
     }
     ImGui::EndPopup();
   }
   gui::NodeCanvasSetZoom();
 
   ImGui::PopID();
-  ref.Pop();
 }
 
-void Network::InNode::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void Network::InNode::UpdateNode(const std::shared_ptr<Editor>&) noexcept {
   ImGui::Text("IN> %s", name_.c_str());
 
   ImGui::SameLine();
@@ -821,7 +817,7 @@ void Network::InNode::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noex
     ImNodes::EndSlot();
   }
 }
-void Network::OutNode::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void Network::OutNode::UpdateNode(const std::shared_ptr<Editor>&) noexcept {
   if (ImNodes::BeginInputSlot("in", 1)) {
     gui::NodeSockPoint();
     ImNodes::EndSlot();
@@ -923,7 +919,7 @@ class Call final : public LambdaNodeDriver {
   void Send(Value&& v) {
     auto octx = octx_.lock();
 
-    auto f = &*RefStack().Resolve(octx->basepath()).Resolve(path_);
+    auto f = &owner_->root().Resolve(octx->basepath()).Resolve(path_);
     if (f == owner_) throw Exception("self reference");
 
     auto n = File::iface<iface::Node>(f);
@@ -987,15 +983,15 @@ class SugarCall final : public File, public iface::Node {
     return std::make_unique<SugarCall>(env, memento_.data().path);
   }
 
-  void Update(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept override {
+  void Update(const std::shared_ptr<Editor>& ctx) noexcept override {
     if (first_) {
-      SyncSocks(ctx->basepath());
+      SyncSocks(ctx);
       memento_.Overwrite();
       first_ = false;
     }
   }
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
-  void UpdateMenu(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateMenu(const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Memento, iface::Node>(t).
@@ -1040,10 +1036,10 @@ class SugarCall final : public File, public iface::Node {
   std::vector<std::unique_ptr<CustomOutSock>> out_socks_;
 
 
-  Node* GetNode(const Path& basepath) const {
+  Node* GetNode(const std::shared_ptr<Context>& ctx) const {
     const auto& udata = memento_.data();
 
-    auto target = &*RefStack().Resolve(basepath).Resolve(udata.path);
+    auto target = &root().Resolve(ctx->basepath()).Resolve(udata.path);
     if (target == this) throw Exception("recursive reference");
 
     auto node = File::iface<iface::Node>(target);
@@ -1051,10 +1047,10 @@ class SugarCall final : public File, public iface::Node {
 
     return node;
   }
-  bool SyncSocks(const Path& basepath) noexcept
+  bool SyncSocks(const std::shared_ptr<Context>& ctx) noexcept
   try {
     auto& udata = memento_.data();
-    auto  node  = GetNode(basepath);
+    auto  node  = GetNode(ctx);
 
     const auto in_names_bk  = std::move(udata.in_socks);
     const auto out_names_bk = std::move(udata.out_socks);
@@ -1143,7 +1139,7 @@ class SugarCall final : public File, public iface::Node {
     }
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override
     try {
-      auto node = owner_->GetNode(ctx->basepath());
+      auto node = owner_->GetNode(ctx);
 
       auto sock = node->in(meta_.name);
       if (!sock) throw Exception("missing input socket: " + meta_.name);
@@ -1172,7 +1168,7 @@ class SugarCall final : public File, public iface::Node {
     SockMeta meta_;
   };
 };
-void SugarCall::UpdateNode(RefStack& ref, const std::shared_ptr<Editor>& ctx) noexcept {
+void SugarCall::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   const float em        = ImGui::GetFontSize();
   const float max_width = 8*em;
 
@@ -1217,26 +1213,22 @@ void SugarCall::UpdateNode(RefStack& ref, const std::shared_ptr<Editor>& ctx) no
   const float w = std::max(ImGui::GetItemRectSize().x, 8*em);
   ImGui::Button(udata.path.c_str(), {w, 0});
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-    UpdateMenu(ref, ctx);
+    UpdateMenu(ctx);
     ImGui::EndPopup();
   }
 }
-void SugarCall::UpdateMenu(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+void SugarCall::UpdateMenu(const std::shared_ptr<Editor>& ctx) noexcept {
   auto& udata = memento_.data();
 
   if (ImGui::MenuItem("sync socks")) {
-    if (SyncSocks(ctx->basepath())) {
-      memento_.Commit();
-    }
+    if (SyncSocks(ctx)) memento_.Commit();
   }
 
   ImGui::Separator();
 
   if (ImGui::BeginMenu("path")) {
-    if (gui::InputPathMenu(ctx->basepath(), &path_editing_, &udata.path)) {
-      if (SyncSocks(ctx->basepath())) {
-        memento_.Commit();
-      }
+    if (gui::InputPathMenu(this, &path_editing_, &udata.path)) {
+      if (SyncSocks(ctx)) memento_.Commit();
     }
     ImGui::EndMenu();
   }
@@ -1285,11 +1277,8 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     return std::make_unique<Cache>(env, path_);
   }
 
-  void Update(RefStack& ref, Event&) noexcept override {
-    basepath_ = ref.GetFullPath();
-  }
-  void UpdateMenu(RefStack&) noexcept override;
-  void UpdateTooltip(RefStack&) noexcept override;
+  void UpdateMenu() noexcept override;
+  void UpdateTooltip() noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
@@ -1311,21 +1300,12 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
   size_t hit_cnt_ = 0;
 
   std::string path_editing_;
-  Path basepath_;
   bool last_error_ = false;
 
 
   void ClearStat() noexcept {
     try_cnt_ = 0, hit_cnt_ = 0;
     last_error_ = false;
-  }
-  Node* GetTargetNode(const RefStack& ref) {
-    auto f = &*ref.Resolve(path_);
-    if (f == this) throw Exception("self reference");
-
-    auto n = File::iface<iface::Node>(f);
-    if (!n) throw Exception("it's not a Node");
-    return n;
   }
 
   void SetParam(const std::shared_ptr<Context>& ctx, Value&& v)
@@ -1360,9 +1340,13 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
 
     // execute the target Node and store the result to the created item
     try {
-      auto ref  = RefStack().Resolve(basepath_);
-      auto n    = GetTargetNode(ref);
-      auto ictx = std::make_shared<InnerContext>(Path(basepath_), ctx, n, item);
+      auto f = &Resolve(path_);
+      if (f == this) throw Exception("self reference");
+
+      auto n = File::iface<iface::Node>(f);
+      if (!n) throw Exception("it's not a Node");
+
+      auto ictx = std::make_shared<InnerContext>(f->abspath(), ctx, n, item);
       for (const auto& p : item->in()) {
         const auto in = n->in();
 
@@ -1493,7 +1477,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     std::vector<Param> params;
   };
 };
-void Cache::UpdateMenu(RefStack& ref) noexcept {
+void Cache::UpdateMenu() noexcept {
   if (ImGui::MenuItem("drop all cache")) {
     store_->DropAll();
   }
@@ -1502,14 +1486,14 @@ void Cache::UpdateMenu(RefStack& ref) noexcept {
   }
   ImGui::Separator();
   if (ImGui::BeginMenu("target path")) {
-    if (gui::InputPathMenu(ref, &path_editing_, &path_)) {
+    if (gui::InputPathMenu(this, &path_editing_, &path_)) {
       store_->DropAll();
       ClearStat();
     }
     ImGui::EndMenu();
   }
 }
-void Cache::UpdateTooltip(RefStack&) noexcept {
+void Cache::UpdateTooltip() noexcept {
   ImGui::Indent();
   ImGui::Text("target      : %s", path_.c_str());
   ImGui::Text("store size  : %zu", store_->size());

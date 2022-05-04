@@ -45,9 +45,9 @@ class Node {
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
-  virtual void Update(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
-  virtual void UpdateNode(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
-  virtual void UpdateMenu(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
+  virtual void Update(const std::shared_ptr<Editor>&) noexcept { }
+  virtual void UpdateNode(const std::shared_ptr<Editor>&) noexcept { }
+  virtual void UpdateMenu(const std::shared_ptr<Editor>&) noexcept { }
 
   std::span<InSock* const> in() const noexcept { return in_; }
   std::span<OutSock* const> out() const noexcept { return out_; }

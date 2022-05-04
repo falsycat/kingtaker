@@ -224,7 +224,6 @@ class NodeLambdaInSock final : public iface::Node::InSock {
 class LambdaNodeDriver : public iface::Node::Context::Data {
  public:
   using TypeInfo = File::TypeInfo;
-  using RefStack = File::RefStack;
   using Path     = File::Path;
   using Node     = iface::Node;
   using SockMeta = Node::SockMeta;
@@ -280,7 +279,7 @@ class LambdaNode final : public File, public iface::Node {
     return std::make_unique<LambdaNode>(env);
   }
 
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -326,8 +325,7 @@ class LambdaNode final : public File, public iface::Node {
   };
 };
 template <typename Driver>
-void LambdaNode<Driver>::UpdateNode(
-    RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+void LambdaNode<Driver>::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   const auto driver = GetDriver(ctx);
   ImGui::TextUnformatted(driver->title().c_str());
 

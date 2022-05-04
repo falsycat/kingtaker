@@ -81,6 +81,9 @@ File& File::Resolve(const Path& p) const {
   }
   return *ret;
 }
+File& File::Resolve(std::string_view p) const {
+  return Resolve(Path::Parse(p));
+}
 
 void File::Touch() noexcept {
   lastmod_ = Clock::now();
@@ -139,56 +142,10 @@ File::Path File::Path::Parse(std::string_view path) noexcept {
 std::string File::Path::Stringify() const noexcept {
   std::string ret;
   for (const auto& name : *this) {
-    ret.push_back('/');
     ret += name;
+    ret.push_back('/');
   }
   return ret;
-}
-
-
-void File::RefStack::Push(Term&& term) noexcept {
-  terms_.push_back(std::move(term));
-}
-void File::RefStack::Pop() noexcept {
-  terms_.pop_back();
-}
-
-File::Path File::RefStack::GetFullPath() const noexcept {
-  Path ret;
-  ret.reserve(terms_.size());
-  for (const auto& term : terms_) {
-    ret.push_back(term.name());
-  }
-  return ret;
-}
-std::string File::RefStack::Stringify() const noexcept {
-  std::string ret = "/";
-  for (const auto& term : terms_) {
-    if (ret.back() != '/') ret.push_back('/');
-    ret += term.name();
-  }
-  return ret;
-}
-
-File::RefStack File::RefStack::Resolve(const Path& p) const {
-  auto a = *this;
-  a.ResolveInplace(p);
-  return a;
-}
-
-void File::RefStack::ResolveInplace(const Path& p) {
-  for (const auto& name : p) {
-    if (name == "..") {
-      if (terms_.empty()) {
-        throw NotFoundException("root has no parent");
-      }
-      Pop();
-    } else if (name == ":") {
-      terms_.clear();
-    } else {
-      Push({name, &(**this).Find(name)});
-    }
-  }
 }
 
 }  // namespace kingtaker

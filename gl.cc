@@ -825,8 +825,8 @@ class Preview final : public File, public iface::DirItem, public iface::Node {
     return std::make_unique<Preview>(env, shown_);
   }
 
-  void Update(RefStack& ref, Event& ev) noexcept override {
-    if (gui::BeginWindow(this, "OpenGL Preview", ref, ev, &shown_)) {
+  void Update(Event& ev) noexcept override {
+    if (gui::BeginWindow(this, "OpenGL Preview", ev, &shown_)) {
       if (!tex_) {
         ImGui::TextUnformatted("texture is not specified");
       } else if (tex_->id() == 0) {

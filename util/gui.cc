@@ -52,13 +52,12 @@ static bool BeginWindow_end_required_ = false;
 bool BeginWindow(
     File*                 fptr,
     const char*           name,
-    const File::RefStack& ref,
     const File::Event&    ev,
     bool*                 shown,
     ImGuiWindowFlags      flags) noexcept {
   BeginWindow_end_required_ = false;
 
-  const auto id = ref.Stringify()+": "s+name;
+  const auto id = fptr->abspath().Stringify()+" | "s+name;
   if (ev.IsFocused(fptr)) {
     ImGui::SetWindowFocus(id.c_str());
     *shown = true;
@@ -141,11 +140,7 @@ void NodeCanvasResetZoom() noexcept {
 }
 
 
-bool InputPathMenu(const File::Path& basepath, std::string* editing, std::string* path) noexcept {
-  auto ref = File::RefStack().Resolve(basepath);
-  return InputPathMenu(ref, editing, path);
-}
-bool InputPathMenu(File::RefStack& ref, std::string* editing, std::string* path) noexcept {
+bool InputPathMenu(File* f, std::string* editing, std::string* path) noexcept {
   constexpr auto kFlags = 
       ImGuiInputTextFlags_EnterReturnsTrue |
       ImGuiInputTextFlags_AutoSelectAll;
@@ -156,7 +151,7 @@ bool InputPathMenu(File::RefStack& ref, std::string* editing, std::string* path)
   if (ImGui::IsItemActivated()) *editing = *path;
 
   try {
-    auto newref = ref.Resolve(*editing);
+    f->Resolve(*editing);
     if (submit) {
       ImGui::CloseCurrentPopup();
       if (*path == *editing) return false;

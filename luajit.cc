@@ -169,7 +169,7 @@ class Exec final : public File, public iface::Node {
     return std::make_unique<Exec>(env);
   }
 
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -301,7 +301,7 @@ class Exec final : public File, public iface::Node {
     dev_.Queue(std::move(task));
   }
 };
-void Exec::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void Exec::UpdateNode(const std::shared_ptr<Editor>&) noexcept {
   ImGui::TextUnformatted("LuaJIT Exec");
 
   ImGui::BeginGroup();
