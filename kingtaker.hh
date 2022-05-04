@@ -135,7 +135,7 @@ class File {
   static const Registry& registry() noexcept;
 
   File(const TypeInfo* type, Env* env, Time lastmod = Clock::now()) noexcept :
-      lastmod_(lastmod), type_(type), env_(env) {
+      type_(type), env_(env), lastmod_(lastmod) {
   }
   File() = delete;
   virtual ~File() = default;
@@ -158,6 +158,9 @@ class File {
   // To make children referrable by path specification, returns them.
   virtual File& Find(std::string_view) const;
 
+  // Sets lastmod to current time.
+  void Touch() noexcept;
+
   // Takes typeinfo of the requested interface and
   // returns a pointer of the implementation or nullptr if not implemented.
   virtual void* iface(const std::type_index&) noexcept { return nullptr; }
@@ -166,13 +169,12 @@ class File {
   Env& env() const noexcept { return *env_; }
   Time lastmod() const noexcept { return lastmod_; }
 
- protected:
-  Time lastmod_;
-
  private:
   const TypeInfo* type_;
 
   Env* env_;
+
+  Time lastmod_;
 };
 
 class File::TypeInfo final {

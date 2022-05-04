@@ -105,7 +105,7 @@ class GenericDir : public File,
     auto [itr, uniq] = items.insert(std::make_pair(std::string(name), std::move(f)));
     if (!uniq) return nullptr;
 
-    lastmod_ = Clock::now();
+    Touch();
     return itr->second.get();
   }
   std::unique_ptr<File> Remove(std::string_view name) noexcept override {
@@ -117,7 +117,7 @@ class GenericDir : public File,
     auto ret = std::move(itr->second);
     items.erase(itr);
 
-    lastmod_ = Clock::now();
+    Touch();
     return ret;
   }
 
