@@ -147,20 +147,20 @@ class File {
   virtual void Serialize(Packer&) const noexcept = 0;
   virtual std::unique_ptr<File> Clone(Env*) const noexcept = 0;
 
-  // To make children referrable by path specification, returns them.
-  virtual File* Find(std::string_view) const noexcept { return nullptr; }
-
-  // Be called on each GUI updates.
-  virtual void Update(RefStack&, Event&) noexcept { }
-
-  // Takes typeinfo of the requested interface and
-  // returns a pointer of the implementation or nullptr if not implemented.
-  virtual void* iface(const std::type_index&) noexcept { return nullptr; }
-
   // Calls Serialize() after packing TypeInfo.
   // To make it available to deserialize by File::Deserialize(),
   // use this instead of Serialize().
   void SerializeWithTypeInfo(Packer&) const noexcept;
+
+  // Be called on each GUI updates.
+  virtual void Update(RefStack&, Event&) noexcept { }
+
+  // To make children referrable by path specification, returns them.
+  virtual File& Find(std::string_view) const;
+
+  // Takes typeinfo of the requested interface and
+  // returns a pointer of the implementation or nullptr if not implemented.
+  virtual void* iface(const std::type_index&) noexcept { return nullptr; }
 
   const TypeInfo& type() const noexcept { return *type_; }
   Env& env() const noexcept { return *env_; }
@@ -284,7 +284,7 @@ class File::RefStack final {
   std::size_t size() const noexcept { return terms_.size(); }
 
  private:
-  bool ResolveInplace(const Path& p);
+  void ResolveInplace(const Path& p);
 
   std::vector<Term> terms_;
 };
@@ -354,10 +354,8 @@ class File::Event {
 
 class File::NotFoundException : public Exception {
  public:
-  NotFoundException(const Path& p, const RefStack& st, Loc loc = Loc::current()) noexcept :
-      Exception(
-          "file not found in '"s+st.Stringify()+
-          "' while resolving '"s+StringifyPath(p)+"'"s, loc) {
+  NotFoundException(std::string_view msg, Loc loc = Loc::current()) noexcept :
+      Exception(msg, loc) {
   }
 };
 

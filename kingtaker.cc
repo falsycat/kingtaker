@@ -89,6 +89,10 @@ void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
   Serialize(pk);
 }
 
+File& File::Find(std::string_view) const {
+  throw NotFoundException("no children");
+}
+
 
 File::TypeInfo::TypeInfo(std::string_view name,
                          std::string_view desc,
@@ -134,24 +138,23 @@ std::string File::RefStack::Stringify() const noexcept {
 
 File::RefStack File::RefStack::Resolve(const Path& p) const {
   auto a = *this;
-  if (!a.ResolveInplace(p)) throw NotFoundException(p, a);
+  a.ResolveInplace(p);
   return a;
 }
 
-bool File::RefStack::ResolveInplace(const Path& p) {
+void File::RefStack::ResolveInplace(const Path& p) {
   for (const auto& name : p) {
     if (name == "..") {
-      if (terms_.empty()) return false;
+      if (terms_.empty()) {
+        throw NotFoundException("root has no parent");
+      }
       Pop();
     } else if (name == ":") {
       terms_.clear();
     } else {
-      auto f = (**this).Find(name);
-      if (!f) return false;
-      Push(Term(name, f));
+      Push({name, &(**this).Find(name)});
     }
   }
-  return true;
 }
 
 }  // namespace kingtaker

@@ -88,10 +88,14 @@ class GenericDir : public File,
     return std::make_unique<GenericDir>(env, std::move(items));
   }
 
-  File* Find(std::string_view name) const noexcept override {
-    auto itr = items_.find(std::string(name));
-    if (itr == items_.end()) return nullptr;
-    return itr->second.get();
+  File& Find(std::string_view name) const override {
+    const auto sname = std::string(name);
+
+    auto itr = items_.find(sname);
+    if (itr == items_.end()) {
+      throw NotFoundException("child not found: "+sname);
+    }
+    return *itr->second;
   }
 
   File* Add(std::string_view name, std::unique_ptr<File>&& f) noexcept override {
@@ -178,11 +182,12 @@ void GenericDir::UpdateMenu(RefStack&) noexcept {
         const bool enter =
             ImGui::InputTextWithHint("##NameForNew", kHint, &name_for_new_, kFlags);
 
-        const bool dup = !!Find(name_for_new_);
+        const bool dup = items_.end() != items_.find(name_for_new_);
         if (dup) {
           ImGui::Bullet();
           ImGui::Text("name duplication");
         }
+
         const bool valid = iface::Dir::ValidateName(name_for_new_);
         if (!valid) {
           ImGui::Bullet();
