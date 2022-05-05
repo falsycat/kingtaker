@@ -34,18 +34,11 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
       "Value/Imm", "immediate value",
       {typeid(iface::Memento), typeid(iface::DirItem), typeid(iface::Node)});
 
-  static inline const SockMeta kIn = {
-    .name = "clk", .type = SockMeta::kPulse, .trigger = true, .def = Value::Pulse{},
-  };
-  static inline const SockMeta kOut = {
-    .name = "out", .type = SockMeta::kAny,
-  };
-
   Imm(Env* env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
       mem_({this, std::move(v), size}),
-      sock_out_(this, &kOut),
-      sock_clk_(this, &kIn,
+      sock_out_(this, "out"),
+      sock_clk_(this, "clk",
                 [this](auto& ctx, auto&&) {
                   sock_out_.Send(ctx, Value(mem_.data().value));
                 }) {
@@ -360,12 +353,8 @@ class Name final : public NameOrPick {
       "Value/Name", "name",
       {typeid(iface::Memento), typeid(iface::Node)});
 
-  static inline const SockMeta kOut = {
-    .name = "out", .type = SockMeta::kNamedValue,
-  };
-
   Name(Env* env, std::vector<std::string>&& n = {"praise_the_cat"}) noexcept :
-      NameOrPick(&kType, env, std::move(n)), out_sock_(this, &kOut) {
+      NameOrPick(&kType, env, std::move(n)), out_sock_(this, "out") {
     Rebuild();
   }
 
@@ -412,15 +401,14 @@ class Name final : public NameOrPick {
 
   class CustomInSock final : public InSock {
    public:
-    CustomInSock(Name* owner, OutSock* out, const std::string& name) noexcept :
-        InSock(owner, &meta_), out_(out), meta_({.name = name}) {
+    CustomInSock(Name* owner, OutSock* out, std::string_view name) noexcept :
+        InSock(owner, name), out_(out) {
     }
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
-      out_->Send(ctx, Value::Tuple { meta_.name, std::move(v) });
+      out_->Send(ctx, Value::Tuple { name(), std::move(v) });
     }
    private:
     OutSock* out_;
-    SockMeta meta_;
   };
 };
 void Name::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
@@ -448,14 +436,9 @@ class Pick final : public NameOrPick {
       "Value/Pick", "name",
       {typeid(iface::Memento), typeid(iface::Node)});
 
-  static inline const SockMeta kIn = {
-    .name = "in", .type = SockMeta::kNamedValue,
-  };
-
   Pick(Env* env, std::vector<std::string>&& n = {"praise_the_cat"}) noexcept :
       NameOrPick(&kType, env, std::move(n)),
-      in_sock_(this, &kIn,
-               [this](auto& ctx, auto&& v) { Handle(ctx, std::move(v)); }) {
+      in_sock_(this, "in", [this](auto& ctx, auto&& v) { Handle(ctx, std::move(v)); }) {
     Rebuild();
   }
 
@@ -476,7 +459,7 @@ class Pick final : public NameOrPick {
 
  private:
   // volatile
-  std::vector<std::unique_ptr<OutSock>> out_socks_;
+  std::vector<std::optional<OutSock>> out_socks_;
   NodeLambdaInSock in_sock_;
 
   float w_;
@@ -485,11 +468,12 @@ class Pick final : public NameOrPick {
   void Rebuild() noexcept override {
     const auto& udata = NameOrPick::udata();
 
-    out_socks_.resize(udata.names.size());
+    out_socks_ = std::vector<std::optional<OutSock>>(udata.names.size());
     out_.resize(udata.names.size());
+
     for (size_t i = 0; i < udata.names.size(); ++i) {
-      out_socks_[i] = std::make_unique<CustomOutSock>(this, udata.names[i]);
-      out_[i]       = out_socks_[i].get();
+      out_socks_[i].emplace(this, udata.names[i]);
+      out_[i] = &*out_socks_[i];
     }
     in_ = {&in_sock_};
     NotifySockChange();
@@ -514,15 +498,6 @@ class Pick final : public NameOrPick {
   } catch (Exception& e) {
     ctx->Notify(this, e.msg());
   }
-
-  class CustomOutSock final : public OutSock {
-   public:
-    CustomOutSock(Pick* owner, const std::string& name) noexcept :
-        OutSock(owner, &meta_), meta_({.name = name}) {
-    }
-   private:
-    SockMeta meta_;
-  };
 };
 void Pick::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   auto& names = udata().names;

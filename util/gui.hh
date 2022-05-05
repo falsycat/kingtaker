@@ -6,8 +6,6 @@
 
 #include "kingtaker.hh"
 
-#include "iface/node.hh"
-
 
 namespace kingtaker::gui {
 
@@ -37,8 +35,8 @@ void EndWindow() noexcept;
 
 
 void NodeSockPoint() noexcept;
-void NodeInSock(const iface::Node::SockMeta&) noexcept;
-void NodeOutSock(const iface::Node::SockMeta&) noexcept;
+void NodeInSock(const std::string&, const std::string& = "") noexcept;
+void NodeOutSock(const std::string&, const std::string& = "") noexcept;
 
 void NodeCanvasSetZoom() noexcept;
 void NodeCanvasResetZoom() noexcept;

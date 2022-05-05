@@ -40,13 +40,13 @@ class Compile final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
-    { .name = "name",  .type = SockMeta::kString, .def = ""s, },
-    { .name = "src",   .type = SockMeta::kStringMultiline, },
-    { .name = "exec",  .type = SockMeta::kPulse, .trigger = true, },
+    { "clear", "" },
+    { "name",  "" },
+    { "src",   "" },
+    { "exec",  "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out", .type = SockMeta::kPulse, },
+    { "out", "" },
   };
 
   Compile(Owner* o, const std::weak_ptr<Context>& ctx) noexcept :
@@ -123,19 +123,9 @@ class Exec final : public File, public iface::Node {
       "LuaJIT/Exec", "execute compiled function",
       {typeid(iface::Node)});
 
-  static inline const SockMeta kOutRecv = {
-    .name = "recv", .type = SockMeta::kPulse,
-  };
-  static inline const SockMeta kInFunc = {
-    .name = "func", .type = SockMeta::kData, .dataType = luajit::Obj::kName,
-  };
-  static inline const SockMeta kInSend = {
-    .name = "send", .type = SockMeta::kAny, .trigger = true,
-  };
-
   Exec(Env* env) noexcept :
       File(&kType, env), Node(Node::kNone),
-      sock_recv_(std::make_shared<OutSock>(this, &kOutRecv)) {
+      sock_recv_(std::make_shared<OutSock>(this, "recv")) {
     auto task_func = [this](auto& ctx, auto&& v) {
       try {
         auto cdata = ctx->template data<ContextData>(this, this, ctx);
@@ -144,7 +134,7 @@ class Exec final : public File, public iface::Node {
         ctx->Notify(this, e.msg());
       }
     };
-    sock_func_.emplace(this, &kInFunc, std::move(task_func));
+    sock_func_.emplace(this, "func", std::move(task_func));
 
     auto task_send = [this](auto& ctx, auto&& v) {
       try {
@@ -153,7 +143,7 @@ class Exec final : public File, public iface::Node {
         ctx->Notify(this, e.msg());
       }
     };
-    sock_send_.emplace(this, &kInSend, std::move(task_send));
+    sock_send_.emplace(this, "send", std::move(task_send));
 
     out_ = {sock_recv_.get()};
     in_  = {&*sock_func_, &*sock_send_};
@@ -305,14 +295,14 @@ void Exec::UpdateNode(const std::shared_ptr<Editor>&) noexcept {
   ImGui::TextUnformatted("LuaJIT Exec");
 
   ImGui::BeginGroup();
-  gui::NodeInSock(kInFunc);
-  gui::NodeInSock(kInSend);
+  gui::NodeInSock("func");
+  gui::NodeInSock("send");
   ImGui::EndGroup();
 
   ImGui::SameLine();
 
   ImGui::BeginGroup();
-  gui::NodeOutSock(kOutRecv);
+  gui::NodeOutSock("recv");
   ImGui::EndGroup();
 }
 

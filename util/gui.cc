@@ -91,27 +91,27 @@ void NodeSockPoint() noexcept {
 
   ImGui::Dummy(sz);
 }
-void NodeInSock(const iface::Node::SockMeta& meta) noexcept {
-  if (ImNodes::BeginInputSlot(meta.name.c_str(), 1)) {
+void NodeInSock(const std::string& name, const std::string& desc) noexcept {
+  if (ImNodes::BeginInputSlot(name.c_str(), 1)) {
     gui::NodeSockPoint();
     ImGui::SameLine();
-    ImGui::TextUnformatted(meta.name.c_str());
+    ImGui::TextUnformatted(name.c_str());
     ImNodes::EndSlot();
 
-    if (meta.desc.size() && ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", meta.desc.c_str());
+    if (desc.size() > 0 && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", desc.c_str());
     }
   }
 }
-void NodeOutSock(const iface::Node::SockMeta& meta) noexcept {
-  if (ImNodes::BeginOutputSlot(meta.name.c_str(), 1)) {
-    ImGui::TextUnformatted(meta.name.c_str());
+void NodeOutSock(const std::string& name, const std::string& desc) noexcept {
+  if (ImNodes::BeginOutputSlot(name.c_str(), 1)) {
+    ImGui::TextUnformatted(name.c_str());
     ImGui::SameLine();
     gui::NodeSockPoint();
     ImNodes::EndSlot();
 
-    if (meta.desc.size() && ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", meta.desc.c_str());
+    if (desc.size() > 0 && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", desc.c_str());
     }
   }
 }

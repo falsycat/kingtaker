@@ -207,8 +207,8 @@ class NodeLambdaInSock final : public iface::Node::InSock {
   using Node     = iface::Node;
   using Receiver = std::function<void(const std::shared_ptr<Node::Context>&, Value&&)>;
 
-  NodeLambdaInSock(Node* o, const Node::SockMeta* meta, Receiver&& f) noexcept :
-      InSock(o, meta), lambda_(std::move(f)) {
+  NodeLambdaInSock(Node* o, std::string_view name, Receiver&& f) noexcept :
+      InSock(o, name), lambda_(std::move(f)) {
   }
 
   void Receive(const std::shared_ptr<Node::Context>& ctx, Value&& v) noexcept override {
@@ -226,13 +226,13 @@ class LambdaNodeDriver : public iface::Node::Context::Data {
   using TypeInfo = File::TypeInfo;
   using Path     = File::Path;
   using Node     = iface::Node;
-  using SockMeta = Node::SockMeta;
   using InSock   = Node::InSock;
   using OutSock  = Node::OutSock;
   using Context  = Node::Context;
 
   // static constexpr char* kTitle = "";
 
+  using SockMeta = std::pair<std::string, std::string>;
   // static inline const std::vector<SockMeta> kInSocks;
   // static inline const std::vector<SockMeta> kOutSocks;
 
@@ -257,14 +257,14 @@ class LambdaNode final : public File, public iface::Node {
     out_.reserve(Driver::kOutSocks.size());
     for (size_t i = 0; i < Driver::kOutSocks.size(); ++i) {
       const auto& m = Driver::kOutSocks[i];
-      out_insts_[i] = std::make_shared<OutSock>(this, &m);
+      out_insts_[i] = std::make_shared<OutSock>(this, m.first);
       out_.push_back(out_insts_[i].get());
     }
 
     in_.reserve(Driver::kInSocks.size());
     for (size_t i = 0; i < Driver::kInSocks.size(); ++i) {
       const auto& m = Driver::kInSocks[i];
-      in_insts_[i].emplace(this, &m, i);
+      in_insts_[i].emplace(this, m.first, i);
       in_.push_back(&*in_insts_[i]);
     }
   }
@@ -303,8 +303,8 @@ class LambdaNode final : public File, public iface::Node {
 
   class CustomInSock final : public InSock {
    public:
-    CustomInSock(LambdaNode* o, const SockMeta* meta, size_t idx) noexcept:
-        InSock(o, meta), owner_(o), idx_(idx) {
+    CustomInSock(LambdaNode* o, std::string_view name, size_t idx) noexcept :
+        InSock(o, name), owner_(o), idx_(idx) {
     }
 
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
@@ -331,7 +331,7 @@ void LambdaNode<Driver>::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept
 
   ImGui::BeginGroup();
   for (const auto& m : Driver::kInSocks) {
-    gui::NodeInSock(m);
+    gui::NodeInSock(m.first, m.second);
   }
   ImGui::EndGroup();
 
@@ -340,12 +340,12 @@ void LambdaNode<Driver>::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept
   ImGui::BeginGroup();
   float w = 0;
   for (const auto& m : Driver::kOutSocks) {
-    w = std::max(w, ImGui::CalcTextSize(m.name.c_str()).x);
+    w = std::max(w, ImGui::CalcTextSize(m.first.c_str()).x);
   }
   const auto left = ImGui::GetCursorPosX();
   for (const auto& m : Driver::kOutSocks) {
-    ImGui::SetCursorPosX(left+w-ImGui::CalcTextSize(m.name.c_str()).x);
-    gui::NodeOutSock(m);
+    ImGui::SetCursorPosX(left+w-ImGui::CalcTextSize(m.first.c_str()).x);
+    gui::NodeOutSock(m.first, m.second);
   }
   ImGui::EndGroup();
 }

@@ -42,14 +42,13 @@ class Texture final : public LambdaNodeDriver {
   static std::string title() noexcept { return "GL Texture"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear",  .type = SockMeta::kPulse, .trigger = true, },
-    { .name = "reso",   .type = SockMeta::kVec2, },
-    { .name = "format", .type = SockMeta::kStringOption,
-      .stringOptions = gl::GetEnumNames(gl::kFormats), },
-    { .name = "exec",   .type = SockMeta::kPulse, .trigger = true, },
+    { "clear",  "" },
+    { "reso",   "" },
+    { "format", "" },
+    { "exec",   "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out", .type = SockMeta::kData, },
+    { "out", "" },
   };
 
   Texture() = delete;
@@ -139,15 +138,14 @@ class Renderbuffer final : public LambdaNodeDriver {
   static std::string title() noexcept { return "GL Renderbuffer"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear",   .type = SockMeta::kPulse, .trigger = true, },
-    { .name = "reso",    .type = SockMeta::kVec2, },
-    { .name = "format",  .type = SockMeta::kStringOption,
-      .stringOptions = gl::GetEnumNames(gl::kFormats), },
-    { .name = "samples", .type = SockMeta::kInteger, },
-    { .name = "exec",    .type = SockMeta::kPulse, .trigger = true, },
+    { "clear",   "" },
+    { "reso",    "" },
+    { "format",  "" },
+    { "samples", "" },
+    { "exec",    "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out", .type = SockMeta::kData, },
+    { "out", "" },
   };
 
   Renderbuffer() = delete;
@@ -228,13 +226,13 @@ class Framebuffer final : public LambdaNodeDriver {
   static std::string title() noexcept { return "GL Framebuffer"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear",  .type = SockMeta::kPulse, .trigger = true, },
-    { .name = "reso",   .type = SockMeta::kVec2,  },
-    { .name = "attach", .type = SockMeta::kNamedValue, },
-    { .name = "exec",   .type = SockMeta::kPulse, .trigger = true,  },
+    { "clear",  "" },
+    { "reso",   "" },
+    { "attach", "" },
+    { "exec",   "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out",   .type = SockMeta::kData, },
+    { "out", "" },
   };
 
   Framebuffer() = delete;
@@ -351,10 +349,10 @@ class VertexArray final : public LambdaNodeDriver {
   static std::string title() noexcept { return "GL VAO"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "exec", .type = SockMeta::kPulse, .trigger = true, },
+    { "exec", "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out", .type = SockMeta::kData, },
+    { "out", "" },
   };
 
   VertexArray() = delete;
@@ -399,12 +397,12 @@ class Program final : public LambdaNodeDriver {
   static std::string title() noexcept { return "GL Program"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear",   .type = SockMeta::kPulse, .trigger = true, },
-    { .name = "shaders", .type = SockMeta::kData, .multi = true, },
-    { .name = "exec",    .type = SockMeta::kPulse, .trigger = true,  },
+    { "clear",   "" },
+    { "shaders", "" },
+    { "exec",    "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out", .type = SockMeta::kData, },
+    { "out", "" },
   };
 
   Program() = delete;
@@ -490,15 +488,14 @@ class Shader final : public LambdaNodeDriver {
   static std::string title() noexcept { return "GL Shader"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
-    { .name = "type",  .type = SockMeta::kStringOption,
-      .stringOptions = gl::GetEnumNames(gl::kShaderTypes), },
-    { .name = "src",   .type = SockMeta::kStringMultiline, .multi = true, },
-    { .name = "exec",  .type = SockMeta::kPulse, .trigger = true, },
+    { "clear", "" },
+    { "type",  "" },
+    { "src",   "" },
+    { "exec",  "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out",   .type = SockMeta::kData, },
-    { .name = "error", .type = SockMeta::kPulse, },
+    { "out",   "" },
+    { "error", "" },
   };
 
   Shader() = delete;
@@ -592,26 +589,19 @@ class DrawArrays final : public LambdaNodeDriver {
   static std::string title() noexcept { return "glDrawArrays"; }
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
-
-    { .name = "prog", .type = SockMeta::kData, },
-    { .name = "fb",   .type = SockMeta::kData, },
-    { .name = "vao",  .type = SockMeta::kData, },
-
-    { .name = "uniforms", .type = SockMeta::kNamedValue, },
-
-    { .name = "viewport", .type = SockMeta::kVec4, },
-    { .name = "mode",     .type = SockMeta::kStringOption,
-      .stringOptions = gl::GetEnumNames(gl::kDrawModes),
-    },
-
-    { .name = "first", .type = SockMeta::kInteger, .def = Value::Integer{0}, },
-    { .name = "count", .type = SockMeta::kInteger, },
-
-    { .name = "exec", .type = SockMeta::kPulse, .trigger = true, },
+    { "clear",    "" },
+    { "prog",     "" },
+    { "fb",       "" },
+    { "vao",      "" },
+    { "uniforms", "" },
+    { "viewport", "" },
+    { "mode",     "" },
+    { "first",    "" },
+    { "count",    "" },
+    { "exec",     "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "done", .type = SockMeta::kPulse, },
+    { "done", "" },
   };
 
   DrawArrays() = delete;
@@ -796,10 +786,6 @@ class Preview final : public File, public iface::DirItem, public iface::Node {
       "GL/Preview", "provides OpenGL texture preview window",
       {typeid(iface::DirItem)});
 
-  static inline const SockMeta kInTex = {
-    .name = "tex", .type = SockMeta::kData, .trigger = true,
-  };
-
   Preview(Env* env, bool shown = false) noexcept :
       File(&kType, env), DirItem(DirItem::kNone), Node(Node::kNone),
       shown_(shown) {
@@ -810,7 +796,7 @@ class Preview final : public File, public iface::DirItem, public iface::Node {
         ctx->Notify(this, "error while handling 'tex': "+e.msg());
       }
     };
-    in_.emplace_back(new NodeLambdaInSock(this, &kInTex, std::move(task_tex)));
+    in_.emplace_back(new NodeLambdaInSock(this, "tex", std::move(task_tex)));
   }
 
   Preview(Env* env, const msgpack::object& obj)
