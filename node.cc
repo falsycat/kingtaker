@@ -88,28 +88,6 @@ class Network : public File, public iface::DirItem, public iface::Node {
             shown_, canvas_.Offset, canvas_.Zoom));
   }
 
-  File& Find(std::string_view name) const override {
-    const auto sname = std::string(name);
-    try {
-      size_t pos;
-      const auto id = static_cast<size_t>(std::stoll(sname, &pos));
-      if (sname.size() != pos) {
-        throw NotFoundException("invalid id: "+sname);
-      }
-
-      auto itr = std::find_if(nodes_.begin(), nodes_.end(),
-                              [id](auto& e) { return e->id() == id; });
-      if (itr == nodes_.end()) {
-        throw NotFoundException("missing node id: "+sname);
-      }
-      return (*itr)->file();
-    } catch (std::invalid_argument&) {
-      throw NotFoundException("invalid id: "+sname);
-    } catch (std::out_of_range&) {
-      throw NotFoundException("id overflow: "+sname);
-    }
-  }
-
   void Update(Event& ev) noexcept override;
   void UpdateMenu() noexcept override;
   void UpdateCanvas() noexcept;
