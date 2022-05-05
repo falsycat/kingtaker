@@ -17,7 +17,7 @@ std::string Exception::Stringify() const noexcept {
   std::stringstream st;
   st << msg_ << "\n";
   st << "IN   " << loc_.function_name() << "\n";
-  st << "FROM " << loc_.file_name() << ":" << loc_.line() << ":" << loc_.column() << std::endl;
+  st << "FROM " << loc_.file_name() << "$" << loc_.line() << "$" << loc_.column() << std::endl;
   return st.str();
 }
 std::string HeavyException::Stringify() const noexcept {
@@ -28,32 +28,6 @@ std::string HeavyException::Stringify() const noexcept {
   return st.str();
 }
 
-
-File::Path File::ParsePath(std::string_view path) noexcept {
-  Path ret;
-  while (path.size()) {
-    const auto a = path.find_first_not_of('/');
-    if (a != std::string::npos) {
-      path.remove_prefix(a);
-    } else {
-      return ret;
-    }
-
-    const auto name = path.substr(0, path.find('/'));
-    path.remove_prefix(name.size());
-
-    if (name.size()) ret.emplace_back(name);
-  }
-  return ret;
-}
-std::string File::StringifyPath(const Path& p) noexcept {
-  std::string ret;
-  for (const auto& name : p) {
-    ret.push_back('/');
-    ret += name;
-  }
-  return ret;
-}
 
 const File::Registry& File::registry() noexcept { return registry_(); }
 const File::TypeInfo* File::Lookup(const std::string& name) noexcept {
@@ -89,6 +63,46 @@ void File::SerializeWithTypeInfo(Packer& pk) const noexcept {
   Serialize(pk);
 }
 
+File& File::Find(std::string_view) const {
+  throw NotFoundException("no children");
+}
+File& File::Resolve(const Path& p) const {
+  auto ret = const_cast<File*>(this);
+  for (const auto& term : p) {
+    if (term == "..") {
+      ret = parent_;
+    } else if (term == ".") {
+      // do nothing
+    } else if (term == "$") {
+      ret = &root();
+    } else {
+      ret = &ret->Find(term);
+    }
+  }
+  return *ret;
+}
+File& File::Resolve(std::string_view p) const {
+  return Resolve(Path::Parse(p));
+}
+
+void File::Touch() noexcept {
+  lastmod_ = Clock::now();
+}
+void File::Move(File* parent, std::string_view name) noexcept {
+  parent_ = parent;
+  name_   = name;
+}
+
+File::Path File::abspath() const noexcept {
+  Path ret;
+  for (auto f = this; f->parent_; f = f->parent_) {
+    ret.push_back(f->name_);
+  }
+  ret.push_back("$");
+  std::reverse(ret.begin(), ret.end());
+  return ret;
+}
+
 
 File::TypeInfo::TypeInfo(std::string_view name,
                          std::string_view desc,
@@ -108,50 +122,30 @@ File::TypeInfo::~TypeInfo() noexcept {
 }
 
 
-void File::RefStack::Push(Term&& term) noexcept {
-  terms_.push_back(std::move(term));
-}
-void File::RefStack::Pop() noexcept {
-  terms_.pop_back();
-}
-
-File::Path File::RefStack::GetFullPath() const noexcept {
+File::Path File::Path::Parse(std::string_view path) noexcept {
   Path ret;
-  ret.reserve(terms_.size());
-  for (const auto& term : terms_) {
-    ret.push_back(term.name());
-  }
-  return ret;
-}
-std::string File::RefStack::Stringify() const noexcept {
-  std::string ret = "/";
-  for (const auto& term : terms_) {
-    if (ret.back() != '/') ret.push_back('/');
-    ret += term.name();
-  }
-  return ret;
-}
-
-File::RefStack File::RefStack::Resolve(const Path& p) const {
-  auto a = *this;
-  if (!a.ResolveInplace(p)) throw NotFoundException(p, a);
-  return a;
-}
-
-bool File::RefStack::ResolveInplace(const Path& p) {
-  for (const auto& name : p) {
-    if (name == "..") {
-      if (terms_.empty()) return false;
-      Pop();
-    } else if (name == ":") {
-      terms_.clear();
+  while (path.size()) {
+    const auto a = path.find_first_not_of('/');
+    if (a != std::string::npos) {
+      path.remove_prefix(a);
     } else {
-      auto f = (**this).Find(name);
-      if (!f) return false;
-      Push(Term(name, f));
+      return ret;
     }
+
+    const auto name = path.substr(0, path.find('/'));
+    path.remove_prefix(name.size());
+
+    if (name.size()) ret.emplace_back(name);
   }
-  return true;
+  return ret;
+}
+std::string File::Path::Stringify() const noexcept {
+  std::string ret;
+  for (const auto& name : *this) {
+    ret += name;
+    ret.push_back('/');
+  }
+  return ret;
 }
 
 }  // namespace kingtaker

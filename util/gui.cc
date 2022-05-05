@@ -52,13 +52,12 @@ static bool BeginWindow_end_required_ = false;
 bool BeginWindow(
     File*                 fptr,
     const char*           name,
-    const File::RefStack& ref,
     const File::Event&    ev,
     bool*                 shown,
     ImGuiWindowFlags      flags) noexcept {
   BeginWindow_end_required_ = false;
 
-  const auto id = ref.Stringify()+": "s+name;
+  const auto id = fptr->abspath().Stringify()+" | "s+name;
   if (ev.IsFocused(fptr)) {
     ImGui::SetWindowFocus(id.c_str());
     *shown = true;
@@ -141,34 +140,26 @@ void NodeCanvasResetZoom() noexcept {
 }
 
 
-bool InputPathMenu(const File::Path& basepath, std::string* editing, std::string* path) noexcept {
-  auto ref = File::RefStack().Resolve(basepath);
-  return InputPathMenu(ref, editing, path);
-}
-bool InputPathMenu(File::RefStack& ref, std::string* editing, std::string* path) noexcept {
+File* InputPathMenu(const char* id, File* f, std::string* str) noexcept {
   constexpr auto kFlags = 
       ImGuiInputTextFlags_EnterReturnsTrue |
       ImGuiInputTextFlags_AutoSelectAll;
   static const char* const kHint = "enter new path...";
 
   ImGui::SetKeyboardFocusHere();
-  const bool submit = ImGui::InputTextWithHint("##InputPathMenu", kHint, editing, kFlags);
-  if (ImGui::IsItemActivated()) *editing = *path;
+  const bool submit = ImGui::InputTextWithHint(id, kHint, str, kFlags);
 
   try {
-    auto newref = ref.Resolve(*editing);
+    auto ret = &f->Resolve(*str);
     if (submit) {
       ImGui::CloseCurrentPopup();
-      if (*path == *editing) return false;
-
-      *path = std::move(*editing);
-      return true;
+      return ret;
     }
   } catch (File::NotFoundException&) {
     ImGui::Bullet();
     ImGui::TextUnformatted("file not found");
   }
-  return false;
+  return nullptr;
 }
 
 

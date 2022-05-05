@@ -21,7 +21,6 @@
 #include "util/gui.hh"
 #include "util/luajit.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -100,7 +99,7 @@ class Compile final : public LambdaNodeDriver {
         auto obj = luajit::Obj::PopAndCreate(&dev_, L);
         out->Send(ctx, std::static_pointer_cast<Value::Data>(obj));
       } else {
-        notify::Error(ctx->basepath(), owner, lua_tostring(L, -1));
+        ctx->Notify(owner, lua_tostring(L, -1));
         error->Send(ctx, {});
       }
     };
@@ -142,7 +141,7 @@ class Exec final : public File, public iface::Node {
         auto cdata = ctx->template data<ContextData>(this, this, ctx);
         cdata->func = v.template dataPtr<luajit::Obj>();
       } catch (Exception& e) {
-        notify::Warn(ctx->basepath(), this, e.msg());
+        ctx->Notify(this, e.msg());
       }
     };
     sock_func_.emplace(this, &kInFunc, std::move(task_func));
@@ -151,7 +150,7 @@ class Exec final : public File, public iface::Node {
       try {
         Send(ctx->template data<ContextData>(this, this, ctx), std::move(v));
       } catch (Exception& e) {
-        notify::Error(ctx->basepath(), this, e.msg());
+        ctx->Notify(this, e.msg());
       }
     };
     sock_send_.emplace(this, &kInSend, std::move(task_send));
@@ -170,7 +169,7 @@ class Exec final : public File, public iface::Node {
     return std::make_unique<Exec>(env);
   }
 
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -188,17 +187,8 @@ class Exec final : public File, public iface::Node {
       dev_.NewObjWithoutMeta<std::weak_ptr<ContextData>>(L, cdata);
       if (luaL_newmetatable(L, "Exec_ContextData")) {
         lua_createtable(L, 0, 0);
-          lua_pushcfunction(L, L_log<notify::kTrace>);
-          lua_setfield(L, -2, "trace");
-
-          lua_pushcfunction(L, L_log<notify::kInfo>);
-          lua_setfield(L, -2, "info");
-
-          lua_pushcfunction(L, L_log<notify::kWarn>);
-          lua_setfield(L, -2, "warn");
-
-          lua_pushcfunction(L, L_log<notify::kError>);
-          lua_setfield(L, -2, "error");
+          lua_pushcfunction(L, L_notify);
+          lua_setfield(L, -2, "notify");
 
           lua_pushcfunction(L, L_emit);
           lua_setfield(L, -2, "emit");
@@ -252,15 +242,13 @@ class Exec final : public File, public iface::Node {
     int reg_table_ = LUA_REFNIL;
 
 
-    template <notify::Level kLv>
-    static int L_log(lua_State* L) {
+    static int L_notify(lua_State* L) {
       try {
         auto cdata = Get(L, 1);
         auto ctx   = cdata->ctx();
 
         auto msg = luaL_checkstring(L, 2);
-        notify::Push({std::source_location::current(),
-                     kLv, msg, Path(ctx->basepath()), cdata->owner_});
+        ctx->Notify(cdata->owner_, msg);
         return 0;
       } catch (Exception& e) {
         return luaL_error(L, e.msg().c_str());
@@ -307,13 +295,13 @@ class Exec final : public File, public iface::Node {
       dev_.PushValue(L, v);
       ContextData::Push(L, cdata);
       if (dev_.SandboxCall(L, 2, 0) != 0) {
-        notify::Error(ctx->basepath(), cdata->owner(), lua_tostring(L, -1));
+        ctx->Notify(cdata->owner(), lua_tostring(L, -1));
       }
     };
     dev_.Queue(std::move(task));
   }
 };
-void Exec::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void Exec::UpdateNode(const std::shared_ptr<Editor>&) noexcept {
   ImGui::TextUnformatted("LuaJIT Exec");
 
   ImGui::BeginGroup();

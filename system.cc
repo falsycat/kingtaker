@@ -18,7 +18,6 @@
 #include "util/gui.hh"
 #include "util/keymap.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -41,6 +40,7 @@ class GenericDir : public File,
              bool       shown   = false) :
       File(&kType, env), DirItem(kTree | kMenu),
       items_(std::move(items)), shown_(shown) {
+    for (auto& item : items_) item.second->Move(this, item.first);
   }
 
   GenericDir(Env* env, const msgpack::object& obj) :
@@ -88,10 +88,14 @@ class GenericDir : public File,
     return std::make_unique<GenericDir>(env, std::move(items));
   }
 
-  File* Find(std::string_view name) const noexcept override {
-    auto itr = items_.find(std::string(name));
-    if (itr == items_.end()) return nullptr;
-    return itr->second.get();
+  File& Find(std::string_view name) const override {
+    const auto sname = std::string(name);
+
+    auto itr = items_.find(sname);
+    if (itr == items_.end()) {
+      throw NotFoundException("child not found: "+sname);
+    }
+    return *itr->second;
   }
 
   File* Add(std::string_view name, std::unique_ptr<File>&& f) noexcept override {
@@ -101,7 +105,8 @@ class GenericDir : public File,
     auto [itr, uniq] = items.insert(std::make_pair(std::string(name), std::move(f)));
     if (!uniq) return nullptr;
 
-    lastmod_ = Clock::now();
+    Touch();
+    itr->second->Move(this, name);
     return itr->second.get();
   }
   std::unique_ptr<File> Remove(std::string_view name) noexcept override {
@@ -113,14 +118,15 @@ class GenericDir : public File,
     auto ret = std::move(itr->second);
     items.erase(itr);
 
-    lastmod_ = Clock::now();
+    Touch();
+    ret->Move(nullptr, "");
     return ret;
   }
 
-  void Update(RefStack& ref, Event&) noexcept override;
-  void UpdateMenu(RefStack&) noexcept override;
-  void UpdateTree(RefStack& ref) noexcept override;
-  void UpdateItem(RefStack& ref, File* f) noexcept;
+  void Update(Event&) noexcept override;
+  void UpdateMenu() noexcept override;
+  void UpdateTree() noexcept override;
+  void UpdateItem(File* f) noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Dir, iface::DirItem>(t).
@@ -136,26 +142,24 @@ class GenericDir : public File,
   // volatile params
   std::string name_for_new_;
 };
-void GenericDir::Update(RefStack& ref, Event& ev) noexcept {
-  for (auto& child : items_) {
-    ref.Push({child.first, child.second.get()});
-    (*ref).Update(ref, ev);
-    ref.Pop();
+void GenericDir::Update(Event& ev) noexcept {
+  for (auto& item : items_) {
+    item.second->Update(ev);
   }
 
   const auto em = ImGui::GetFontSize();
   ImGui::SetNextWindowSize({16*em, 12*em}, ImGuiCond_FirstUseEver);
 
-  if (gui::BeginWindow(this, "TreeView", ref, ev, &shown_)) {
+  if (gui::BeginWindow(this, "TreeView", ev, &shown_)) {
     if (ImGui::BeginPopupContextWindow()) {
-      UpdateMenu(ref);
+      UpdateMenu();
       ImGui::EndPopup();
     }
-    UpdateTree(ref);
+    UpdateTree();
   }
   gui::EndWindow();
 }
-void GenericDir::UpdateMenu(RefStack&) noexcept {
+void GenericDir::UpdateMenu() noexcept {
   ImGui::PushID(this);
 
   if (ImGui::BeginMenu("New")) {
@@ -178,11 +182,12 @@ void GenericDir::UpdateMenu(RefStack&) noexcept {
         const bool enter =
             ImGui::InputTextWithHint("##NameForNew", kHint, &name_for_new_, kFlags);
 
-        const bool dup = !!Find(name_for_new_);
+        const bool dup = items_.end() != items_.find(name_for_new_);
         if (dup) {
           ImGui::Bullet();
           ImGui::Text("name duplication");
         }
+
         const bool valid = iface::Dir::ValidateName(name_for_new_);
         if (!valid) {
           ImGui::Bullet();
@@ -207,14 +212,12 @@ void GenericDir::UpdateMenu(RefStack&) noexcept {
 
   ImGui::PopID();
 }
-void GenericDir::UpdateTree(RefStack& ref) noexcept {
+void GenericDir::UpdateTree() noexcept {
   for (auto& child : items_) {
-    ref.Push({child.first, child.second.get()});
-    UpdateItem(ref, child.second.get());
-    ref.Pop();
+    UpdateItem(child.second.get());
   }
 }
-void GenericDir::UpdateItem(RefStack& ref, File* f) noexcept {
+void GenericDir::UpdateItem(File* f) noexcept {
   ImGuiTreeNodeFlags flags =
       ImGuiTreeNodeFlags_NoTreePushOnOpen |
       ImGuiTreeNodeFlags_SpanFullWidth;
@@ -224,19 +227,19 @@ void GenericDir::UpdateItem(RefStack& ref, File* f) noexcept {
     flags |= ImGuiTreeNodeFlags_Leaf;
   }
 
-  const bool open = ImGui::TreeNodeEx(f, flags, "%s", ref.top().name().c_str());
+  const bool open = ImGui::TreeNodeEx(f, flags, "%s", f->name().c_str());
   if (ImGui::IsItemHovered()) {
     ImGui::BeginTooltip();
     ImGui::Text("%s", f->type().name().c_str());
-    ImGui::Text("%s", ref.Stringify().c_str());
+    ImGui::Text("%s", f->abspath().Stringify().c_str());
     if (ditem && (ditem->flags() & kTooltip)) {
-      ditem->UpdateTooltip(ref);
+      ditem->UpdateTooltip();
     }
     ImGui::EndTooltip();
   }
   if (ImGui::BeginPopupContextItem()) {
     if (ImGui::MenuItem("Remove")) {
-      const std::string name = ref.top().name();
+      const std::string name = f->name();
       Queue::main().Push([this, name]() { Remove(name); });
     }
     if (ImGui::MenuItem("Rename")) {
@@ -244,14 +247,14 @@ void GenericDir::UpdateItem(RefStack& ref, File* f) noexcept {
     }
     if (ditem && (ditem->flags() & kMenu)) {
       ImGui::Separator();
-      ditem->UpdateMenu(ref);
+      ditem->UpdateMenu();
     }
     ImGui::EndPopup();
   }
   if (open) {
     ImGui::TreePush(f);
     if (ditem && (ditem->flags() & kTree)) {
-      ditem->UpdateTree(ref);
+      ditem->UpdateTree();
     }
     ImGui::TreePop();
   }
@@ -280,44 +283,6 @@ class ImGuiConfig : public File {
   std::unique_ptr<File> Clone(Env* env) const noexcept override {
     return std::make_unique<ImGuiConfig>(env);
   }
-};
-
-
-class LogView : public File {
- public:
-  static inline TypeInfo kType = TypeInfo::New<LogView>(
-      "System/LogView", "provides system log viewer", {});
-
-  LogView(Env* env, bool shown = true) noexcept :
-      File(&kType, env), shown_(shown) {
-  }
-
-  LogView(Env* env, const msgpack::object& obj) :
-      LogView(env, obj.as<bool>()) {
-  }
-  void Serialize(Packer& pk) const noexcept override {
-    pk.pack(shown_);
-  }
-  std::unique_ptr<File> Clone(Env* env) const noexcept override {
-    return std::make_unique<LogView>(env, shown_);
-  }
-
-  void Update(RefStack& ref, Event& ev) noexcept override {
-    if (gui::BeginWindow(this, "LogView", ref, ev, &shown_)) {
-      ImGui::InputTextWithHint("##filter", "filter", &filter_);
-      ImGui::SameLine();
-      ImGui::Checkbox("auto-scroll", &autoscroll_);
-
-      notify::UpdateLogger(ev, filter_, autoscroll_);
-    }
-    gui::EndWindow();
-  }
-
- private:
-  std::string filter_;
-
-  bool shown_      = true;
-  bool autoscroll_ = true;
 };
 
 
@@ -362,15 +327,15 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
     return std::make_unique<ClockPulseGenerator>(env, path_, sock_name_, shown_, enable_);
   }
 
-  void Update(RefStack& ref, Event& ev) noexcept override {
-    if (enable_) Emit(ref);
+  void Update(Event& ev) noexcept override {
+    if (enable_) Emit();
 
-    if (gui::BeginWindow(this, "ClockPulseGenerator", ref, ev, &shown_)) {
-      UpdateEditor(ref);
+    if (gui::BeginWindow(this, "ClockPulseGenerator", ev, &shown_)) {
+      UpdateEditor();
     }
     gui::EndWindow();
   }
-  void UpdateEditor(RefStack&) noexcept;
+  void UpdateEditor() noexcept;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem>(t).Select(this);
@@ -388,25 +353,25 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
   std::string path_editing_;
 
 
-  void Emit(const RefStack& ref) noexcept {
+  void Emit() noexcept {
     try {
-      auto target = ref.Resolve(path_);
+      auto& target = Resolve(path_);
 
-      auto n = File::iface<iface::Node>(&*target);
+      auto n = File::iface<iface::Node>(&target);
       if (!n) throw Exception("target doesn't have Node interface");
 
       auto sock = n->in(sock_name_);
       if (!sock) throw Exception("missing input socket, "+sock_name_);
 
-      auto ctx = std::make_shared<iface::Node::Context>(target.GetFullPath());
+      auto ctx = std::make_shared<iface::Node::Context>(target.abspath());
       sock->Receive(ctx, Value::Pulse());
-    } catch (Exception& e) {
-      notify::Warn(ref, e.msg());
+    } catch (Exception&) {
+      // TODO: logging
       enable_ = false;
     }
   }
 };
-void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
+void ClockPulseGenerator::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto w  = 8*em;
 
@@ -420,7 +385,9 @@ void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
         ImGui::SetTooltip("%s", path_.c_str());
       }
       if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
-        gui::InputPathMenu(ref, &path_editing_, &path_);
+        if (gui::InputPathMenu("##path_input", this, &path_editing_)) {
+          path_ = std::move(path_editing_);
+        }
         ImGui::EndPopup();
       }
     }
@@ -429,7 +396,7 @@ void ClockPulseGenerator::UpdateEditor(RefStack& ref) noexcept {
     // pulse emit button
     ImGui::SameLine();
     if (ImGui::Button("Z")) {
-      Emit(ref);
+      Emit();
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("emits pulse manually");
 

@@ -45,9 +45,9 @@ class Node {
   Node& operator=(const Node&) = delete;
   Node& operator=(Node&&) = delete;
 
-  virtual void Update(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
-  virtual void UpdateNode(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
-  virtual void UpdateMenu(File::RefStack&, const std::shared_ptr<Editor>&) noexcept { }
+  virtual void Update(const std::shared_ptr<Editor>&) noexcept { }
+  virtual void UpdateNode(const std::shared_ptr<Editor>&) noexcept { }
+  virtual void UpdateMenu(const std::shared_ptr<Editor>&) noexcept { }
 
   std::span<InSock* const> in() const noexcept { return in_; }
   std::span<OutSock* const> out() const noexcept { return out_; }
@@ -133,6 +133,7 @@ class Node::Context {
 
   // must be thread-safe
   virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
+  virtual void Notify(File*, std::string_view) noexcept { }
 
   // Returns an empty when the socket is destructed or missing.
   virtual std::vector<InSock*> dstOf(const OutSock*) const noexcept { return {}; }

@@ -9,7 +9,6 @@
 
 #include "util/gui.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -47,7 +46,7 @@ class Passthru final : public File, public iface::Node {
     return std::make_unique<Passthru>(env);
   }
 
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -57,7 +56,7 @@ class Passthru final : public File, public iface::Node {
   OutSock          sock_out_;
   NodeLambdaInSock sock_in_;
 };
-void Passthru::UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void Passthru::UpdateNode(const std::shared_ptr<Editor>&) noexcept {
   ImGui::TextUnformatted("PASSTHRU");
 
   if (ImNodes::BeginInputSlot("in", 1)) {
@@ -118,7 +117,7 @@ class Await final : public File, public iface::Node {
     return std::make_unique<Await>(env);
   }
 
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
@@ -162,7 +161,7 @@ class Await final : public File, public iface::Node {
 
   std::array<std::optional<CustomInSock>, kMaxIn> sock_in_;
 };
-void Await::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+void Await::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   auto cdata = ctx->data<ContextData>(this);
 
   const auto& recv = cdata->recv;

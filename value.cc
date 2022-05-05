@@ -21,7 +21,6 @@
 #include "util/gui.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
-#include "util/notify.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -75,8 +74,8 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
     return std::make_unique<Imm>(env, Value(data.value), data.size);
   }
 
-  void UpdateTree(RefStack&) noexcept override;
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateTree() noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
   void UpdateTypeChanger(bool mini = false) noexcept;
   void UpdateEditor() noexcept;
 
@@ -99,7 +98,7 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
     }
     void Restore(const UniversalData& src) noexcept {
       *this = src;
-      owner_->OnUpdate();
+      owner_->Touch();
     }
 
     Value  value;
@@ -113,18 +112,13 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
 
   OutSock          sock_out_;
   NodeLambdaInSock sock_clk_;
-
-
-  void OnUpdate() noexcept {
-    lastmod_ = Clock::now();
-  }
 };
-void Imm::UpdateTree(RefStack&) noexcept {
+void Imm::UpdateTree() noexcept {
   UpdateTypeChanger();
   ImGui::SameLine();
   UpdateEditor();
 }
-void Imm::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+void Imm::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::TextUnformatted("IMM:");
   ImGui::SameLine();
   UpdateTypeChanger(true);
@@ -165,19 +159,19 @@ void Imm::UpdateTypeChanger(bool mini) noexcept {
   if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
     if (ImGui::MenuItem("integer", nullptr, v.isInteger())) {
       v = Value::Integer {0};
-      OnUpdate();
+      Touch();
     }
     if (ImGui::MenuItem("scalar", nullptr, v.isScalar())) {
       v = Value::Scalar {0};
-      OnUpdate();
+      Touch();
     }
     if (ImGui::MenuItem("boolean", nullptr, v.isBoolean())) {
       v = Value::Boolean {false};
-      OnUpdate();
+      Touch();
     }
     if (ImGui::MenuItem("string", nullptr, v.isString())) {
       v = ""s;
-      OnUpdate();
+      Touch();
     }
     ImGui::EndPopup();
   }
@@ -195,25 +189,25 @@ void Imm::UpdateEditor() noexcept {
     gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(data.size.x*em);
     if (ImGui::DragScalar("##editor", ImGuiDataType_S64, &v.integer())) {
-      OnUpdate();
+      Touch();
     }
 
   } else if (v.isScalar()) {
     gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {12, fh/em}, em);
     ImGui::SetNextItemWidth(data.size.x*em);
     if (ImGui::DragScalar("##editor", ImGuiDataType_Double, &v.scalar())) {
-      OnUpdate();
+      Touch();
     }
 
   } else if (v.isBoolean()) {
     if (ImGui::Checkbox("##editor", &v.boolean())) {
-      OnUpdate();
+      Touch();
     }
 
   } else if (v.isString()) {
     gui::ResizeGroup _("##resizer", &data.size, {4, fh/em}, {24, 24}, em);
     if (ImGui::InputTextMultiline("##editor", &v.stringUniq(), data.size*em)) {
-      OnUpdate();
+      Touch();
     }
 
   } else {
@@ -234,7 +228,7 @@ class NameOrPick : public File, public iface::Node {
       memento_({this, std::move(n)}) {
   }
 
-  void UpdateMenu(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateMenu(const std::shared_ptr<Editor>&) noexcept override;
   void UpdateNames(const std::shared_ptr<Editor>&) noexcept;
   virtual void UpdateSock(const std::string&) noexcept = 0;
   bool UpdateNamingMenu(const std::string&) noexcept;
@@ -280,7 +274,7 @@ class NameOrPick : public File, public iface::Node {
   // volatile
   std::string new_name_;
 };
-void NameOrPick::UpdateMenu(RefStack&, const std::shared_ptr<Editor>&) noexcept {
+void NameOrPick::UpdateMenu(const std::shared_ptr<Editor>&) noexcept {
   if (ImGui::BeginMenu("append")) {
     UpdateAddMenu(udata().names.size());
     ImGui::EndMenu();
@@ -387,7 +381,7 @@ class Name final : public NameOrPick {
     return std::make_unique<Name>(env, std::vector<std::string>(udata().names));
   }
 
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
   void UpdateSock(const std::string&) noexcept override;
 
  private:
@@ -429,7 +423,7 @@ class Name final : public NameOrPick {
     SockMeta meta_;
   };
 };
-void Name::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+void Name::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::TextUnformatted("NAME");
 
   UpdateNames(ctx);
@@ -477,7 +471,7 @@ class Pick final : public NameOrPick {
     return std::make_unique<Pick>(env, std::vector<std::string>(udata().names));
   }
 
-  void UpdateNode(RefStack&, const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
   void UpdateSock(const std::string&) noexcept override;
 
  private:
@@ -518,7 +512,7 @@ class Pick final : public NameOrPick {
       sock->Send(ctx, Value(value));
     }
   } catch (Exception& e) {
-    notify::Warn(ctx->basepath(), this, e.msg());
+    ctx->Notify(this, e.msg());
   }
 
   class CustomOutSock final : public OutSock {
@@ -530,7 +524,7 @@ class Pick final : public NameOrPick {
     SockMeta meta_;
   };
 };
-void Pick::UpdateNode(RefStack&, const std::shared_ptr<Editor>& ctx) noexcept {
+void Pick::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   auto& names = udata().names;
   w_ = 0;
   for (const auto& name : names) {

@@ -30,7 +30,6 @@ class ResizeGroup final {
 bool BeginWindow(
     File*,
     const char*,
-    const File::RefStack&,
     const File::Event&,
     bool*,
     ImGuiWindowFlags = 0) noexcept;
@@ -45,8 +44,7 @@ void NodeCanvasSetZoom() noexcept;
 void NodeCanvasResetZoom() noexcept;
 
 
-bool InputPathMenu(const File::Path&, std::string* editing, std::string* path) noexcept;
-bool InputPathMenu(File::RefStack&, std::string* editing, std::string* path) noexcept;
+File* InputPathMenu(const char* id, File*, std::string* str) noexcept;
 
 void TextCenterChopped(std::string_view, float w) noexcept;
 

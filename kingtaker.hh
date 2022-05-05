@@ -109,17 +109,13 @@ class Queue {
 class File {
  public:
   class TypeInfo;
-  class RefStack;
+  class Path;
   class Env;
   class Event;
 
   class NotFoundException;
 
-  using Path     = std::vector<std::string>;
   using Registry = std::map<std::string, TypeInfo*>;
-
-  static Path ParsePath(std::string_view) noexcept;
-  static std::string StringifyPath(const Path&) noexcept;
 
   static const TypeInfo* Lookup(const std::string&) noexcept;
   static std::unique_ptr<File> Deserialize(Env*, const msgpack::object&);
@@ -135,7 +131,7 @@ class File {
   static const Registry& registry() noexcept;
 
   File(const TypeInfo* type, Env* env, Time lastmod = Clock::now()) noexcept :
-      lastmod_(lastmod), type_(type), env_(env) {
+      type_(type), env_(env), lastmod_(lastmod) {
   }
   File() = delete;
   virtual ~File() = default;
@@ -147,32 +143,50 @@ class File {
   virtual void Serialize(Packer&) const noexcept = 0;
   virtual std::unique_ptr<File> Clone(Env*) const noexcept = 0;
 
-  // To make children referrable by path specification, returns them.
-  virtual File* Find(std::string_view) const noexcept { return nullptr; }
-
-  // Be called on each GUI updates.
-  virtual void Update(RefStack&, Event&) noexcept { }
-
-  // Takes typeinfo of the requested interface and
-  // returns a pointer of the implementation or nullptr if not implemented.
-  virtual void* iface(const std::type_index&) noexcept { return nullptr; }
-
   // Calls Serialize() after packing TypeInfo.
   // To make it available to deserialize by File::Deserialize(),
   // use this instead of Serialize().
   void SerializeWithTypeInfo(Packer&) const noexcept;
 
+  // Be called on each GUI updates.
+  virtual void Update(Event&) noexcept { }
+
+  // To make children referrable by path specification, returns them.
+  // If there's no such child, throw NotFoundException.
+  virtual File& Find(std::string_view) const;
+
+  // Returns a file specified by the relative path or throws NotFoundException.
+  File& Resolve(const Path&) const;
+  File& Resolve(std::string_view p) const;
+
+  // Sets lastmod to current time.
+  void Touch() noexcept;
+
+  // Notifies this file is moved under new parent with new name.
+  void Move(File*, std::string_view) noexcept;
+
+  // Takes typeinfo of the requested interface and
+  // returns a pointer of the implementation or nullptr if not implemented.
+  virtual void* iface(const std::type_index&) noexcept { return nullptr; }
+
+  Path abspath() const noexcept;
+
   const TypeInfo& type() const noexcept { return *type_; }
   Env& env() const noexcept { return *env_; }
   Time lastmod() const noexcept { return lastmod_; }
-
- protected:
-  Time lastmod_;
+  File* parent() const noexcept { return parent_; }
+  const std::string& name() const noexcept { return name_; }
 
  private:
   const TypeInfo* type_;
 
   Env* env_;
+
+  Time lastmod_;
+
+  File* parent_ = nullptr;
+
+  std::string name_;
 };
 
 class File::TypeInfo final {
@@ -242,51 +256,12 @@ class File::TypeInfo final {
   Deserializer deserializer_;
 };
 
-class File::RefStack final {
+class File::Path final : public std::vector<std::string> {
  public:
-  struct Term {
-   public:
-    Term(std::string_view name, File* file) noexcept : name_(name), file_(file) { }
-    Term() = default;
-    Term(const Term&) = default;
-    Term(Term&&) = default;
-    Term& operator=(const Term&) = default;
-    Term& operator=(Term&&) = default;
+  using vector::vector;
 
-    const std::string& name() const noexcept { return name_; }
-    File& file() const noexcept { return *file_; }
-
-   private:
-    std::string name_;
-
-    File* file_;
-  };
-
-  RefStack() = default;
-  RefStack(const RefStack&) = default;
-  RefStack(RefStack&&) = default;
-  RefStack& operator=(const RefStack&) = default;
-  RefStack& operator=(RefStack&&) = default;
-
-  File& operator*() const noexcept { return terms_.empty()? root(): terms_.back().file(); }
-
-  void Push(Term&&) noexcept;
-  void Pop() noexcept;
-
-  RefStack Resolve(const Path& p) const;
-  RefStack Resolve(std::string_view p) const { return Resolve(ParsePath(p)); }
-
-  Path GetFullPath() const noexcept;
+  static Path Parse(std::string_view) noexcept;
   std::string Stringify() const noexcept;
-
-  const Term& top() const noexcept { return terms_.back(); }
-  const Term& terms(std::size_t i) const noexcept { return terms_[i]; }
-  std::size_t size() const noexcept { return terms_.size(); }
-
- private:
-  bool ResolveInplace(const Path& p);
-
-  std::vector<Term> terms_;
 };
 
 class File::Env final {
@@ -354,10 +329,8 @@ class File::Event {
 
 class File::NotFoundException : public Exception {
  public:
-  NotFoundException(const Path& p, const RefStack& st, Loc loc = Loc::current()) noexcept :
-      Exception(
-          "file not found in '"s+st.Stringify()+
-          "' while resolving '"s+StringifyPath(p)+"'"s, loc) {
+  NotFoundException(std::string_view msg, Loc loc = Loc::current()) noexcept :
+      Exception(msg, loc) {
   }
 };
 

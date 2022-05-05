@@ -18,7 +18,6 @@
 
 #include "util/gl.hh"
 #include "util/gui.hh"
-#include "util/notify.hh"
 #include "util/queue.hh"
 
 // To prevent conflicts because of fucking windows.h, include GLFW last.
@@ -70,10 +69,9 @@ class Event final : public File::Event {
   Event() noexcept : File::Event(next_.st, std::move(next_.focus)) {
     next_.st = closing()? kClosed: kNone;
   }
-  void CancelClosing(File* f, std::string_view msg) noexcept override {
+  void CancelClosing(File*, std::string_view) noexcept override {
     next_.st &= static_cast<Status>(~kClosed);
-    notify::Warn(
-        {}, f, "closing is refused by a file\nreason: "+std::string(msg));
+    // TODO: logging
   }
   void Focus(File* f) noexcept override {
     next_.focus.insert(f);
@@ -242,9 +240,8 @@ void Update() noexcept {
   if (UpdatePanic()) return;
 
   // update GUI
-  File::RefStack path;
-  Event          ev;
-  root_->Update(path, ev);
+  Event ev;
+  root_->Update(ev);
   UpdateAppMenu();
 }
 bool UpdatePanic() noexcept {
@@ -297,13 +294,13 @@ void UpdateAppMenu() noexcept {
     }
     if (ImGui::BeginMenu("View")) {
       if (ImGui::MenuItem("focus root")) {
-        next_.focus.insert(&*File::RefStack());
+        next_.focus.insert(root_.get());
       }
       if (ImGui::BeginMenu("focus by path")) {
-        static std::string path, path_editing;
-        File::RefStack ref;
-        if (gui::InputPathMenu(ref, &path_editing, &path)) {
-          next_.focus.insert(&*ref.Resolve(path));
+        static std::string path;
+        if (auto f = gui::InputPathMenu("##path_edit", root_.get(), &path)) {
+          path = "";
+          next_.focus.insert(f);
         }
         ImGui::EndMenu();
       }
