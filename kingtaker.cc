@@ -17,7 +17,7 @@ std::string Exception::Stringify() const noexcept {
   std::stringstream st;
   st << msg_ << "\n";
   st << "IN   " << loc_.function_name() << "\n";
-  st << "FROM " << loc_.file_name() << ":" << loc_.line() << ":" << loc_.column() << std::endl;
+  st << "FROM " << loc_.file_name() << "$" << loc_.line() << "$" << loc_.column() << std::endl;
   return st.str();
 }
 std::string HeavyException::Stringify() const noexcept {
@@ -73,7 +73,7 @@ File& File::Resolve(const Path& p) const {
       ret = parent_;
     } else if (term == ".") {
       // do nothing
-    } else if (term == ":") {
+    } else if (term == "$") {
       ret = &root();
     } else {
       ret = &ret->Find(term);
@@ -98,7 +98,7 @@ File::Path File::abspath() const noexcept {
   for (auto f = this; f->parent_; f = f->parent_) {
     ret.push_back(f->name_);
   }
-  ret.push_back(":");
+  ret.push_back("$");
   std::reverse(ret.begin(), ret.end());
   return ret;
 }
