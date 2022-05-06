@@ -111,7 +111,7 @@ void Imm::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::SameLine();
   UpdateTypeChanger(true);
 
-  if (ImNodes::BeginInputSlot("CLK", 1)) {
+  if (ImNodes::BeginInputSlot("clk", 1)) {
     ImGui::AlignTextToFramePadding();
     gui::NodeSockPoint();
     ImGui::SameLine();
