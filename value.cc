@@ -36,11 +36,11 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
 
   Imm(Env* env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
-      mem_({this, std::move(v), size}),
+      memento_(this, {std::move(v), size}),
       sock_out_(this, "out"),
       sock_clk_(this, "clk",
                 [this](auto& ctx, auto&&) {
-                  sock_out_.Send(ctx, Value(mem_.data().value));
+                  sock_out_.Send(ctx, Value(memento_.data().value));
                 }) {
     in_  = {&sock_clk_};
     out_ = {&sock_out_};
@@ -54,7 +54,7 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);
 
-    const auto& data = mem_.data();
+    const auto& data = memento_.data();
 
     pk.pack("size");
     pk.pack(std::make_pair(data.size.x, data.size.y));
@@ -63,7 +63,7 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
     data.value.Serialize(pk);
   }
   std::unique_ptr<File> Clone(Env* env) const noexcept override {
-    const auto& data = mem_.data();
+    const auto& data = memento_.data();
     return std::make_unique<Imm>(env, Value(data.value), data.size);
   }
 
@@ -74,14 +74,14 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Memento, iface::Node>(t).
-        Select(this, &mem_);
+        Select(this, &memento_);
   }
 
  private:
   class UniversalData final {
    public:
-    UniversalData(Imm* o, Value&& v, ImVec2 sz) noexcept :
-        value(std::move(v)), size(sz), owner_(o) {
+    UniversalData(Value&& v, ImVec2 sz) noexcept :
+        value(std::move(v)), size(sz) {
     }
 
     bool operator==(const UniversalData& other) const noexcept {
@@ -89,19 +89,14 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
           value == other.value &&
           size.x == other.size.x && size.y == other.size.y;
     }
-    void Restore(const UniversalData& src) noexcept {
-      *this = src;
-      owner_->Touch();
+    void Restore(Imm* owner) noexcept {
+      owner->Touch();
     }
 
     Value  value;
     ImVec2 size;
-
-   private:
-    Imm* owner_;
   };
-  using Memento = SimpleMemento<UniversalData>;
-  Memento mem_;
+  SimpleMemento<Imm, UniversalData> memento_;
 
   OutSock          sock_out_;
   NodeLambdaInSock sock_clk_;
@@ -139,7 +134,7 @@ void Imm::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   }
 }
 void Imm::UpdateTypeChanger(bool mini) noexcept {
-  auto& v = mem_.data().value;
+  auto& v = memento_.data().value;
 
   const char* type =
       v.isInteger()? "Int":
@@ -174,7 +169,7 @@ void Imm::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
 
-  auto& data = mem_.data();
+  auto& data = memento_.data();
   auto& v    = data.value;
 
   ImGui::SameLine();
@@ -207,8 +202,8 @@ void Imm::UpdateEditor() noexcept {
     ImGui::TextUnformatted("UNKNOWN TYPE X(");
   }
 
-  if (!ImGui::IsAnyItemActive() && data != mem_.commitData()) {
-    mem_.Commit();
+  if (!ImGui::IsAnyItemActive() && data != memento_.commitData()) {
+    memento_.Commit();
   }
 }
 
@@ -218,7 +213,7 @@ class NameOrPick : public File, public iface::Node {
  public:
   NameOrPick(TypeInfo* type, Env* env, std::vector<std::string>&& n = {}) noexcept :
       File(type, env), Node(Node::kMenu),
-      memento_({this, std::move(n)}) {
+      memento_(this, {std::move(n)}) {
   }
 
   void UpdateMenu(const std::shared_ptr<Editor>&) noexcept override;
@@ -235,19 +230,15 @@ class NameOrPick : public File, public iface::Node {
  protected:
   struct UniversalData final {
    public:
-    UniversalData(NameOrPick* owner, std::vector<std::string>&& n) noexcept :
-        names(std::move(n)), owner_(owner) {
+    UniversalData(std::vector<std::string>&& n) noexcept :
+        names(std::move(n)) {
     }
-    void Restore(const UniversalData& other) {
-      names = other.names;
-      owner_->Rebuild();
+    void Restore(NameOrPick* owner) {
+      owner->Rebuild();
     }
 
     // permanentized
     std::vector<std::string> names;
-
-   private:
-    NameOrPick* owner_;
   };
   UniversalData& udata() noexcept { return memento_.data(); }
   const UniversalData& udata() const noexcept { return memento_.data(); }
@@ -262,7 +253,7 @@ class NameOrPick : public File, public iface::Node {
   }
 
  private:
-  SimpleMemento<UniversalData> memento_;
+  SimpleMemento<NameOrPick, UniversalData> memento_;
 
   // volatile
   std::string new_name_;
