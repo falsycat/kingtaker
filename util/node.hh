@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include <imgui.h>
+#include <msgpack.hh>
 
 #include "iface/node.hh"
 
@@ -349,5 +350,54 @@ void LambdaNode<Driver>::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept
   }
   ImGui::EndGroup();
 }
+
+
+// Saves all socket names of a specific node.
+class NodeSockNameList final {
+ public:
+  NodeSockNameList() = default;
+  NodeSockNameList(iface::Node* node) noexcept {
+    in_.reserve(node->in().size());
+    for (auto sock : node->in()) in_.push_back(sock->name());
+
+    out_.reserve(node->out().size());
+    for (auto sock : node->out()) out_.push_back(sock->name());
+  }
+  NodeSockNameList(const NodeSockNameList&) = default;
+  NodeSockNameList(NodeSockNameList&&) = default;
+  NodeSockNameList& operator=(const NodeSockNameList&) = default;
+  NodeSockNameList& operator=(NodeSockNameList&&) = default;
+
+  bool operator==(const NodeSockNameList& other) const noexcept {
+    return other.in_ == in_ && other.out_ == out_;
+  }
+  bool operator!=(const NodeSockNameList& other) const noexcept {
+    return other.in_ != in_ || other.out_ != out_;
+  }
+
+  NodeSockNameList(const msgpack::object& obj) {
+    msgpack::find(obj, "in"s).convert(in_);
+    msgpack::find(obj, "out"s).convert(out_);
+  }
+  void Serialize(Packer& pk) const noexcept {
+    pk.pack_map(2);
+
+    pk.pack("in"s);
+    pk.pack(in_);
+
+    pk.pack("out"s);
+    pk.pack(out_);
+  }
+
+  const std::string& in(size_t i) const noexcept { return in_[i]; }
+  const std::string& out(size_t i) const noexcept { return out_[i]; }
+
+  std::span<const std::string> in() const noexcept { return in_; }
+  std::span<const std::string> out() const noexcept { return out_; }
+
+ private:
+  std::vector<std::string> in_;
+  std::vector<std::string> out_;
+};
 
 }  // namespace kingtaker
