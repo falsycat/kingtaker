@@ -21,18 +21,10 @@ class Passthru final : public File, public iface::Node {
       "Logic/Passthru", "passes all inputs into output directly",
       {typeid(iface::Node)});
 
-  static inline const SockMeta kInMeta = {
-    .name = "in", .type = SockMeta::kAny, .trigger = true,
-  };
-  static inline const SockMeta kOutMeta = {
-    .name = "out", .type = SockMeta::kAny,
-  };
-
   Passthru(Env* env) noexcept :
       File(&kType, env), Node(kNone),
-      sock_out_(this, &kOutMeta),
-      sock_in_(this, &kInMeta,
-               [this](auto& ctx, auto&& v) { sock_out_.Send(ctx, std::move(v)); }) {
+      sock_out_(this, "out"),
+      sock_in_(this, "in", [this](auto& ctx, auto&& v) { sock_out_.Send(ctx, std::move(v)); }) {
     out_ = {&sock_out_};
     in_  = {&sock_in_};
   }
@@ -81,24 +73,10 @@ class Await final : public File, public iface::Node {
       "Logic/Await", "passes all inputs into output directly",
       {typeid(iface::Node)});
 
-  static inline const SockMeta kOutMeta = {
-    .name = "out", .type = SockMeta::kPulse,
-  };
-
   static constexpr size_t kMaxIn = 16;
-  static inline const std::vector<SockMeta> kInMeta = ([]() {
-    std::vector<SockMeta> meta;
-    for (size_t i = 0; i < kMaxIn; ++i) {
-      meta.push_back({
-            .name = std::to_string(i),
-            .type = SockMeta::kPulse,
-          });
-    }
-    return meta;
-  })();
 
   Await(Env* env) noexcept :
-      File(&kType, env), Node(kNone), sock_out_(this, &kOutMeta) {
+      File(&kType, env), Node(kNone), sock_out_(this, "out") {
     out_.push_back(&sock_out_);
 
     in_.resize(kMaxIn);
@@ -132,7 +110,8 @@ class Await final : public File, public iface::Node {
   class CustomInSock final : public InSock {
    public:
     CustomInSock(Await* owner, size_t idx) noexcept :
-        InSock(owner, &kInMeta[idx]), owner_(owner), idx_(idx) {
+        InSock(owner, std::string(1, static_cast<char>('A'+idx))),
+        owner_(owner), idx_(idx) {
       assert(idx_ < kMaxIn);
     }
     void Receive(const std::shared_ptr<Context>& ctx, Value&&) noexcept {
@@ -233,13 +212,13 @@ class SetAndGet final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "clear", .type = SockMeta::kPulse, .trigger = true, },
-    { .name = "set",   .type = SockMeta::kAny, },
-    { .name = "get",   .type = SockMeta::kPulse, .trigger = true, },
+    { "clear", "" },
+    { "set", "" },
+    { "get", "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out",  .type = SockMeta::kAny,   },
-    { .name = "null", .type = SockMeta::kPulse, },
+    { "out", "" },
+    { "null", "" },
   };
 
   SetAndGet() = delete;
@@ -292,10 +271,10 @@ class Once final : public LambdaNodeDriver {
       {typeid(iface::Node)});
 
   static inline const std::vector<SockMeta> kInSocks = {
-    { .name = "in", .type = SockMeta::kPulse, .trigger = true, },
+    { "in", "" },
   };
   static inline const std::vector<SockMeta> kOutSocks = {
-    { .name = "out", .type = SockMeta::kPulse, },
+    { "out", "" },
   };
 
   Once() = delete;

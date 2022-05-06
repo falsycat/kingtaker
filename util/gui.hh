@@ -1,12 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
 
 #include <imgui.h>
 
 #include "kingtaker.hh"
-
-#include "iface/node.hh"
 
 
 namespace kingtaker::gui {
@@ -37,8 +36,8 @@ void EndWindow() noexcept;
 
 
 void NodeSockPoint() noexcept;
-void NodeInSock(const iface::Node::SockMeta&) noexcept;
-void NodeOutSock(const iface::Node::SockMeta&) noexcept;
+void NodeInSock(const std::string&, const std::string& = "") noexcept;
+void NodeOutSock(const std::string&, const std::string& = "") noexcept;
 
 void NodeCanvasSetZoom() noexcept;
 void NodeCanvasResetZoom() noexcept;
@@ -46,6 +45,13 @@ void NodeCanvasResetZoom() noexcept;
 
 File* InputPathMenu(const char* id, File*, std::string* str) noexcept;
 
-void TextCenterChopped(std::string_view, float w) noexcept;
+
+inline float CalcTextMaxWidth(const auto& list, const auto& func) noexcept {
+  float ret = 0;
+  for (const auto& item : list) {
+    ret = std::max(ret, ImGui::CalcTextSize(func(item)).x);
+  }
+  return ret;
+}
 
 }  // namespace kingtaker::gui

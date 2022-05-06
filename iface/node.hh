@@ -26,7 +26,6 @@ class Node {
   class Context;
   class Editor;
 
-  struct SockMeta;
   class  Sock;
   class  InSock;
   class  OutSock;
@@ -185,49 +184,9 @@ class Node::Editor : public Context {
   }
 };
 
-struct Node::SockMeta final {
- public:
-  enum Type {
-    kAny,
-    kPulse,
-    kInteger,
-    kScalar,
-    kVec2,
-    kVec3,
-    kVec4,
-    kScalarNormal,
-    kVec2Normal,
-    kVec3Normal,
-    kVec4Normal,
-    kNamedValue,
-    kString,
-    kStringMultiline,
-    kStringOption,
-    kStringPath,
-    kData,
-  };
-
-  std::string name;  // must be unique in the node
-  Type        type = kAny;
-  std::string desc = "";
-
-  // flags
-  unsigned trigger : 1 = false;
-  unsigned multi   : 1 = false;
-
-  // default value
-  std::optional<Value> def = std::nullopt;
-
-  // when type == kStringOption
-  std::vector<Value::String> stringOptions = {};
-
-  // when type == kData
-  std::string dataType = "";
-};
-
 class Node::Sock {
  public:
-  Sock(Node* o, const SockMeta* meta) noexcept : owner_(o), meta_(meta) {
+  Sock(Node* o, std::string_view name) noexcept : owner_(o), name_(name) {
   }
   virtual ~Sock() = default;
   Sock(const Sock&) = delete;
@@ -236,25 +195,23 @@ class Node::Sock {
   Sock& operator=(Sock&&) = delete;
 
   Node* owner() const noexcept { return owner_; }
-  const SockMeta& meta() const noexcept { return *meta_; }
-  const std::string& name() const noexcept { return meta_->name; }
+  const std::string& name() const noexcept { return name_; }
 
  private:
   Node* owner_;
-
-  const SockMeta* meta_;
+  std::string name_;
 };
 
 class Node::InSock : public Sock {
  public:
-  InSock(Node* o, const SockMeta* meta) noexcept : Sock(o, meta) {
+  InSock(Node* o, std::string_view name) noexcept : Sock(o, name) {
   }
   virtual void Receive(const std::shared_ptr<Context>&, Value&&) noexcept { }
 };
 
 class Node::OutSock : public Sock {
  public:
-  OutSock(Node* o, const SockMeta* meta) noexcept : Sock(o, meta) {
+  OutSock(Node* o, std::string_view name) noexcept : Sock(o, name) {
   }
 
   // thread-safe

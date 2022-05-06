@@ -34,20 +34,13 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
       "Value/Imm", "immediate value",
       {typeid(iface::Memento), typeid(iface::DirItem), typeid(iface::Node)});
 
-  static inline const SockMeta kIn = {
-    .name = "clk", .type = SockMeta::kPulse, .trigger = true, .def = Value::Pulse{},
-  };
-  static inline const SockMeta kOut = {
-    .name = "out", .type = SockMeta::kAny,
-  };
-
   Imm(Env* env, Value&& v = Value::Integer {0}, ImVec2 size = {0, 0}) noexcept :
       File(&type_, env), DirItem(DirItem::kTree), Node(Node::kNone),
-      mem_({this, std::move(v), size}),
-      sock_out_(this, &kOut),
-      sock_clk_(this, &kIn,
+      memento_(this, {std::move(v), size}),
+      sock_out_(this, "out"),
+      sock_clk_(this, "clk",
                 [this](auto& ctx, auto&&) {
-                  sock_out_.Send(ctx, Value(mem_.data().value));
+                  sock_out_.Send(ctx, Value(memento_.data().value));
                 }) {
     in_  = {&sock_clk_};
     out_ = {&sock_out_};
@@ -61,7 +54,7 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
   void Serialize(Packer& pk) const noexcept override {
     pk.pack_map(2);
 
-    const auto& data = mem_.data();
+    const auto& data = memento_.data();
 
     pk.pack("size");
     pk.pack(std::make_pair(data.size.x, data.size.y));
@@ -70,7 +63,7 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
     data.value.Serialize(pk);
   }
   std::unique_ptr<File> Clone(Env* env) const noexcept override {
-    const auto& data = mem_.data();
+    const auto& data = memento_.data();
     return std::make_unique<Imm>(env, Value(data.value), data.size);
   }
 
@@ -81,14 +74,14 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Memento, iface::Node>(t).
-        Select(this, &mem_);
+        Select(this, &memento_);
   }
 
  private:
   class UniversalData final {
    public:
-    UniversalData(Imm* o, Value&& v, ImVec2 sz) noexcept :
-        value(std::move(v)), size(sz), owner_(o) {
+    UniversalData(Value&& v, ImVec2 sz) noexcept :
+        value(std::move(v)), size(sz) {
     }
 
     bool operator==(const UniversalData& other) const noexcept {
@@ -96,19 +89,14 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
           value == other.value &&
           size.x == other.size.x && size.y == other.size.y;
     }
-    void Restore(const UniversalData& src) noexcept {
-      *this = src;
-      owner_->Touch();
+    void Restore(Imm* owner) noexcept {
+      owner->Touch();
     }
 
     Value  value;
     ImVec2 size;
-
-   private:
-    Imm* owner_;
   };
-  using Memento = SimpleMemento<UniversalData>;
-  Memento mem_;
+  SimpleMemento<Imm, UniversalData> memento_;
 
   OutSock          sock_out_;
   NodeLambdaInSock sock_clk_;
@@ -123,7 +111,7 @@ void Imm::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   ImGui::SameLine();
   UpdateTypeChanger(true);
 
-  if (ImNodes::BeginInputSlot("CLK", 1)) {
+  if (ImNodes::BeginInputSlot("clk", 1)) {
     ImGui::AlignTextToFramePadding();
     gui::NodeSockPoint();
     ImGui::SameLine();
@@ -146,7 +134,7 @@ void Imm::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   }
 }
 void Imm::UpdateTypeChanger(bool mini) noexcept {
-  auto& v = mem_.data().value;
+  auto& v = memento_.data().value;
 
   const char* type =
       v.isInteger()? "Int":
@@ -181,7 +169,7 @@ void Imm::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
   const auto fh = ImGui::GetFrameHeight();
 
-  auto& data = mem_.data();
+  auto& data = memento_.data();
   auto& v    = data.value;
 
   ImGui::SameLine();
@@ -214,8 +202,8 @@ void Imm::UpdateEditor() noexcept {
     ImGui::TextUnformatted("UNKNOWN TYPE X(");
   }
 
-  if (!ImGui::IsAnyItemActive() && data != mem_.commitData()) {
-    mem_.Commit();
+  if (!ImGui::IsAnyItemActive() && data != memento_.commitData()) {
+    memento_.Commit();
   }
 }
 
@@ -225,7 +213,7 @@ class NameOrPick : public File, public iface::Node {
  public:
   NameOrPick(TypeInfo* type, Env* env, std::vector<std::string>&& n = {}) noexcept :
       File(type, env), Node(Node::kMenu),
-      memento_({this, std::move(n)}) {
+      memento_(this, {std::move(n)}) {
   }
 
   void UpdateMenu(const std::shared_ptr<Editor>&) noexcept override;
@@ -242,19 +230,15 @@ class NameOrPick : public File, public iface::Node {
  protected:
   struct UniversalData final {
    public:
-    UniversalData(NameOrPick* owner, std::vector<std::string>&& n) noexcept :
-        names(std::move(n)), owner_(owner) {
+    UniversalData(std::vector<std::string>&& n) noexcept :
+        names(std::move(n)) {
     }
-    void Restore(const UniversalData& other) {
-      names = other.names;
-      owner_->Rebuild();
+    void Restore(NameOrPick* owner) {
+      owner->Rebuild();
     }
 
     // permanentized
     std::vector<std::string> names;
-
-   private:
-    NameOrPick* owner_;
   };
   UniversalData& udata() noexcept { return memento_.data(); }
   const UniversalData& udata() const noexcept { return memento_.data(); }
@@ -269,7 +253,7 @@ class NameOrPick : public File, public iface::Node {
   }
 
  private:
-  SimpleMemento<UniversalData> memento_;
+  SimpleMemento<NameOrPick, UniversalData> memento_;
 
   // volatile
   std::string new_name_;
@@ -360,12 +344,8 @@ class Name final : public NameOrPick {
       "Value/Name", "name",
       {typeid(iface::Memento), typeid(iface::Node)});
 
-  static inline const SockMeta kOut = {
-    .name = "out", .type = SockMeta::kNamedValue,
-  };
-
   Name(Env* env, std::vector<std::string>&& n = {"praise_the_cat"}) noexcept :
-      NameOrPick(&kType, env, std::move(n)), out_sock_(this, &kOut) {
+      NameOrPick(&kType, env, std::move(n)), out_sock_(this, "out") {
     Rebuild();
   }
 
@@ -412,15 +392,14 @@ class Name final : public NameOrPick {
 
   class CustomInSock final : public InSock {
    public:
-    CustomInSock(Name* owner, OutSock* out, const std::string& name) noexcept :
-        InSock(owner, &meta_), out_(out), meta_({.name = name}) {
+    CustomInSock(Name* owner, OutSock* out, std::string_view name) noexcept :
+        InSock(owner, name), out_(out) {
     }
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept {
-      out_->Send(ctx, Value::Tuple { meta_.name, std::move(v) });
+      out_->Send(ctx, Value::Tuple { name(), std::move(v) });
     }
    private:
     OutSock* out_;
-    SockMeta meta_;
   };
 };
 void Name::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
@@ -448,14 +427,9 @@ class Pick final : public NameOrPick {
       "Value/Pick", "name",
       {typeid(iface::Memento), typeid(iface::Node)});
 
-  static inline const SockMeta kIn = {
-    .name = "in", .type = SockMeta::kNamedValue,
-  };
-
   Pick(Env* env, std::vector<std::string>&& n = {"praise_the_cat"}) noexcept :
       NameOrPick(&kType, env, std::move(n)),
-      in_sock_(this, &kIn,
-               [this](auto& ctx, auto&& v) { Handle(ctx, std::move(v)); }) {
+      in_sock_(this, "in", [this](auto& ctx, auto&& v) { Handle(ctx, std::move(v)); }) {
     Rebuild();
   }
 
@@ -476,7 +450,7 @@ class Pick final : public NameOrPick {
 
  private:
   // volatile
-  std::vector<std::unique_ptr<OutSock>> out_socks_;
+  std::vector<std::optional<OutSock>> out_socks_;
   NodeLambdaInSock in_sock_;
 
   float w_;
@@ -485,11 +459,12 @@ class Pick final : public NameOrPick {
   void Rebuild() noexcept override {
     const auto& udata = NameOrPick::udata();
 
-    out_socks_.resize(udata.names.size());
+    out_socks_ = std::vector<std::optional<OutSock>>(udata.names.size());
     out_.resize(udata.names.size());
+
     for (size_t i = 0; i < udata.names.size(); ++i) {
-      out_socks_[i] = std::make_unique<CustomOutSock>(this, udata.names[i]);
-      out_[i]       = out_socks_[i].get();
+      out_socks_[i].emplace(this, udata.names[i]);
+      out_[i] = &*out_socks_[i];
     }
     in_ = {&in_sock_};
     NotifySockChange();
@@ -514,15 +489,6 @@ class Pick final : public NameOrPick {
   } catch (Exception& e) {
     ctx->Notify(this, e.msg());
   }
-
-  class CustomOutSock final : public OutSock {
-   public:
-    CustomOutSock(Pick* owner, const std::string& name) noexcept :
-        OutSock(owner, &meta_), meta_({.name = name}) {
-    }
-   private:
-    SockMeta meta_;
-  };
 };
 void Pick::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   auto& names = udata().names;
