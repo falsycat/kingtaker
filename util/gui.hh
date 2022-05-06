@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
 
 #include <imgui.h>
@@ -44,6 +45,13 @@ void NodeCanvasResetZoom() noexcept;
 
 File* InputPathMenu(const char* id, File*, std::string* str) noexcept;
 
-void TextCenterChopped(std::string_view, float w) noexcept;
+
+inline float CalcTextMaxWidth(const auto& list, const auto& func) noexcept {
+  float ret = 0;
+  for (const auto& item : list) {
+    ret = std::max(ret, ImGui::CalcTextSize(func(item)).x);
+  }
+  return ret;
+}
 
 }  // namespace kingtaker::gui
