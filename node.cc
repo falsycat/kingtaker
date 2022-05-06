@@ -919,6 +919,230 @@ class Call final : public LambdaNodeDriver {
 };
 
 
+class SugarCall final : public File, public iface::Node {
+ public:
+  static inline TypeInfo kType = TypeInfo::New<SugarCall>(
+      "Node/SugarCall", "sugar version of Node/Call",
+      {typeid(iface::Memento), typeid(iface::Node)});
+
+  SugarCall(Env*               env,
+            std::string_view   path  = "",
+            NodeSockNameList&& names = {}) noexcept :
+      File(&kType, env), Node(Node::kMenu),
+      memento_(this, {path, std::move(names)}) {
+    Rebuild();
+  }
+
+  SugarCall(Env* env, const msgpack::object& obj)
+  try : SugarCall(env,
+                  msgpack::find(obj, "path"s).as<std::string_view>(),
+                  {msgpack::find(obj, "names"s)}) {
+  } catch (msgpack::type_error&) {
+    throw DeserializeException("broken Node/SugarCall");
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    const auto& udata = memento_.data();
+
+    pk.pack_map(2);
+
+    pk.pack("path"s);
+    pk.pack(udata.path);
+
+    pk.pack("names"s);
+    udata.names.Serialize(pk);
+  }
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
+    const auto& udata = memento_.data();
+    return std::make_unique<SugarCall>(
+        env, udata.path, NodeSockNameList(udata.names));
+  }
+
+  void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
+  void UpdateMenu(const std::shared_ptr<Editor>&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::Memento, iface::Node>(t).
+        Select(this, &memento_);
+  }
+
+ private:
+  struct UniversalData final {
+   public:
+    UniversalData(std::string_view& p, NodeSockNameList&& n) noexcept :
+        path(p), names(std::move(n)) {
+    }
+    void Restore(SugarCall* owner) noexcept {
+      owner->Rebuild();
+    }
+
+    // permanent
+    std::string      path;
+    NodeSockNameList names;
+  };
+  SimpleMemento<SugarCall, UniversalData> memento_;
+
+  // volatile
+  Life life_;
+
+  std::string path_editing_;
+
+  std::vector<std::unique_ptr<InSock>>  socks_in_;
+  std::vector<std::unique_ptr<OutSock>> socks_out_;
+
+
+  Node& GetTargetNode() {
+    auto node = File::iface<iface::Node>(&Resolve(memento_.data().path));
+    if (!node) throw Exception("target is not a Node");
+    return *node;
+  }
+  void Rebuild() noexcept {
+    const auto& udata = memento_.data();
+
+    socks_in_.clear();
+    socks_in_.reserve(udata.names.in().size());
+    in_.clear();
+    in_.reserve(udata.names.in().size());
+    for (const auto& name : udata.names.in()) {
+      socks_in_.push_back(std::make_unique<CustomInSock>(this, name));
+      in_.push_back(socks_in_.back().get());
+    }
+    socks_out_.clear();
+    socks_out_.reserve(udata.names.out().size());
+    out_.clear();
+    out_.reserve(udata.names.out().size());
+    for (const auto& name : udata.names.out()) {
+      socks_out_.push_back(std::make_unique<OutSock>(this, name));
+      out_.push_back(socks_out_.back().get());
+    }
+  }
+  bool Sync(Context& ctx) noexcept
+  try {
+    auto& udata = memento_.data();
+    auto& node  = GetTargetNode();
+
+    const auto bk = std::move(udata.names);
+    udata.names = {&node};
+    if (bk == udata.names) return false;
+    Rebuild();
+    return true;
+  } catch (Exception& e) {
+    ctx.Notify(this, e.msg());
+    return false;
+  }
+
+
+  class InnerContext final : public NodeSubContext {
+   public:
+    InnerContext(SugarCall*                      owner,
+                 const std::shared_ptr<Context>& octx,
+                 Node*                           target) noexcept :
+        NodeSubContext(octx),
+        owner_(owner), life_(owner->life_), target_(target) {
+    }
+    void ObserveSend(const OutSock& sock, const Value& v) noexcept override
+    try {
+      if (!*life_ || sock.owner() != target_) return;
+
+      auto out = owner_->out(sock.name());
+      if (!out) throw Exception("missing OutSock");
+      out->Send(octx(), Value(v));
+    } catch (Exception& e) {
+      octx()->Notify(owner_, e.msg());
+    }
+
+   private:
+    SugarCall* owner_;
+    Life::Ref  life_;
+
+    Node* target_;
+  };
+
+  class CustomInSock final : public InSock {
+   public:
+    CustomInSock(SugarCall* owner, std::string_view name) noexcept :
+        InSock(owner, name), owner_(owner) {
+    }
+    void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept
+    try {
+      auto node = &owner_->GetTargetNode();
+      auto sock = node->in(name());
+      if (!sock) throw Exception("missing InSock: "+name());
+
+      auto ictx = std::make_shared<InnerContext>(owner_, octx, node);
+      sock->Receive(ictx, std::move(v));
+    } catch (Exception& e) {
+      octx->Notify(owner_, e.msg());
+    }
+
+   private:
+    SugarCall* owner_;
+  };
+};
+void SugarCall::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
+  const auto& udata = memento_.data();
+
+  ImGui::TextUnformatted("SUGAR CALL");
+
+  const auto top = ImGui::GetCursorPosY();
+  ImGui::AlignTextToFramePadding();
+  ImGui::NewLine();
+
+  ImGui::BeginGroup();
+  {
+    ImGui::BeginGroup();
+    if (udata.names.in().empty()) {
+      ImGui::TextDisabled("NO IN");
+    } else {
+      for (const auto& name : udata.names.in()) {
+        gui::NodeInSock(name);
+      }
+    }
+    ImGui::EndGroup();
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    if (udata.names.out().empty()) {
+      ImGui::TextDisabled("NO OUT");
+    } else {
+      const auto left  = ImGui::GetCursorPosX();
+      const auto width = gui::CalcTextMaxWidth(
+          udata.names.out(), [](auto& x) { return x.c_str(); });
+      for (const auto& name : udata.names.out()) {
+        ImGui::SetCursorPosX(left+width - ImGui::CalcTextSize(name.c_str()).x);
+        gui::NodeOutSock(name);
+      }
+    }
+    ImGui::EndGroup();
+  }
+  ImGui::EndGroup();
+
+  const auto w = ImGui::GetItemRectSize().x;
+  ImGui::SetCursorPosY(top);
+  ImGui::Button(udata.path.c_str(), {w, 0});
+  if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft)) {
+    UpdateMenu(ctx);
+    ImGui::EndPopup();
+  }
+}
+void SugarCall::UpdateMenu(const std::shared_ptr<Editor>& ctx) noexcept {
+  auto& udata = memento_.data();
+
+  if (ImGui::MenuItem("re-sync sockets")) {
+    if (Sync(*ctx)) memento_.Commit();
+  }
+  ImGui::Separator();
+  if (ImGui::BeginMenu("path")) {
+    if (gui::InputPathMenu("##path_edit", this, &path_editing_)) {
+      if (udata.path != path_editing_) {
+        udata.path = std::move(path_editing_);
+        Sync(*ctx);
+        memento_.Commit();
+      }
+    }
+    ImGui::EndMenu();
+  }
+}
+
+
 class Cache final : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo kType = TypeInfo::New<Cache>(
