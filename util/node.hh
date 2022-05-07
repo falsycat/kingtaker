@@ -75,9 +75,9 @@ class NodeLinkStore final {
   }
 
   // deleted pointers can be passed
-  std::vector<OutSock*> srcOf(const InSock* sock) const noexcept;
+  std::vector<OutSock*> GetSrcOf(const InSock* sock) const noexcept;
   // deleted pointers can be passed
-  std::vector<InSock*> dstOf(const OutSock* out) const noexcept;
+  std::vector<InSock*> GetDstOf(const OutSock* out) const noexcept;
 
   const std::vector<SockLink>& items() const noexcept { return items_; }
 
@@ -149,39 +149,17 @@ class NodeLinkStore::SwapCommand : public HistoryCommand {
 };
 
 
-// An impl of Context for sub context.
-class NodeSubContext : public iface::Node::Context {
- public:
-  using Node = iface::Node;
-
-  NodeSubContext(const std::shared_ptr<Node::Context>& octx) noexcept :
-      Context(File::Path(octx->basepath())), octx_(octx) {
-  }
-
-  std::vector<Node::InSock*> dstOf(const Node::OutSock* out) const noexcept {
-    return octx_->dstOf(out);
-  }
-  std::vector<Node::OutSock*> srcOf(const Node::InSock* in) const noexcept {
-    return octx_->srcOf(in);
-  }
-
-  const std::shared_ptr<Node::Context>& octx() const noexcept { return octx_; }
-
- private:
-  std::shared_ptr<Node::Context> octx_;
-};
-
-
 // An implementation of Context that redirects an output of target node to a
 // specific socket.
-class NodeRedirectContext : public NodeSubContext {
+class NodeRedirectContext : public iface::Node::Context {
  public:
   using Node = iface::Node;
 
-  NodeRedirectContext(const std::shared_ptr<Node::Context>& octx,
+  NodeRedirectContext(File::Path&&                          path,
+                      const std::shared_ptr<Node::Context>& octx,
                       const std::weak_ptr<Node::OutSock>&   odst,
                       Node*                                 target = nullptr) noexcept :
-      NodeSubContext(octx), odst_(odst), target_(target) {
+      Context(std::move(path), octx), odst_(odst), target_(target) {
   }
 
   void Attach(Node* target) noexcept {

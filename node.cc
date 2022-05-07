@@ -33,6 +33,9 @@
 namespace kingtaker {
 namespace {
 
+constexpr size_t kMaxCallDepth = 1024;
+
+
 class Network : public File, public iface::DirItem, public iface::Node {
  public:
   static inline TypeInfo kType = TypeInfo::New<Network>(
@@ -303,6 +306,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
     void SetUp(Network* owner) noexcept {
       owner_ = owner;
       file_->Move(owner, std::to_string(id_));
+      if (owner_->ctx_) {
+        node_->Initialize(owner_->ctx_);
+      }
 
       if (auto in = dynamic_cast<InNode*>(node_)) {
         owner->in_nodes_.insert(in);
@@ -455,8 +461,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
   class LambdaContext : public Context, public Context::Data {
    public:
     LambdaContext(Network* owner, const std::shared_ptr<Context>& octx) noexcept :
-        Context(Path(owner->ctx_->basepath())),
-        owner_(owner), life_(owner_->life_), octx_(octx) {
+        Context(Path(owner->ctx_->basepath()), octx),
+        owner_(owner), life_(owner_->life_) {
     }
 
     void ObserveReceive(const InSock& in, const Value& v) noexcept override {
@@ -467,24 +473,22 @@ class Network : public File, public iface::DirItem, public iface::Node {
       const auto& out_sock = owner_->out((*itr)->name());
       if (!out_sock) return;
 
-      out_sock->Send(octx_, Value(v));
+      out_sock->Send(octx(), Value(v));
     }
 
-    std::vector<InSock*> dstOf(const OutSock* out) const noexcept override {
+    std::vector<InSock*> GetDstOf(const OutSock* out) const noexcept override {
       if (!*life_) return {};
-      return owner_->links_->dstOf(out);
+      return owner_->links_->GetDstOf(out);
     }
-    std::vector<OutSock*> srcOf(const InSock* in) const noexcept override {
+    std::vector<OutSock*> GetSrcOf(const InSock* in) const noexcept override {
       if (!*life_) return {};
-      return owner_->links_->srcOf(in);
+      return owner_->links_->GetSrcOf(in);
     }
 
    private:
     Network* owner_;
 
     Life::Ref life_;
-
-    std::shared_ptr<Context> octx_;
   };
 
   // An impl of Node::Editor for Network
@@ -509,13 +513,13 @@ class Network : public File, public iface::DirItem, public iface::Node {
       owner_->history_.AddSilently(std::move(cmd));
     }
 
-    std::vector<InSock*> dstOf(const OutSock* out) const noexcept override {
+    std::vector<InSock*> GetDstOf(const OutSock* out) const noexcept override {
       if (!*life_) return {};
-      return owner_->links_->dstOf(out);
+      return owner_->links_->GetDstOf(out);
     }
-    std::vector<OutSock*> srcOf(const InSock* in) const noexcept override {
+    std::vector<OutSock*> GetSrcOf(const InSock* in) const noexcept override {
       if (!*life_) return {};
-      return owner_->links_->srcOf(in);
+      return owner_->links_->GetSrcOf(in);
     }
 
    private:
@@ -838,13 +842,13 @@ void Network::History::AddNode(std::unique_ptr<NodeHolder>&& h) noexcept {
 }
 void Network::History::RemoveNode(NodeHolder* h) noexcept {
   for (const auto& in : h->node().in()) {
-    for (const auto& out : owner_->links_->srcOf(in)) {
+    for (const auto& out : owner_->links_->GetSrcOf(in)) {
       Queue(std::make_unique<NodeLinkStore::SwapCommand>(
               owner_->links_.get(), NodeLinkStore::SwapCommand::kUnlink, *in, *out));
     }
   }
   for (const auto& out : h->node().out()) {
-    for (const auto& in : owner_->links_->dstOf(out)) {
+    for (const auto& in : owner_->links_->GetDstOf(out)) {
       Queue(std::make_unique<NodeLinkStore::SwapCommand>(
               owner_->links_.get(), NodeLinkStore::SwapCommand::kUnlink, *in, *out));
     }
@@ -892,6 +896,10 @@ class Call final : public LambdaNodeDriver {
   void Send(Value&& v) {
     auto octx = octx_.lock();
 
+    if (octx->depth() >= kMaxCallDepth) {
+      throw Exception("call depth limit reached");
+    }
+
     auto f = &owner_->root().Resolve(octx->basepath()).Resolve(path_);
     if (f == owner_) throw Exception("self reference");
 
@@ -911,7 +919,8 @@ class Call final : public LambdaNodeDriver {
       ictx = nullptr;
     }
     if (!ictx) {
-      ictx = std::make_shared<NodeRedirectContext>(octx, owner_->sharedOut(0), n);
+      ictx = std::make_shared<NodeRedirectContext>(
+          File::Path(octx->basepath()), octx, owner_->sharedOut(0), n);
       n->Initialize(ictx);
     }
     ictx_ = ictx;
@@ -975,6 +984,10 @@ class SugarCall final : public File, public iface::Node {
 
   void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
   void UpdateMenu(const std::shared_ptr<Editor>&) noexcept override;
+
+  void Initialize(const std::shared_ptr<Context>& octx) noexcept override {
+    octx->CreateData<ContextData>(this);
+  }
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Memento, iface::Node>(t).
@@ -1047,12 +1060,12 @@ class SugarCall final : public File, public iface::Node {
   }
 
 
-  class InnerContext final : public NodeSubContext {
+  class InnerContext final : public Context {
    public:
     InnerContext(SugarCall*                      owner,
                  const std::shared_ptr<Context>& octx,
                  Node*                           target) noexcept :
-        NodeSubContext(octx),
+        Context(File::Path(octx->basepath()), octx),
         owner_(owner), life_(owner->life_), target_(target) {
     }
     void ObserveSend(const OutSock& sock, const Value& v) noexcept override
@@ -1073,6 +1086,11 @@ class SugarCall final : public File, public iface::Node {
     Node* target_;
   };
 
+  class ContextData final : public Context::Data {
+   public:
+    std::shared_ptr<InnerContext> ictx;
+  };
+
   class CustomInSock final : public InSock {
    public:
     CustomInSock(SugarCall* owner, std::string_view name) noexcept :
@@ -1084,8 +1102,9 @@ class SugarCall final : public File, public iface::Node {
       auto sock = node->in(name());
       if (!sock) throw Exception("missing InSock: "+name());
 
-      auto ictx = std::make_shared<InnerContext>(owner_, octx, node);
-      sock->Receive(ictx, std::move(v));
+      auto cdata = octx->data<ContextData>(owner_);
+      cdata->ictx = std::make_shared<InnerContext>(owner_, octx, node);
+      sock->Receive(cdata->ictx, std::move(v));
     } catch (Exception& e) {
       octx->Notify(owner_, e.msg());
     }
@@ -1141,20 +1160,26 @@ void SugarCall::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
 }
 void SugarCall::UpdateMenu(const std::shared_ptr<Editor>& ctx) noexcept {
   auto& udata = memento_.data();
+  auto  cdata = ctx->data<ContextData>(this);
 
-  if (ImGui::MenuItem("re-sync sockets")) {
-    if (Sync(*ctx)) memento_.Commit();
-  }
-  ImGui::Separator();
   if (ImGui::BeginMenu("path")) {
     if (gui::InputPathMenu("##path_edit", this, &path_editing_)) {
       if (udata.path != path_editing_) {
+        cdata->ictx = nullptr;
         udata.path = std::move(path_editing_);
         Sync(*ctx);
         memento_.Commit();
       }
     }
     ImGui::EndMenu();
+  }
+
+  ImGui::Separator();
+  if (ImGui::MenuItem("re-sync sockets")) {
+    if (Sync(*ctx)) memento_.Commit();
+  }
+  if (ImGui::MenuItem("clear inner context")) {
+    cdata->ictx = nullptr;
   }
 }
 
@@ -1356,7 +1381,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
                  const std::shared_ptr<Context>& octx,
                  Node*                           target,
                  const std::weak_ptr<StoreItem>& item) noexcept :
-        Context(std::move(basepath)), octx_(octx), target_(target), item_(item) {
+        Context(std::move(basepath), octx), target_(target), item_(item) {
     }
     ~InnerContext() {
       auto item = item_.lock();
@@ -1375,16 +1400,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       Queue::sub().Push(std::move(task));
     }
 
-    std::vector<Node::InSock*> dstOf(const Node::OutSock* out) const noexcept override {
-      return octx_->dstOf(out);
-    }
-    std::vector<Node::OutSock*> srcOf(const Node::InSock* in) const noexcept override {
-      return octx_->srcOf(in);
-    }
-
    private:
-    std::shared_ptr<Node::Context> octx_;
-
     Node* target_;
 
     std::weak_ptr<StoreItem> item_;

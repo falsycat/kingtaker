@@ -125,7 +125,7 @@ class Await final : public File, public iface::Node {
       recv[idx_] = true;
 
       for (size_t i = 0; i < kMaxIn; ++i) {
-        if (ctx->srcOf(owner_->in_[i]).size() > 0) {
+        if (ctx->GetSrcOf(owner_->in_[i]).size() > 0) {
           if (!recv[i]) return;
         }
       }
@@ -154,7 +154,7 @@ void Await::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
   size_t n = 1;
   for (size_t i = 0; i < kMaxIn; ++i) {
     const size_t idx = kMaxIn-i-1;
-    if (ctx->srcOf(in_[idx]).size() > 0) {
+    if (ctx->GetSrcOf(in_[idx]).size() > 0) {
       n = idx+2;
       break;
     }
@@ -172,7 +172,7 @@ void Await::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
         ImGui::SameLine();
         ImGui::TextUnformatted("?");
         msg = "connect something here to add more inputs";
-      } else if (ctx->srcOf(in_[i]).size() == 0) {
+      } else if (ctx->GetSrcOf(in_[i]).size() == 0) {
         ImGui::SameLine();
         ImGui::TextUnformatted("?");
         msg = "no input (treated as pulse received)";
