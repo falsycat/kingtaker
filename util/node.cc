@@ -167,7 +167,7 @@ void NodeLinkStore::Unlink(const InSock* in, const OutSock* out) noexcept {
   items_.erase(term, items_.end());
 }
 
-std::vector<NodeLinkStore::OutSock*> NodeLinkStore::srcOf(const InSock* sock) const noexcept {
+std::vector<NodeLinkStore::OutSock*> NodeLinkStore::GetSrcOf(const InSock* sock) const noexcept {
   std::vector<OutSock*> ret;
   for (const auto& link : items_) {
     if (link.in.sock == sock) {
@@ -177,7 +177,7 @@ std::vector<NodeLinkStore::OutSock*> NodeLinkStore::srcOf(const InSock* sock) co
   }
   return ret;
 }
-std::vector<NodeLinkStore::InSock*> NodeLinkStore::dstOf(const OutSock* sock) const noexcept {
+std::vector<NodeLinkStore::InSock*> NodeLinkStore::GetDstOf(const OutSock* sock) const noexcept {
   std::vector<InSock*> ret;
   for (const auto& link : items_) {
     if (link.out.sock == sock) {

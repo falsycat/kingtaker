@@ -364,6 +364,7 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
       if (!sock) throw Exception("missing input socket, "+sock_name_);
 
       auto ctx = std::make_shared<iface::Node::Context>(target.abspath());
+      n->Initialize(ctx);
       sock->Receive(ctx, Value::Pulse());
     } catch (Exception&) {
       // TODO: logging

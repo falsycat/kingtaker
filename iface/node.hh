@@ -122,7 +122,9 @@ class Node::Context {
   };
 
   Context() = delete;
-  Context(File::Path&& basepath) noexcept : basepath_(std::move(basepath)) {
+  Context(File::Path&&                    basepath,
+          const std::shared_ptr<Context>& octx = nullptr) noexcept :
+      basepath_(std::move(basepath)), octx_(octx), depth_(octx? octx->depth()+1: 0) {
   }
   virtual ~Context() = default;
   Context(const Context&) = delete;
@@ -137,8 +139,12 @@ class Node::Context {
   virtual void Notify(File*, std::string_view) noexcept { }
 
   // Returns an empty when the socket is destructed or missing.
-  virtual std::vector<InSock*> dstOf(const OutSock*) const noexcept { return {}; }
-  virtual std::vector<OutSock*> srcOf(const InSock*) const noexcept { return {}; }
+  virtual std::vector<InSock*> GetDstOf(const OutSock* s) const noexcept {
+    return octx_->GetDstOf(s);
+  }
+  virtual std::vector<OutSock*> GetSrcOf(const InSock* s) const noexcept {
+    return octx_->GetSrcOf(s);
+  }
 
   template <typename T, typename... Args>
   std::shared_ptr<T> CreateData(Node* n, Args... args) noexcept {
@@ -146,7 +152,6 @@ class Node::Context {
     data_[n] = ret;
     return ret;
   }
-
   template <typename T>
   std::shared_ptr<T> data(Node* n) const noexcept {
     auto itr = data_.find(n);
@@ -157,9 +162,15 @@ class Node::Context {
   }
 
   const File::Path& basepath() const noexcept { return basepath_; }
+  const std::shared_ptr<Context>& octx() const noexcept { return octx_; }
+  size_t depth() const noexcept { return depth_; }
 
  private:
   File::Path basepath_;
+
+  std::shared_ptr<Context> octx_;
+
+  size_t depth_;
 
   std::unordered_map<Node*, std::shared_ptr<Data>> data_;
 };
@@ -179,12 +190,12 @@ class Node::Editor : public Context {
   virtual void Unlink(const InSock&, const OutSock&) noexcept = 0;
 
   void Unlink(const InSock& in) noexcept {
-    const auto src_span = srcOf(&in);
+    const auto src_span = GetSrcOf(&in);
     std::vector<OutSock*> srcs(src_span.begin(), src_span.end());
     for (const auto& out : srcs) Unlink(in, *out);
   }
   void Unlink(const OutSock& out) noexcept {
-    const auto dst_span = dstOf(&out);
+    const auto dst_span = GetDstOf(&out);
     std::vector<InSock*> dsts(dst_span.begin(), dst_span.end());
     for (const auto& in : dsts) Unlink(*in, out);
   }
@@ -225,8 +236,8 @@ class Node::OutSock : public Sock {
     ctx->ObserveSend(*this, v);
 
     auto task = [self = this, ctx, v = std::move(v)]() {
-      // self may be destructed already but dstOf can take invalid pointer
-      const auto dst = ctx->dstOf(self);
+      // self may be destructed already but GetDstOf can take invalid pointer
+      const auto dst = ctx->GetDstOf(self);
       for (const auto& other : dst) {
         ctx->ObserveReceive(*other, v);
         other->Receive(ctx, Value(v));

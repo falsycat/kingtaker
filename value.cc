@@ -388,7 +388,7 @@ class Name final : public NameOrPick {
     NotifySockChange();
   }
   void Rename(Editor& ctx, size_t idx, std::string&& name) noexcept override {
-    auto socks = ctx.srcOf(in_[idx]);
+    auto socks = ctx.GetSrcOf(in_[idx]);
     ctx.Unlink(*in_[idx]);
     NameOrPick::Rename(ctx, idx, std::move(name));
     for (auto sock : socks) ctx.Link(*in_[idx], *sock);
@@ -475,7 +475,7 @@ class Pick final : public NameOrPick {
     NotifySockChange();
   }
   void Rename(Editor& ctx, size_t idx, std::string&& name) noexcept override {
-    auto socks = ctx.dstOf(out_[idx]);
+    auto socks = ctx.GetDstOf(out_[idx]);
     ctx.Unlink(*out_[idx]);
     NameOrPick::Rename(ctx, idx, std::move(name));
     for (auto sock : socks) ctx.Link(*sock, *out_[idx]);
