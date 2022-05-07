@@ -72,6 +72,13 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
   void UpdateTypeChanger(bool mini = false) noexcept;
   void UpdateEditor() noexcept;
 
+  void Initialize(const std::shared_ptr<Context>& ctx) noexcept override {
+    QueueEmit(ctx);
+  }
+  void QueueEmit(const std::shared_ptr<Context>& ctx) noexcept {
+    Queue::main().Push([this, ctx]() { sock_clk_.Receive(ctx, {}); });
+  }
+
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Memento, iface::Node>(t).
         Select(this, &memento_);
@@ -115,9 +122,7 @@ void Imm::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
     ImGui::AlignTextToFramePadding();
     gui::NodeSockPoint();
     ImGui::SameLine();
-    if (ImGui::Button("CLK")) {
-      Queue::main().Push([this, ctx]() { sock_clk_.Receive(ctx, {}); });
-    }
+    if (ImGui::Button("CLK")) QueueEmit(ctx);
     ImNodes::EndSlot();
   }
 
