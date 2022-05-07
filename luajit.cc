@@ -128,7 +128,7 @@ class Exec final : public File, public iface::Node {
       sock_recv_(std::make_shared<OutSock>(this, "recv")) {
     auto task_func = [this](auto& ctx, auto&& v) {
       try {
-        auto cdata = ctx->template data<ContextData>(this, this, ctx);
+        auto cdata = ctx->template data<ContextData>(this);
         cdata->func = v.template dataPtr<luajit::Obj>();
       } catch (Exception& e) {
         ctx->Notify(this, e.msg());
@@ -138,7 +138,7 @@ class Exec final : public File, public iface::Node {
 
     auto task_send = [this](auto& ctx, auto&& v) {
       try {
-        Send(ctx->template data<ContextData>(this, this, ctx), std::move(v));
+        ContextData::Send(ctx->template data<ContextData>(this), std::move(v));
       } catch (Exception& e) {
         ctx->Notify(this, e.msg());
       }
@@ -161,6 +161,10 @@ class Exec final : public File, public iface::Node {
 
   void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
+  void Initialize(const std::shared_ptr<Context>& ctx) noexcept override {
+    ctx->CreateData<ContextData>(this, this, ctx);
+  }
+
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
   }
@@ -173,6 +177,22 @@ class Exec final : public File, public iface::Node {
 
   class ContextData final : public Context::Data {
    public:
+    static void Send(std::shared_ptr<ContextData> cdata, Value&& v) {
+      auto func = cdata->func;
+      if (!func) throw Exception("func is not specified");
+
+      auto ctx  = cdata->ctx();
+      auto task = [ctx, cdata, func, v = std::move(v)](auto L) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, func->reg());
+        dev_.PushValue(L, v);
+        Push(L, cdata);
+        if (dev_.SandboxCall(L, 2, 0) != 0) {
+          ctx->Notify(cdata->owner(), lua_tostring(L, -1));
+        }
+      };
+      dev_.Queue(std::move(task));
+    }
+
     static void Push(lua_State* L, const std::shared_ptr<ContextData>& cdata) {
       dev_.NewObjWithoutMeta<std::weak_ptr<ContextData>>(L, cdata);
       if (luaL_newmetatable(L, "Exec_ContextData")) {
@@ -273,23 +293,6 @@ class Exec final : public File, public iface::Node {
       }
     }
   };
-
-
-  static void Send(std::shared_ptr<ContextData> cdata, Value&& v) {
-    auto func = cdata->func;
-    if (!func) throw Exception("func is not specified");
-
-    auto ctx  = cdata->ctx();
-    auto task = [ctx, cdata, func, v = std::move(v)](auto L) {
-      lua_rawgeti(L, LUA_REGISTRYINDEX, func->reg());
-      dev_.PushValue(L, v);
-      ContextData::Push(L, cdata);
-      if (dev_.SandboxCall(L, 2, 0) != 0) {
-        ctx->Notify(cdata->owner(), lua_tostring(L, -1));
-      }
-    };
-    dev_.Queue(std::move(task));
-  }
 };
 void Exec::UpdateNode(const std::shared_ptr<Editor>&) noexcept {
   ImGui::TextUnformatted("LuaJIT Exec");

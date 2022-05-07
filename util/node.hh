@@ -282,6 +282,10 @@ class LambdaNode final : public File, public iface::Node {
 
   void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
+  void Initialize(const std::shared_ptr<Context>& ctx) noexcept override {
+    ctx->CreateData<Driver>(this, this, std::weak_ptr<Context>(ctx));
+  }
+
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
   }
@@ -297,11 +301,6 @@ class LambdaNode final : public File, public iface::Node {
   std::vector<std::shared_ptr<OutSock>> out_insts_;
 
 
-  std::shared_ptr<Driver> GetDriver(const std::shared_ptr<Context>& ctx) noexcept {
-    return ctx->data<Driver>(this, this, std::weak_ptr<Context>(ctx));
-  }
-
-
   class CustomInSock final : public InSock {
    public:
     CustomInSock(LambdaNode* o, std::string_view name, size_t idx) noexcept :
@@ -310,7 +309,7 @@ class LambdaNode final : public File, public iface::Node {
 
     void Receive(const std::shared_ptr<Context>& ctx, Value&& v) noexcept override {
       try {
-        owner_->GetDriver(ctx)->Handle(idx_, std::move(v));
+        ctx->data<Driver>(owner_)->Handle(idx_, std::move(v));
       } catch (Exception& e) {
         ctx->Notify(owner_, "error while handling input ("+name()+"): "s+e.msg());
       }
@@ -327,7 +326,7 @@ class LambdaNode final : public File, public iface::Node {
 };
 template <typename Driver>
 void LambdaNode<Driver>::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {
-  const auto driver = GetDriver(ctx);
+  const auto driver = ctx->data<Driver>(this);
   ImGui::TextUnformatted(driver->title().c_str());
 
   ImGui::BeginGroup();

@@ -95,6 +95,15 @@ class Network : public File, public iface::DirItem, public iface::Node {
   template <typename T>
   void UpdateNewIO(const ImVec2& pos) noexcept;
 
+  void Initialize(const std::shared_ptr<Context>& octx) noexcept override {
+    InitializeChildren(octx->CreateData<LambdaContext>(this, this, octx));
+  }
+  void InitializeChildren(const std::shared_ptr<Context>& ictx) noexcept {
+    for (auto& node : nodes_) {
+      node->node().Initialize(ictx);
+    }
+  }
+
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);
   }
@@ -424,7 +433,11 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
     void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept override {
       if (!*life_) return;
-      auto ictx = octx->data<LambdaContext>(owner_, owner_, octx);
+      if (!owner_->ctx_) {
+        octx->Notify(owner_, "editor context is not generated yet");
+        return;
+      }
+      auto ictx = octx->data<LambdaContext>(owner_);
       for (auto in : owner_->in_nodes_) {
         if (in->name() == name()) in->out(0).Send(ictx, Value(v));
       }
@@ -438,10 +451,11 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
 
   // An impl of Context to execute Network as lambda.
+  // Ensure Network::ctx_ is filled before creating LambdaContext
   class LambdaContext : public Context, public Context::Data {
    public:
     LambdaContext(Network* owner, const std::shared_ptr<Context>& octx) noexcept :
-        Context(Path(owner->ctx_->basepath())),  // FIXME: ctx_ may not be created yet
+        Context(Path(owner->ctx_->basepath())),
         owner_(owner), life_(owner_->life_), octx_(octx) {
     }
 
@@ -586,6 +600,7 @@ void Network::Update(Event& ev) noexcept {
       ctx_->Notify(this, "path change detected, editor context is cleared");
     }
     ctx_ = std::make_shared<EditorContext>(std::move(path), this);
+    InitializeChildren(ctx_);
   }
 
   // update children
@@ -897,6 +912,7 @@ class Call final : public LambdaNodeDriver {
     }
     if (!ictx) {
       ictx = std::make_shared<NodeRedirectContext>(octx, owner_->sharedOut(0), n);
+      n->Initialize(ictx);
     }
     ictx_ = ictx;
 
@@ -1177,6 +1193,10 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
 
   void UpdateMenu() noexcept override;
   void UpdateTooltip() noexcept override;
+
+  void Initialize(const std::shared_ptr<Context>& ctx) noexcept override {
+    ctx->CreateData<ContextData>(this);
+  }
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Node>(t).Select(this);

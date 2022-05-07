@@ -48,6 +48,8 @@ class Node {
   virtual void UpdateNode(const std::shared_ptr<Editor>&) noexcept { }
   virtual void UpdateMenu(const std::shared_ptr<Editor>&) noexcept { }
 
+  virtual void Initialize(const std::shared_ptr<Context>&) noexcept { }
+
   std::span<InSock* const> in() const noexcept { return in_; }
   std::span<OutSock* const> out() const noexcept { return out_; }
 
@@ -138,19 +140,23 @@ class Node::Context {
   virtual std::vector<InSock*> dstOf(const OutSock*) const noexcept { return {}; }
   virtual std::vector<OutSock*> srcOf(const InSock*) const noexcept { return {}; }
 
-  const File::Path& basepath() const noexcept { return basepath_; }
-
   template <typename T, typename... Args>
-  std::shared_ptr<T> data(Node* n, Args... args) noexcept {
-    auto [itr, created] = data_.try_emplace(n);
-    if (!created) {
-      auto ptr = std::dynamic_pointer_cast<T>(itr->second);
-      if (ptr) return ptr;
-    }
+  std::shared_ptr<T> CreateData(Node* n, Args... args) noexcept {
     auto ret = std::make_shared<T>(std::forward<Args>(args)...);
-    itr->second = ret;
+    data_[n] = ret;
     return ret;
   }
+
+  template <typename T>
+  std::shared_ptr<T> data(Node* n) const noexcept {
+    auto itr = data_.find(n);
+    assert(itr != data_.end());
+    auto ret = std::dynamic_pointer_cast<T>(itr->second);
+    assert(ret);
+    return ret;
+  }
+
+  const File::Path& basepath() const noexcept { return basepath_; }
 
  private:
   File::Path basepath_;

@@ -97,6 +97,10 @@ class Await final : public File, public iface::Node {
 
   void UpdateNode(const std::shared_ptr<Editor>&) noexcept override;
 
+  void Initialize(const std::shared_ptr<Context>& ctx) noexcept override {
+    ctx->CreateData<ContextData>(this);
+  }
+
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::Node>(t).Select(this);
   }
