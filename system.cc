@@ -1,6 +1,7 @@
 #include "kingtaker.hh"
 
 #include <cassert>
+#include <cinttypes>
 #include <map>
 #include <memory>
 #include <string>
@@ -13,6 +14,7 @@
 #include "kingtaker.hh"
 
 #include "iface/dir.hh"
+#include "iface/logger.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
@@ -410,6 +412,104 @@ void ClockPulseGenerator::UpdateEditor() noexcept {
     ImGui::Checkbox("enable", &enable_);
   }
   ImGui::PopItemWidth();
+}
+
+
+class Logger final : public File, public iface::DirItem, public iface::Logger {
+ public:
+  static inline TypeInfo kType = TypeInfo::New<Logger>(
+      "System/Logger", "",
+      {typeid(iface::DirItem), typeid(iface::Logger)});
+
+  Logger(Env* env, bool shown = true) noexcept :
+      File(&kType, env), DirItem(DirItem::kNone), shown_(shown) {
+  }
+
+  Logger(Env* env, const msgpack::object& obj) noexcept :
+      Logger(env, msgpack::as_if<bool>(obj, false)) {
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(shown_);
+  }
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
+    return std::make_unique<Logger>(env, shown_);
+  }
+
+  void Push(std::shared_ptr<Logger::Item>&& item) noexcept override {
+    items_.push_back(std::move(item));
+  }
+
+  void Update(Event&) noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::DirItem, iface::Logger>(t).Select(this);
+  }
+
+ private:
+  bool shown_;
+
+  std::deque<std::shared_ptr<Logger::Item>> items_;
+};
+void Logger::Update(Event& ev) noexcept {
+  if (gui::BeginWindow(this, "Logger", ev, &shown_)) {
+    constexpr auto kTableFlags =
+        ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_Hideable  |
+        ImGuiTableFlags_RowBg     |
+        ImGuiTableFlags_Borders   |
+        ImGuiTableFlags_ContextMenuInBody |
+        ImGuiTableFlags_SizingStretchProp |
+        ImGuiTableFlags_ScrollY;
+    if (ImGui::BeginTable("list", 3, kTableFlags, ImGui::GetContentRegionAvail(), 0)) {
+      ImGui::TableSetupColumn("level");
+      ImGui::TableSetupColumn("summary");
+      ImGui::TableSetupColumn("location");
+      ImGui::TableSetupScrollFreeze(0, 1);
+      ImGui::TableHeadersRow();
+
+      for (const auto& item : items_) {
+        ImGui::TableNextRow();
+        ImGui::PushID(item.get());
+
+        if (ImGui::TableSetColumnIndex(0)) {
+          constexpr auto kFlags =
+              ImGuiSelectableFlags_SpanAllColumns |
+              ImGuiSelectableFlags_AllowItemOverlap;
+          const char* str =
+              item->lv() == kInfo?  "INFO":
+              item->lv() == kWarn?  "WARN":
+              item->lv() == kError? "ERRR": "XD";
+          ImGui::Selectable(str, false, kFlags);
+          if (ImGui::BeginPopupContextItem()) {
+            item->UpdateMenu();
+          }
+        }
+        if (ImGui::TableNextColumn()) {
+          ImGui::BeginGroup();
+          item->UpdateSummary();
+          ImGui::EndGroup();
+          if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            item->UpdateTooltip();
+            ImGui::EndTooltip();
+          }
+        }
+        if (ImGui::TableNextColumn()) {
+          const auto& srcloc = item->srcloc();
+
+          const auto file = srcloc.file_name();
+          const auto line = static_cast<uintmax_t>(srcloc.line());
+          ImGui::Text("%s:%" PRIuMAX, file, line);
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s:%" PRIuMAX, file, line);
+          }
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndTable();
+    }
+  }
+  gui::EndWindow();
 }
 
 } }  // namespace kingtaker
