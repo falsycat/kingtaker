@@ -144,9 +144,11 @@ class Node::Context {
 
   // Returns an empty when the socket is destructed or missing.
   virtual std::vector<InSock*> GetDstOf(const OutSock* s) const noexcept {
+    if (!octx_) return {};
     return octx_->GetDstOf(s);
   }
   virtual std::vector<OutSock*> GetSrcOf(const InSock* s) const noexcept {
+    if (!octx_) return {};
     return octx_->GetSrcOf(s);
   }
 
