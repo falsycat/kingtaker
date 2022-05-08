@@ -1058,6 +1058,7 @@ class SugarCall final : public File, public iface::Node {
       socks_out_.push_back(std::make_unique<OutSock>(this, name));
       out_.push_back(socks_out_.back().get());
     }
+    NotifySockChange();
   }
   bool Sync(Context& ctx) noexcept
   try {
@@ -1220,7 +1221,8 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       in_params_(this, "params",
                  [this](auto& ctx, auto&& v) { SetParam(ctx, std::move(v)); }),
       in_exec_(this, "exec", [this](auto& ctx, auto&&) { Exec(ctx); }),
-      path_(path) {
+      path_(path),
+      logq_(std::make_shared<LoggerTemporaryItemQueue>()) {
     in_  = {&in_params_, &in_exec_};
     out_ = {&out_result_};
   }
@@ -1237,6 +1239,9 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     return std::make_unique<Cache>(env, path_);
   }
 
+  void Update(Event&) noexcept override {
+    logq_->Flush(*this);
+  }
   void UpdateMenu() noexcept override;
   void UpdateTooltip() noexcept override;
 
@@ -1260,6 +1265,8 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
   std::string path_;
 
   // volatile
+  std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+
   size_t try_cnt_ = 0;
   size_t hit_cnt_ = 0;
 
@@ -1284,8 +1291,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
   void Exec(const std::shared_ptr<Context>& ctx) noexcept {
     ++try_cnt_;
 
-    auto cdata  = ctx->data<ContextData>(this);
-    auto params = std::move(cdata->params);
+    auto cdata = ctx->data<ContextData>(this);
 
     // a lambda that passes target node's output to self output
     auto obs = [this, ctx](auto name, auto& value) {
@@ -1311,13 +1317,17 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       auto n = File::iface<iface::Node>(f);
       if (!n) throw Exception("it's not a Node");
 
-      auto ictx = std::make_shared<InnerContext>(f->abspath(), ctx, n, item);
+      auto ictx = std::make_shared<InnerContext>(logq_, f->abspath(), n, item);
+      n->Initialize(ictx);
       for (const auto& p : item->in()) {
         const auto in = n->in();
 
         auto itr = std::find_if(in.begin(), in.end(),
                                 [&m = p.first](auto& x) { return x->name() == m; });
-        if (itr == in.end()) continue;
+        if (itr == in.end()) {
+          NodeLoggerTextItem::Warn(
+              abspath(), *ctx, "unknown parameter passed: "+p.first);
+        }
         (*itr)->Receive(ictx, Value(p.second));
       }
     } catch (Exception& e) {
@@ -1399,11 +1409,11 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
    public:
     using Node = iface::Node;
 
-    InnerContext(Path&&                          basepath,
-                 const std::shared_ptr<Context>& octx,
+    InnerContext(const std::shared_ptr<LoggerTemporaryItemQueue>& logq,
+                 Path&&                          basepath,
                  Node*                           target,
                  const std::weak_ptr<StoreItem>& item) noexcept :
-        Context(std::move(basepath), octx), target_(target), item_(item) {
+        Context(std::move(basepath)), logq_(logq), target_(target), item_(item) {
     }
     ~InnerContext() {
       auto item = item_.lock();
@@ -1421,8 +1431,13 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       };
       Queue::sub().Push(std::move(task));
     }
+    void Notify(const std::shared_ptr<iface::Logger::Item>& item) noexcept override {
+      logq_->Push(item);
+    }
 
    private:
+    std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+
     Node* target_;
 
     std::weak_ptr<StoreItem> item_;
