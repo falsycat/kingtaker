@@ -19,6 +19,7 @@
 
 #include "util/gui.hh"
 #include "util/keymap.hh"
+#include "util/logger.hh"
 #include "util/node.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -300,7 +301,8 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
                       bool               shown     = false,
                       bool               enable    = false) noexcept :
       File(&kType, env), DirItem(kNone),
-      path_(path), sock_name_(sock_name), shown_(shown), enable_(enable) {
+      path_(path), sock_name_(sock_name), shown_(shown), enable_(enable),
+      logq_(std::make_shared<LoggerTemporaryItemQueue>()) {
   }
 
   ClockPulseGenerator(Env* env, const msgpack::object& obj) :
@@ -336,6 +338,7 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
       UpdateEditor();
     }
     gui::EndWindow();
+    logq_->Flush(*this);
   }
   void UpdateEditor() noexcept;
 
@@ -352,6 +355,8 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
   bool enable_;
 
   // volatile params
+  std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+
   std::string path_editing_;
 
 
@@ -365,14 +370,27 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
       auto sock = n->in(sock_name_);
       if (!sock) throw Exception("missing input socket, "+sock_name_);
 
-      auto ctx = std::make_shared<iface::Node::Context>(target.abspath());
+      auto ctx = std::make_shared<InnerContext>(this, target.abspath());
       n->Initialize(ctx);
       sock->Receive(ctx, Value::Pulse());
-    } catch (Exception&) {
-      // TODO: logging
+    } catch (Exception& e) {
+      logq_->Push(LoggerTextItem::Error(abspath(), e.msg()));
       enable_ = false;
     }
   }
+
+
+  class InnerContext final : public iface::Node::Context {
+   public:
+    InnerContext(ClockPulseGenerator* owner, File::Path&& path) noexcept :
+        Context(std::move(path)), logq_(owner->logq_) {
+    }
+    void Notify(const std::shared_ptr<iface::Logger::Item>& item) noexcept override {
+      logq_->Push(item);
+    }
+   private:
+    std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+  };
 };
 void ClockPulseGenerator::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
