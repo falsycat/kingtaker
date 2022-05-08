@@ -21,6 +21,7 @@
 #include "util/gui.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
+#include "util/node_logger.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -492,7 +493,7 @@ class Pick final : public NameOrPick {
       sock->Send(ctx, Value(value));
     }
   } catch (Exception& e) {
-    ctx->Notify(this, e.msg());
+    NodeLoggerTextItem::Error(abspath(), *ctx, e.msg());
   }
 };
 void Pick::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {

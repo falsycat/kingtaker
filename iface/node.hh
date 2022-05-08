@@ -14,6 +14,8 @@
 
 #include "kingtaker.hh"
 
+#include "iface/logger.hh"
+
 #include "util/value.hh"
 
 
@@ -136,7 +138,7 @@ class Node::Context {
 
   // must be thread-safe
   virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
-  virtual void Notify(File*, std::string_view) noexcept { }
+  virtual void Notify(const std::shared_ptr<Logger::Item>&) noexcept { }
 
   // Returns an empty when the socket is destructed or missing.
   virtual std::vector<InSock*> GetDstOf(const OutSock* s) const noexcept {
@@ -158,6 +160,18 @@ class Node::Context {
     assert(itr != data_.end());
     auto ret = std::dynamic_pointer_cast<T>(itr->second);
     assert(ret);
+    return ret;
+  }
+
+  std::vector<File::Path> GetStackTrace() const noexcept {
+    std::vector<File::Path> ret;
+    ret.reserve(depth_+1);
+
+    const auto* ptr = this;
+    while (ptr) {
+      ret.push_back(ptr->basepath_);
+      ptr = ptr->octx_.get();
+    }
     return ret;
   }
 

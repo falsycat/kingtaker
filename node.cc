@@ -26,6 +26,7 @@
 #include "util/life.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
+#include "util/node_logger.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -440,7 +441,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
     void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept override {
       if (!*life_) return;
       if (!owner_->ctx_) {
-        octx->Notify(owner_, "editor context is not generated yet");
+        NodeLoggerTextItem::Error(
+            owner_->abspath(), *octx, "editor context is not generated yet");
         return;
       }
       auto ictx = octx->data<LambdaContext>(owner_);
@@ -601,7 +603,8 @@ void Network::Update(Event& ev) noexcept {
   // update editor context
   if (!ctx_ || ctx_->basepath() != path) {
     if (ctx_) {
-      ctx_->Notify(this, "path change detected, editor context is cleared");
+      NodeLoggerTextItem::Info(
+          abspath(), *ctx_, "path change detected, editor context is cleared");
     }
     ctx_ = std::make_shared<EditorContext>(std::move(path), this);
     InitializeChildren(ctx_);
@@ -1055,7 +1058,8 @@ class SugarCall final : public File, public iface::Node {
     Rebuild();
     return true;
   } catch (Exception& e) {
-    ctx.Notify(this, e.msg());
+    NodeLoggerTextItem::Error(
+        abspath(), ctx, "while synchronizing socket: "s+e.msg());
     return false;
   }
 
@@ -1076,7 +1080,7 @@ class SugarCall final : public File, public iface::Node {
       if (!out) throw Exception("missing OutSock");
       out->Send(octx(), Value(v));
     } catch (Exception& e) {
-      octx()->Notify(owner_, e.msg());
+      NodeLoggerTextItem::Error(owner_->abspath(), *octx(), e.msg());
     }
 
    private:
@@ -1106,7 +1110,7 @@ class SugarCall final : public File, public iface::Node {
       cdata->ictx = std::make_shared<InnerContext>(owner_, octx, node);
       sock->Receive(cdata->ictx, std::move(v));
     } catch (Exception& e) {
-      octx->Notify(owner_, e.msg());
+      NodeLoggerTextItem::Error(owner_->abspath(), *octx, e.msg());
     }
 
    private:
@@ -1257,7 +1261,8 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     auto& tup = v.tuple();
     cdata->params.emplace_back(tup[0].string(), tup[1]);
   } catch (Exception& e) {
-    ctx->Notify(this, "error while taking parameter: "+e.msg());
+    NodeLoggerTextItem::Error(
+        abspath(), *ctx, "while setting parameter: "+e.msg());
   }
   void Exec(const std::shared_ptr<Context>& ctx) noexcept {
     ++try_cnt_;
@@ -1299,7 +1304,7 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
         (*itr)->Receive(ictx, Value(p.second));
       }
     } catch (Exception& e) {
-      ctx->Notify(this, e.msg());
+      NodeLoggerTextItem::Error(abspath(), *ctx, e.msg());
     }
   }
 

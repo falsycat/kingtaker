@@ -21,6 +21,7 @@
 #include "util/gui.hh"
 #include "util/luajit.hh"
 #include "util/node.hh"
+#include "util/node_logger.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -83,7 +84,7 @@ class Compile final : public LambdaNodeDriver {
     auto& out   = owner_->sharedOut(0);
     auto& error = owner_->sharedOut(1);
 
-    auto task = [owner = owner_, ctx, name = name_, src = src_, out, error](auto L) {
+    auto task = [path = owner_->abspath(), ctx, name = name_, src = src_, out, error](auto L) {
       static const auto lua_reader = [](auto, void* data, size_t* size) -> const char* {
         auto& ptr = *reinterpret_cast<const std::string**>(data);
         if (ptr) {
@@ -99,7 +100,7 @@ class Compile final : public LambdaNodeDriver {
         auto obj = luajit::Obj::PopAndCreate(&dev_, L);
         out->Send(ctx, std::static_pointer_cast<Value::Data>(obj));
       } else {
-        ctx->Notify(owner, lua_tostring(L, -1));
+        NodeLoggerTextItem::Error(path, *ctx, lua_tostring(L, -1));
         error->Send(ctx, {});
       }
     };
@@ -131,7 +132,7 @@ class Exec final : public File, public iface::Node {
         auto cdata = ctx->template data<ContextData>(this);
         cdata->func = v.template dataPtr<luajit::Obj>();
       } catch (Exception& e) {
-        ctx->Notify(this, e.msg());
+        NodeLoggerTextItem::Error(abspath(), *ctx, e.msg());
       }
     };
     sock_func_.emplace(this, "func", std::move(task_func));
@@ -140,7 +141,7 @@ class Exec final : public File, public iface::Node {
       try {
         ContextData::Send(ctx->template data<ContextData>(this), std::move(v));
       } catch (Exception& e) {
-        ctx->Notify(this, e.msg());
+        NodeLoggerTextItem::Error(abspath(), *ctx, e.msg());
       }
     };
     sock_send_.emplace(this, "send", std::move(task_send));
@@ -187,7 +188,8 @@ class Exec final : public File, public iface::Node {
         dev_.PushValue(L, v);
         Push(L, cdata);
         if (dev_.SandboxCall(L, 2, 0) != 0) {
-          ctx->Notify(cdata->owner(), lua_tostring(L, -1));
+          NodeLoggerTextItem::Error(
+              cdata->path_, *ctx, "lua execution error: "s+lua_tostring(L, -1));
         }
       };
       dev_.Queue(std::move(task));
@@ -220,7 +222,7 @@ class Exec final : public File, public iface::Node {
     }
 
     ContextData(Exec* o, const std::weak_ptr<Context>& ctx) noexcept :
-        owner_(o), ctx_(ctx) {
+        owner_(o), path_(o->abspath()), ctx_(ctx) {
     }
 
     void Clear(lua_State* L) noexcept {
@@ -245,6 +247,7 @@ class Exec final : public File, public iface::Node {
 
    private:
     Exec* owner_;
+    File::Path path_;
 
     std::weak_ptr<Context> ctx_;
     std::weak_ptr<OutSock> out_;
@@ -258,7 +261,7 @@ class Exec final : public File, public iface::Node {
         auto ctx   = cdata->ctx();
 
         auto msg = luaL_checkstring(L, 2);
-        ctx->Notify(cdata->owner_, msg);
+        NodeLoggerTextItem::Info(cdata->path_, *ctx, msg);
         return 0;
       } catch (Exception& e) {
         return luaL_error(L, e.msg().c_str());

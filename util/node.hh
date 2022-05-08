@@ -18,6 +18,7 @@
 
 #include "util/gui.hh"
 #include "util/history.hh"
+#include "util/node_logger.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -289,7 +290,8 @@ class LambdaNode final : public File, public iface::Node {
       try {
         ctx->data<Driver>(owner_)->Handle(idx_, std::move(v));
       } catch (Exception& e) {
-        ctx->Notify(owner_, "error while handling input ("+name()+"): "s+e.msg());
+        NodeLoggerTextItem::Error(
+            owner_->abspath(), *ctx, "while handling input ("+name()+"), "+e.msg());
       }
     }
 
