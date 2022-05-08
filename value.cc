@@ -74,7 +74,9 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
   void UpdateEditor() noexcept;
 
   void Initialize(const std::shared_ptr<Context>& ctx) noexcept override {
-    QueueEmit(ctx);
+    if (ctx->GetSrcOf(&sock_clk_).size() == 0) {
+      QueueEmit(ctx);
+    }
   }
   void QueueEmit(const std::shared_ptr<Context>& ctx) noexcept {
     Queue::main().Push([this, ctx]() { sock_clk_.Receive(ctx, {}); });
