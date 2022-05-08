@@ -138,7 +138,9 @@ class Node::Context {
 
   // must be thread-safe
   virtual void ObserveSend(const OutSock&, const Value&) noexcept { }
-  virtual void Notify(const std::shared_ptr<Logger::Item>&) noexcept { }
+  virtual void Notify(const std::shared_ptr<Logger::Item>& item) noexcept {
+    if (octx_) octx_->Notify(item);
+  }
 
   // Returns an empty when the socket is destructed or missing.
   virtual std::vector<InSock*> GetDstOf(const OutSock* s) const noexcept {
