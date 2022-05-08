@@ -76,7 +76,7 @@ class LoggerTextItem : public iface::Logger::Item {
                  File::Path&&         path,
                  std::string_view     msg,
                  std::source_location srcloc) noexcept :
-      Item(lv, srcloc), path_(std::move(path)), msg_(msg) {
+      Item(lv, std::move(path), srcloc), msg_(msg) {
   }
 
   void UpdateSummary() noexcept {
@@ -84,7 +84,7 @@ class LoggerTextItem : public iface::Logger::Item {
   }
   void UpdateTooltip() noexcept {
     ImGui::TextUnformatted(msg_.c_str());
-    ImGui::TextDisabled("from %s", path_.Stringify().c_str());
+    ImGui::TextDisabled("from %s", path().Stringify().c_str());
   }
   void UpdateMenu() noexcept {
     if (ImGui::MenuItem("focus")) {
@@ -97,7 +97,6 @@ class LoggerTextItem : public iface::Logger::Item {
   }
 
  private:
-  File::Path path_;
   std::string msg_;
 };
 

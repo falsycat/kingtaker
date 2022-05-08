@@ -1095,6 +1095,8 @@ class SugarCall final : public File, public iface::Node {
       NodeLoggerTextItem::Error(owner_->abspath(), *octx(), e.msg());
     }
 
+    Node* target() const noexcept { return target_; }
+
    private:
     SugarCall* owner_;
     Life::Ref  life_;
@@ -1119,7 +1121,10 @@ class SugarCall final : public File, public iface::Node {
       if (!sock) throw Exception("missing InSock: "+name());
 
       auto cdata = octx->data<ContextData>(owner_);
-      cdata->ictx = std::make_shared<InnerContext>(owner_, octx, node);
+      if (!cdata->ictx || cdata->ictx->target() != node) {
+        cdata->ictx = std::make_shared<InnerContext>(owner_, octx, node);
+        node->Initialize(cdata->ictx);
+      }
       sock->Receive(cdata->ictx, std::move(v));
     } catch (Exception& e) {
       NodeLoggerTextItem::Error(owner_->abspath(), *octx, e.msg());

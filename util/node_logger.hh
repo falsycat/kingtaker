@@ -16,21 +16,15 @@ namespace kingtaker {
 
 class NodeLoggerItem : public iface::Logger::Item {
  public:
-  static std::vector<File::Path> GetStackTrace(
-      File::Path&& path, const iface::Node::Context& ctx) noexcept {
-    auto ret = ctx.GetStackTrace();
-    ret.insert(ret.begin(), std::move(path));
-    return ret;
-  }
-
   NodeLoggerItem(iface::Logger::Level      lv,
+                 File::Path&&              path,
                  std::vector<File::Path>&& strace,
-                 std::source_location srcloc = std::source_location::current()) noexcept :
-      Item(lv, srcloc), strace_(std::move(strace)) {
+                 std::source_location      srcloc) noexcept :
+      Item(lv, std::move(path), srcloc), strace_(std::move(strace)) {
   }
 
-  void UpdateTooltip() noexcept override;
-  void UpdateMenu() noexcept override;
+  void UpdateTooltip(File&) noexcept override;
+  void UpdateMenu(File&) noexcept override;
 
   std::string Stringify() const noexcept override;
 
@@ -41,54 +35,36 @@ class NodeLoggerItem : public iface::Logger::Item {
 
 class NodeLoggerTextItem : public NodeLoggerItem {
  public:
-  static void Info(File::Path&&          path,
-                   iface::Node::Context& ctx,
-                   std::string_view      msg,
-                   std::source_location  srcloc = std::source_location::current()) noexcept {
-    ctx.Notify(std::make_shared<NodeLoggerTextItem>(
-            iface::Logger::kInfo, GetStackTrace(std::move(path), ctx), msg, srcloc));
-  }
-  static void Info(const File::Path&     path,
-                   iface::Node::Context& ctx,
-                   std::string_view      msg,
-                   std::source_location  srcloc = std::source_location::current()) noexcept {
-    Info(File::Path(path), ctx, msg, srcloc);
-  }
-  static void Warn(File::Path&&          path,
-                   iface::Node::Context& ctx,
-                   std::string_view      msg,
-                   std::source_location  srcloc = std::source_location::current()) noexcept {
-    ctx.Notify(std::make_shared<NodeLoggerTextItem>(
-            iface::Logger::kWarn, GetStackTrace(std::move(path), ctx), msg, srcloc));
-  }
-  static void Warn(const File::Path&     path,
-                   iface::Node::Context& ctx,
-                   std::string_view      msg,
-                   std::source_location  srcloc = std::source_location::current()) noexcept {
-    Warn(File::Path(path), ctx, msg, srcloc);
-  }
-  static void Error(File::Path&&          path,
-                    iface::Node::Context& ctx,
-                    std::string_view      msg,
-                    std::source_location  srcloc = std::source_location::current()) noexcept {
-    ctx.Notify(std::make_shared<NodeLoggerTextItem>(
-            iface::Logger::kError, GetStackTrace(std::move(path), ctx), msg, srcloc));
-  }
-  static void Error(const File::Path&     path,
-                    iface::Node::Context& ctx,
-                    std::string_view      msg,
-                    std::source_location  srcloc = std::source_location::current()) noexcept {
-    Error(File::Path(path), ctx, msg, srcloc);
-  }
+# define KINGTAKER_UTIL_NODE_LOGGER_DEFINE_LEVEL_(N)  \
+      static void N(File::Path&&          path,  \
+                    iface::Node::Context& ctx,  \
+                    std::string_view      msg,  \
+                    std::source_location  srcloc = std::source_location::current()) noexcept {  \
+        ctx.Notify(std::make_shared<NodeLoggerTextItem>(  \
+                iface::Logger::k##N, std::move(path), ctx.GetStackTrace(), msg, srcloc));  \
+      }  \
+      static void N(const File::Path&     path,  \
+                    iface::Node::Context& ctx,  \
+                    std::string_view      msg,  \
+                    std::source_location  srcloc = std::source_location::current()) noexcept {  \
+        N(File::Path(path), ctx, msg, srcloc);  \
+      }
+  KINGTAKER_UTIL_NODE_LOGGER_DEFINE_LEVEL_(Info)
+  KINGTAKER_UTIL_NODE_LOGGER_DEFINE_LEVEL_(Warn)
+  KINGTAKER_UTIL_NODE_LOGGER_DEFINE_LEVEL_(Error)
+# undef KINGTAKER_UTIL_NODE_LOGGER_DEFINE_LEVEL_
 
   NodeLoggerTextItem(iface::Logger::Level      lv,
+                     File::Path&&              path,
                      std::vector<File::Path>&& strace,
                      std::string_view          msg,
-                     std::source_location srcloc = std::source_location::current()) noexcept :
-      NodeLoggerItem(lv, std::move(strace), srcloc), msg_(msg) {
+                     std::source_location      srcloc) noexcept :
+      NodeLoggerItem(lv, std::move(path), std::move(strace), srcloc), msg_(msg) {
   }
 
-  void UpdateSummary() noexcept override;
+  void UpdateSummary(File&) noexcept override;
+  void UpdateTooltip(File&) noexcept override;
+
   std::string Stringify() const noexcept override;
 
  private:

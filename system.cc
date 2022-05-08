@@ -440,7 +440,7 @@ class Logger final : public File, public iface::DirItem, public iface::Logger {
       {typeid(iface::DirItem), typeid(iface::Logger)});
 
   Logger(Env* env, bool shown = true) noexcept :
-      File(&kType, env), DirItem(DirItem::kNone), shown_(shown) {
+      File(&kType, env), DirItem(DirItem::kMenu), shown_(shown) {
   }
 
   Logger(Env* env, const msgpack::object& obj) noexcept :
@@ -453,11 +453,12 @@ class Logger final : public File, public iface::DirItem, public iface::Logger {
     return std::make_unique<Logger>(env, shown_);
   }
 
-  void Push(std::shared_ptr<Logger::Item>&& item) noexcept override {
-    items_.push_back(std::move(item));
+  void Push(const std::shared_ptr<Logger::Item>& item) noexcept override {
+    items_.push_back(item);
   }
 
   void Update(Event&) noexcept override;
+  void UpdateMenu() noexcept override;
 
   void* iface(const std::type_index& t) noexcept override {
     return PtrSelector<iface::DirItem, iface::Logger>(t).Select(this);
@@ -478,9 +479,10 @@ void Logger::Update(Event& ev) noexcept {
         ImGuiTableFlags_ContextMenuInBody |
         ImGuiTableFlags_SizingStretchProp |
         ImGuiTableFlags_ScrollY;
-    if (ImGui::BeginTable("list", 3, kTableFlags, ImGui::GetContentRegionAvail(), 0)) {
+    if (ImGui::BeginTable("list", 4, kTableFlags, ImGui::GetContentRegionAvail(), 0)) {
       ImGui::TableSetupColumn("level");
       ImGui::TableSetupColumn("summary");
+      ImGui::TableSetupColumn("path");
       ImGui::TableSetupColumn("location");
       ImGui::TableSetupScrollFreeze(0, 1);
       ImGui::TableHeadersRow();
@@ -499,18 +501,32 @@ void Logger::Update(Event& ev) noexcept {
               item->lv() == kError? "ERRR": "XD";
           ImGui::Selectable(str, false, kFlags);
           if (ImGui::BeginPopupContextItem()) {
-            item->UpdateMenu();
+            if (ImGui::MenuItem("focus")) {
+              // TODO
+            }
+            if (ImGui::MenuItem("copy as text")) {
+              ImGui::SetClipboardText(item->Stringify().c_str());
+            }
+            ImGui::Separator();
+            item->UpdateMenu(*this);
             ImGui::EndPopup();
           }
         }
         if (ImGui::TableNextColumn()) {
           ImGui::BeginGroup();
-          item->UpdateSummary();
+          item->UpdateSummary(*this);
           ImGui::EndGroup();
           if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            item->UpdateTooltip();
+            item->UpdateTooltip(*this);
             ImGui::EndTooltip();
+          }
+        }
+        if (ImGui::TableNextColumn()) {
+          const auto path = item->path().Stringify();
+          ImGui::TextUnformatted(path.c_str());
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", path.c_str());
           }
         }
         if (ImGui::TableNextColumn()) {
@@ -529,6 +545,9 @@ void Logger::Update(Event& ev) noexcept {
     }
   }
   gui::EndWindow();
+}
+void Logger::UpdateMenu() noexcept {
+  ImGui::MenuItem("shown", nullptr, &shown_);
 }
 
 } }  // namespace kingtaker
