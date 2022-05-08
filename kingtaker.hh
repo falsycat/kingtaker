@@ -256,12 +256,35 @@ class File::TypeInfo final {
   Deserializer deserializer_;
 };
 
-class File::Path final : public std::vector<std::string> {
+class File::Path final {
  public:
-  using vector::vector;
+  Path() = default;
+  Path(std::initializer_list<std::string> terms) noexcept :
+      terms_(terms.begin(), terms.end()) {
+  }
+  Path(std::vector<std::string>&& terms) noexcept :
+      terms_(std::move(terms)) {
+  }
+  Path(const Path&) = default;
+  Path(Path&&) = default;
+  Path& operator=(const Path&) = default;
+  Path& operator=(Path&&) = default;
+
+  bool operator==(const Path& other) const noexcept {
+    return terms_ == other.terms_;
+  }
+  bool operator!=(const Path& other) const noexcept {
+    return terms_ != other.terms_;
+  }
 
   static Path Parse(std::string_view) noexcept;
   std::string Stringify() const noexcept;
+
+  std::span<const std::string> terms() const noexcept { return terms_; }
+  std::vector<std::string>& terms() noexcept { return terms_; }
+
+ private:
+  std::vector<std::string> terms_;
 };
 
 class File::Env final {
