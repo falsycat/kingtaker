@@ -79,20 +79,20 @@ class LoggerTextItem : public iface::Logger::Item {
       Item(lv, std::move(path), srcloc), msg_(msg) {
   }
 
-  void UpdateSummary() noexcept {
+  void UpdateSummary(File&) noexcept override {
     ImGui::TextUnformatted(msg_.c_str());
   }
-  void UpdateTooltip() noexcept {
+  void UpdateTooltip(File&) noexcept override {
     ImGui::TextUnformatted(msg_.c_str());
     ImGui::TextDisabled("from %s", path().Stringify().c_str());
   }
-  void UpdateMenu() noexcept {
+  void UpdateMenu(File&) noexcept override {
     if (ImGui::MenuItem("focus")) {
       // TODO
     }
   }
 
-  std::string Stringify() const noexcept {
+  std::string Stringify() const noexcept override {
     return msg_;
   }
 
