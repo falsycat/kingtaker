@@ -19,10 +19,10 @@ class LoggerTemporaryItemQueue final {
   using Item = iface::Logger::Item;
 
   LoggerTemporaryItemQueue() = default;
-  LoggerTemporaryItemQueue(const LoggerTemporaryItemQueue&) = default;
-  LoggerTemporaryItemQueue(LoggerTemporaryItemQueue&&) = default;
-  LoggerTemporaryItemQueue& operator=(const LoggerTemporaryItemQueue&) = default;
-  LoggerTemporaryItemQueue& operator=(LoggerTemporaryItemQueue&&) = default;
+  LoggerTemporaryItemQueue(const LoggerTemporaryItemQueue&) = delete;
+  LoggerTemporaryItemQueue(LoggerTemporaryItemQueue&&) = delete;
+  LoggerTemporaryItemQueue& operator=(const LoggerTemporaryItemQueue&) = delete;
+  LoggerTemporaryItemQueue& operator=(LoggerTemporaryItemQueue&&) = delete;
 
   // thread-safe
   void Push(const std::shared_ptr<Item>& item) noexcept {
