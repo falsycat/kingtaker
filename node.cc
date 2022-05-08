@@ -24,8 +24,10 @@
 #include "util/gui.hh"
 #include "util/history.hh"
 #include "util/life.hh"
+#include "util/logger.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
+#include "util/node_logger.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -139,6 +141,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
   class EditorContext;
   std::shared_ptr<EditorContext> ctx_;
+  LoggerTemporaryItemQueue logq_;
 
   ImVec2 canvas_size_;
 
@@ -211,8 +214,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
       std::unique_ptr<File>&& f, const ImVec2& pos) noexcept
   try {
     return std::make_unique<NodeHolder>(std::move(f), next_id_++, pos);
-  } catch (Exception&) {
-    // TODO: logging
+  } catch (Exception& e) {
+    logq_.Push(LoggerTextItem::Info(
+            abspath(), "failed to create new Node: "+e.msg()));
     return nullptr;
   }
   void Focus(NodeHolder* target) noexcept {
@@ -440,7 +444,8 @@ class Network : public File, public iface::DirItem, public iface::Node {
     void Receive(const std::shared_ptr<Context>& octx, Value&& v) noexcept override {
       if (!*life_) return;
       if (!owner_->ctx_) {
-        octx->Notify(owner_, "editor context is not generated yet");
+        NodeLoggerTextItem::Error(
+            owner_->abspath(), *octx, "editor context is not generated yet");
         return;
       }
       auto ictx = octx->data<LambdaContext>(owner_);
@@ -522,6 +527,14 @@ class Network : public File, public iface::DirItem, public iface::Node {
       return owner_->links_->GetSrcOf(in);
     }
 
+    // thread-safe
+    void Notify(const std::shared_ptr<iface::Logger::Item>& item) noexcept override {
+      auto task = [life = life_, owner = owner_, item]() {
+        if (*life) owner->logq_.Push(item);
+      };
+      Queue::main().Push(std::move(task));
+    }
+
    private:
     Network* owner_;
 
@@ -601,7 +614,8 @@ void Network::Update(Event& ev) noexcept {
   // update editor context
   if (!ctx_ || ctx_->basepath() != path) {
     if (ctx_) {
-      ctx_->Notify(this, "path change detected, editor context is cleared");
+      NodeLoggerTextItem::Info(
+          abspath(), *ctx_, "path change detected, editor context is cleared");
     }
     ctx_ = std::make_shared<EditorContext>(std::move(path), this);
     InitializeChildren(ctx_);
@@ -623,6 +637,7 @@ void Network::Update(Event& ev) noexcept {
     UpdateCanvas();
   }
   gui::EndWindow();
+  logq_.Flush(*this);
 }
 void Network::UpdateMenu() noexcept {
   ImGui::MenuItem("NetworkEditor", nullptr, &shown_);
@@ -1043,6 +1058,7 @@ class SugarCall final : public File, public iface::Node {
       socks_out_.push_back(std::make_unique<OutSock>(this, name));
       out_.push_back(socks_out_.back().get());
     }
+    NotifySockChange();
   }
   bool Sync(Context& ctx) noexcept
   try {
@@ -1055,7 +1071,8 @@ class SugarCall final : public File, public iface::Node {
     Rebuild();
     return true;
   } catch (Exception& e) {
-    ctx.Notify(this, e.msg());
+    NodeLoggerTextItem::Error(
+        abspath(), ctx, "while synchronizing socket: "s+e.msg());
     return false;
   }
 
@@ -1076,8 +1093,10 @@ class SugarCall final : public File, public iface::Node {
       if (!out) throw Exception("missing OutSock");
       out->Send(octx(), Value(v));
     } catch (Exception& e) {
-      octx()->Notify(owner_, e.msg());
+      NodeLoggerTextItem::Error(owner_->abspath(), *octx(), e.msg());
     }
+
+    Node* target() const noexcept { return target_; }
 
    private:
     SugarCall* owner_;
@@ -1103,10 +1122,13 @@ class SugarCall final : public File, public iface::Node {
       if (!sock) throw Exception("missing InSock: "+name());
 
       auto cdata = octx->data<ContextData>(owner_);
-      cdata->ictx = std::make_shared<InnerContext>(owner_, octx, node);
+      if (!cdata->ictx || cdata->ictx->target() != node) {
+        cdata->ictx = std::make_shared<InnerContext>(owner_, octx, node);
+        node->Initialize(cdata->ictx);
+      }
       sock->Receive(cdata->ictx, std::move(v));
     } catch (Exception& e) {
-      octx->Notify(owner_, e.msg());
+      NodeLoggerTextItem::Error(owner_->abspath(), *octx, e.msg());
     }
 
    private:
@@ -1199,7 +1221,8 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       in_params_(this, "params",
                  [this](auto& ctx, auto&& v) { SetParam(ctx, std::move(v)); }),
       in_exec_(this, "exec", [this](auto& ctx, auto&&) { Exec(ctx); }),
-      path_(path) {
+      path_(path),
+      logq_(std::make_shared<LoggerTemporaryItemQueue>()) {
     in_  = {&in_params_, &in_exec_};
     out_ = {&out_result_};
   }
@@ -1216,6 +1239,9 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     return std::make_unique<Cache>(env, path_);
   }
 
+  void Update(Event&) noexcept override {
+    logq_->Flush(*this);
+  }
   void UpdateMenu() noexcept override;
   void UpdateTooltip() noexcept override;
 
@@ -1239,6 +1265,8 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
   std::string path_;
 
   // volatile
+  std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+
   size_t try_cnt_ = 0;
   size_t hit_cnt_ = 0;
 
@@ -1257,13 +1285,13 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
     auto& tup = v.tuple();
     cdata->params.emplace_back(tup[0].string(), tup[1]);
   } catch (Exception& e) {
-    ctx->Notify(this, "error while taking parameter: "+e.msg());
+    NodeLoggerTextItem::Error(
+        abspath(), *ctx, "while setting parameter: "+e.msg());
   }
   void Exec(const std::shared_ptr<Context>& ctx) noexcept {
     ++try_cnt_;
 
-    auto cdata  = ctx->data<ContextData>(this);
-    auto params = std::move(cdata->params);
+    auto cdata = ctx->data<ContextData>(this);
 
     // a lambda that passes target node's output to self output
     auto obs = [this, ctx](auto name, auto& value) {
@@ -1289,17 +1317,21 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       auto n = File::iface<iface::Node>(f);
       if (!n) throw Exception("it's not a Node");
 
-      auto ictx = std::make_shared<InnerContext>(f->abspath(), ctx, n, item);
+      auto ictx = std::make_shared<InnerContext>(logq_, f->abspath(), n, item);
+      n->Initialize(ictx);
       for (const auto& p : item->in()) {
         const auto in = n->in();
 
         auto itr = std::find_if(in.begin(), in.end(),
                                 [&m = p.first](auto& x) { return x->name() == m; });
-        if (itr == in.end()) continue;
+        if (itr == in.end()) {
+          NodeLoggerTextItem::Warn(
+              abspath(), *ctx, "unknown parameter passed: "+p.first);
+        }
         (*itr)->Receive(ictx, Value(p.second));
       }
     } catch (Exception& e) {
-      ctx->Notify(this, e.msg());
+      NodeLoggerTextItem::Error(abspath(), *ctx, e.msg());
     }
   }
 
@@ -1377,11 +1409,11 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
    public:
     using Node = iface::Node;
 
-    InnerContext(Path&&                          basepath,
-                 const std::shared_ptr<Context>& octx,
+    InnerContext(const std::shared_ptr<LoggerTemporaryItemQueue>& logq,
+                 Path&&                          basepath,
                  Node*                           target,
                  const std::weak_ptr<StoreItem>& item) noexcept :
-        Context(std::move(basepath), octx), target_(target), item_(item) {
+        Context(std::move(basepath)), logq_(logq), target_(target), item_(item) {
     }
     ~InnerContext() {
       auto item = item_.lock();
@@ -1399,8 +1431,13 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
       };
       Queue::sub().Push(std::move(task));
     }
+    void Notify(const std::shared_ptr<iface::Logger::Item>& item) noexcept override {
+      logq_->Push(item);
+    }
 
    private:
+    std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+
     Node* target_;
 
     std::weak_ptr<StoreItem> item_;

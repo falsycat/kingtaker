@@ -14,6 +14,7 @@
 #include "util/gl.hh"
 #include "util/gui.hh"
 #include "util/node.hh"
+#include "util/node_logger.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -309,13 +310,13 @@ class Framebuffer final : public LambdaNodeDriver {
     auto& out = owner_->sharedOut(0);
 
     // check status and emit result
-    auto task = [owner = owner_, fb = fb_, ctx, out]() {
+    auto task = [path = owner_->abspath(), fb = fb_, ctx, out]() {
       glBindFramebuffer(GL_FRAMEBUFFER, fb->id());
       const auto stat = glCheckFramebufferStatus(GL_FRAMEBUFFER);
       if (stat == GL_FRAMEBUFFER_COMPLETE) {
         out->Send(ctx, std::dynamic_pointer_cast<Value::Data>(fb));
       } else {
-        ctx->Notify(owner, "broken framebuffer ("+std::to_string(stat)+")");
+        NodeLoggerTextItem::Error(path, *ctx, "broken framebuffer ("+std::to_string(stat)+")");
       }
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -447,7 +448,7 @@ class Program final : public LambdaNodeDriver {
     auto out = owner_->sharedOut(0);
 
     // link program and check status
-    auto task = [owner = owner_, prog = prog_, ctx, out]() {
+    auto task = [path = owner_->abspath(), prog = prog_, ctx, out]() {
       const auto id = prog->id();
       glLinkProgram(id);
 
@@ -459,7 +460,8 @@ class Program final : public LambdaNodeDriver {
         GLsizei len = 0;
         char buf[1024];
         glGetProgramInfoLog(id, sizeof(buf), &len, buf);
-        ctx->Notify(owner, buf);
+        NodeLoggerTextItem::Error(
+            path, *ctx, "failed to link program:\n"s+buf);
       }
       assert(glGetError() == GL_NO_ERROR);
     };
@@ -539,7 +541,7 @@ class Shader final : public LambdaNodeDriver {
     auto& error = owner_->sharedOut(1);
 
     auto shader = gl::Shader::Create(t_);
-    auto task = [owner = owner_, shader, srcs = srcs_, ctx, out, error]() {
+    auto task = [path = owner_->abspath(), shader, srcs = srcs_, ctx, out, error]() {
       const auto id = shader->id();
 
       std::vector<GLchar*> ptrs;
@@ -558,7 +560,7 @@ class Shader final : public LambdaNodeDriver {
         GLsizei len = 0;
         char buf[1024];
         glGetShaderInfoLog(id, sizeof(buf), &len, buf);
-        ctx->Notify(owner, buf);
+        NodeLoggerTextItem::Error(path, *ctx, "failed to compile shader:\n"s+buf);
         error->Send(ctx, {});
       }
     };
@@ -679,7 +681,7 @@ class DrawArrays final : public LambdaNodeDriver {
       return;
     }
 
-    auto task = [owner = owner_, ctx, done,
+    auto task = [path = owner_->abspath(), ctx, done,
                  prog     = prog_,
                  fb       = fb_,
                  vao      = vao_,
@@ -696,7 +698,7 @@ class DrawArrays final : public LambdaNodeDriver {
         try {
           GL_SetUniform(prog->id(), u.first, u.second);
         } catch (Exception& e) {
-          ctx->Notify(owner, e.msg());
+          NodeLoggerTextItem::Error(path, *ctx, e.msg());
         }
       }
 
@@ -793,7 +795,7 @@ class Preview final : public File, public iface::DirItem, public iface::Node {
       try {
         tex_ = v.template dataPtr<gl::Texture>();
       } catch (Exception& e) {
-        ctx->Notify(this, "error while handling 'tex': "+e.msg());
+        NodeLoggerTextItem::Error(abspath(), *ctx, "while handling (tex), "+e.msg());
       }
     };
     in_.emplace_back(new NodeLambdaInSock(this, "tex", std::move(task_tex)));

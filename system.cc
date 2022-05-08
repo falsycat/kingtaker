@@ -1,6 +1,7 @@
 #include "kingtaker.hh"
 
 #include <cassert>
+#include <cinttypes>
 #include <map>
 #include <memory>
 #include <string>
@@ -13,10 +14,12 @@
 #include "kingtaker.hh"
 
 #include "iface/dir.hh"
+#include "iface/logger.hh"
 #include "iface/node.hh"
 
 #include "util/gui.hh"
 #include "util/keymap.hh"
+#include "util/logger.hh"
 #include "util/node.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
@@ -298,7 +301,8 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
                       bool               shown     = false,
                       bool               enable    = false) noexcept :
       File(&kType, env), DirItem(kNone),
-      path_(path), sock_name_(sock_name), shown_(shown), enable_(enable) {
+      path_(path), sock_name_(sock_name), shown_(shown), enable_(enable),
+      logq_(std::make_shared<LoggerTemporaryItemQueue>()) {
   }
 
   ClockPulseGenerator(Env* env, const msgpack::object& obj) :
@@ -334,6 +338,7 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
       UpdateEditor();
     }
     gui::EndWindow();
+    logq_->Flush(*this);
   }
   void UpdateEditor() noexcept;
 
@@ -350,6 +355,8 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
   bool enable_;
 
   // volatile params
+  std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+
   std::string path_editing_;
 
 
@@ -363,14 +370,27 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
       auto sock = n->in(sock_name_);
       if (!sock) throw Exception("missing input socket, "+sock_name_);
 
-      auto ctx = std::make_shared<iface::Node::Context>(target.abspath());
+      auto ctx = std::make_shared<InnerContext>(this, target.abspath());
       n->Initialize(ctx);
       sock->Receive(ctx, Value::Pulse());
-    } catch (Exception&) {
-      // TODO: logging
+    } catch (Exception& e) {
+      logq_->Push(LoggerTextItem::Error(abspath(), e.msg()));
       enable_ = false;
     }
   }
+
+
+  class InnerContext final : public iface::Node::Context {
+   public:
+    InnerContext(ClockPulseGenerator* owner, File::Path&& path) noexcept :
+        Context(std::move(path)), logq_(owner->logq_) {
+    }
+    void Notify(const std::shared_ptr<iface::Logger::Item>& item) noexcept override {
+      logq_->Push(item);
+    }
+   private:
+    std::shared_ptr<LoggerTemporaryItemQueue> logq_;
+  };
 };
 void ClockPulseGenerator::UpdateEditor() noexcept {
   const auto em = ImGui::GetFontSize();
@@ -410,6 +430,124 @@ void ClockPulseGenerator::UpdateEditor() noexcept {
     ImGui::Checkbox("enable", &enable_);
   }
   ImGui::PopItemWidth();
+}
+
+
+class Logger final : public File, public iface::DirItem, public iface::Logger {
+ public:
+  static inline TypeInfo kType = TypeInfo::New<Logger>(
+      "System/Logger", "",
+      {typeid(iface::DirItem), typeid(iface::Logger)});
+
+  Logger(Env* env, bool shown = true) noexcept :
+      File(&kType, env), DirItem(DirItem::kMenu), shown_(shown) {
+  }
+
+  Logger(Env* env, const msgpack::object& obj) noexcept :
+      Logger(env, msgpack::as_if<bool>(obj, false)) {
+  }
+  void Serialize(Packer& pk) const noexcept override {
+    pk.pack(shown_);
+  }
+  std::unique_ptr<File> Clone(Env* env) const noexcept override {
+    return std::make_unique<Logger>(env, shown_);
+  }
+
+  void Push(const std::shared_ptr<Logger::Item>& item) noexcept override {
+    items_.push_back(item);
+  }
+
+  void Update(Event&) noexcept override;
+  void UpdateMenu() noexcept override;
+
+  void* iface(const std::type_index& t) noexcept override {
+    return PtrSelector<iface::DirItem, iface::Logger>(t).Select(this);
+  }
+
+ private:
+  bool shown_;
+
+  std::deque<std::shared_ptr<Logger::Item>> items_;
+};
+void Logger::Update(Event& ev) noexcept {
+  if (gui::BeginWindow(this, "Logger", ev, &shown_)) {
+    constexpr auto kTableFlags =
+        ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_Hideable  |
+        ImGuiTableFlags_RowBg     |
+        ImGuiTableFlags_Borders   |
+        ImGuiTableFlags_ContextMenuInBody |
+        ImGuiTableFlags_SizingStretchProp |
+        ImGuiTableFlags_ScrollY;
+    if (ImGui::BeginTable("list", 4, kTableFlags, ImGui::GetContentRegionAvail(), 0)) {
+      ImGui::TableSetupColumn("level");
+      ImGui::TableSetupColumn("summary");
+      ImGui::TableSetupColumn("path");
+      ImGui::TableSetupColumn("location");
+      ImGui::TableSetupScrollFreeze(0, 1);
+      ImGui::TableHeadersRow();
+
+      for (const auto& item : items_) {
+        ImGui::TableNextRow();
+        ImGui::PushID(item.get());
+
+        if (ImGui::TableSetColumnIndex(0)) {
+          constexpr auto kFlags =
+              ImGuiSelectableFlags_SpanAllColumns |
+              ImGuiSelectableFlags_AllowItemOverlap;
+          const char* str =
+              item->lv() == kInfo?  "INFO":
+              item->lv() == kWarn?  "WARN":
+              item->lv() == kError? "ERRR": "XD";
+          ImGui::Selectable(str, false, kFlags);
+          if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::MenuItem("focus")) {
+              // TODO
+            }
+            if (ImGui::MenuItem("copy as text")) {
+              ImGui::SetClipboardText(item->Stringify().c_str());
+            }
+            ImGui::Separator();
+            item->UpdateMenu(*this);
+            ImGui::EndPopup();
+          }
+        }
+        if (ImGui::TableNextColumn()) {
+          ImGui::BeginGroup();
+          item->UpdateSummary(*this);
+          ImGui::EndGroup();
+          if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            item->UpdateTooltip(*this);
+            ImGui::EndTooltip();
+          }
+        }
+        if (ImGui::TableNextColumn()) {
+          const auto path = item->path().Stringify();
+          ImGui::TextUnformatted(path.c_str());
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", path.c_str());
+          }
+        }
+        if (ImGui::TableNextColumn()) {
+          const auto& srcloc = item->srcloc();
+
+          const auto file = srcloc.file_name();
+          const auto line = static_cast<uintmax_t>(srcloc.line());
+          ImGui::Text("%s:%" PRIuMAX, file, line);
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s:%" PRIuMAX, file, line);
+          }
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndTable();
+    }
+  }
+  gui::EndWindow();
+}
+void Logger::UpdateMenu() noexcept {
+  ImGui::MenuItem("shown", nullptr, &shown_);
 }
 
 } }  // namespace kingtaker

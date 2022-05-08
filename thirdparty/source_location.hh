@@ -1,4 +1,7 @@
 #pragma once
+
+#include <version>
+
 #if defined(__cpp_lib_source_location)
 # include <source_location>
 #else

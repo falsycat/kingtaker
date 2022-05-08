@@ -68,7 +68,7 @@ File& File::Find(std::string_view) const {
 }
 File& File::Resolve(const Path& p) const {
   auto ret = const_cast<File*>(this);
-  for (const auto& term : p) {
+  for (const auto& term : p.terms()) {
     if (term == "..") {
       ret = parent_;
     } else if (term == ".") {
@@ -84,6 +84,20 @@ File& File::Resolve(const Path& p) const {
 File& File::Resolve(std::string_view p) const {
   return Resolve(Path::Parse(p));
 }
+File& File::ResolveUpward(const Path& p) const {
+  auto base = const_cast<File*>(this);
+  while (base) {
+    try {
+      return base->Resolve(p);
+    } catch (NotFoundException&) {
+      base = base->parent_;
+    }
+  }
+  throw NotFoundException("ResolveUpward failed: "s+p.Stringify());
+}
+File& File::ResolveUpward(std::string_view p) const {
+  return ResolveUpward(Path::Parse(p));
+}
 
 void File::Touch() noexcept {
   lastmod_ = Clock::now();
@@ -94,13 +108,13 @@ void File::Move(File* parent, std::string_view name) noexcept {
 }
 
 File::Path File::abspath() const noexcept {
-  Path ret;
+  std::vector<std::string> terms;
   for (auto f = this; f->parent_; f = f->parent_) {
-    ret.push_back(f->name_);
+    terms.push_back(f->name_);
   }
-  ret.push_back("$");
-  std::reverse(ret.begin(), ret.end());
-  return ret;
+  terms.push_back("$");
+  std::reverse(terms.begin(), terms.end());
+  return {std::move(terms)};
 }
 
 
@@ -123,25 +137,25 @@ File::TypeInfo::~TypeInfo() noexcept {
 
 
 File::Path File::Path::Parse(std::string_view path) noexcept {
-  Path ret;
+  std::vector<std::string> terms;
   while (path.size()) {
     const auto a = path.find_first_not_of('/');
     if (a != std::string::npos) {
       path.remove_prefix(a);
     } else {
-      return ret;
+      return {std::move(terms)};
     }
 
     const auto name = path.substr(0, path.find('/'));
     path.remove_prefix(name.size());
 
-    if (name.size()) ret.emplace_back(name);
+    if (name.size()) terms.emplace_back(name);
   }
-  return ret;
+  return {std::move(terms)};
 }
 std::string File::Path::Stringify() const noexcept {
   std::string ret;
-  for (const auto& name : *this) {
+  for (const auto& name : terms_) {
     ret += name;
     ret.push_back('/');
   }

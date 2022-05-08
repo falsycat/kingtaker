@@ -21,6 +21,7 @@
 #include "util/gui.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
+#include "util/node_logger.hh"
 #include "util/ptr_selector.hh"
 #include "util/value.hh"
 
@@ -73,7 +74,9 @@ class Imm final : public File, public iface::DirItem, public iface::Node {
   void UpdateEditor() noexcept;
 
   void Initialize(const std::shared_ptr<Context>& ctx) noexcept override {
-    QueueEmit(ctx);
+    if (ctx->GetSrcOf(&sock_clk_).size() == 0) {
+      QueueEmit(ctx);
+    }
   }
   void QueueEmit(const std::shared_ptr<Context>& ctx) noexcept {
     Queue::main().Push([this, ctx]() { sock_clk_.Receive(ctx, {}); });
@@ -492,7 +495,7 @@ class Pick final : public NameOrPick {
       sock->Send(ctx, Value(value));
     }
   } catch (Exception& e) {
-    ctx->Notify(this, e.msg());
+    NodeLoggerTextItem::Error(abspath(), *ctx, e.msg());
   }
 };
 void Pick::UpdateNode(const std::shared_ptr<Editor>& ctx) noexcept {

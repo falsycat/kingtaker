@@ -70,11 +70,14 @@ target_sources(kingtaker
     util/keymap.hh
     util/keymap.cc
     util/life.hh
+    util/logger.hh
     util/luajit.hh
     util/luajit.cc
     util/memento.hh
     util/node.hh
     util/node.cc
+    util/node_logger.hh
+    util/node_logger.cc
     util/ptr_selector.hh
     util/queue.hh
     util/value.hh
