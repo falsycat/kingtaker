@@ -84,6 +84,20 @@ File& File::Resolve(const Path& p) const {
 File& File::Resolve(std::string_view p) const {
   return Resolve(Path::Parse(p));
 }
+File& File::ResolveUpward(const Path& p) const {
+  auto base = const_cast<File*>(this);
+  while (base) {
+    try {
+      return base->Resolve(p);
+    } catch (NotFoundException&) {
+      base = base->parent_;
+    }
+  }
+  throw NotFoundException("ResolveUpward failed: "s+p.Stringify());
+}
+File& File::ResolveUpward(std::string_view p) const {
+  return ResolveUpward(Path::Parse(p));
+}
 
 void File::Touch() noexcept {
   lastmod_ = Clock::now();

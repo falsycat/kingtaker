@@ -57,7 +57,8 @@ class Exception {
 
   Loc loc_;
 };
-// Saves stacktrace but a bit heavy so don't use many times.
+
+// Exception with stacktrace
 class HeavyException : public Exception {
  public:
   HeavyException(std::string_view msg, Loc loc = Loc::current()) noexcept :
@@ -67,6 +68,7 @@ class HeavyException : public Exception {
  private:
   boost::stacktrace::stacktrace strace_;
 };
+
 class DeserializeException : public HeavyException {
  public:
   DeserializeException(std::string_view msg, Loc loc = Loc::current()) noexcept :
@@ -157,7 +159,9 @@ class File {
 
   // Returns a file specified by the relative path or throws NotFoundException.
   File& Resolve(const Path&) const;
-  File& Resolve(std::string_view p) const;
+  File& Resolve(std::string_view) const;
+  File& ResolveUpward(const Path&) const;
+  File& ResolveUpward(std::string_view) const;
 
   // Sets lastmod to current time.
   void Touch() noexcept;

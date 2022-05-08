@@ -24,6 +24,7 @@
 #include "util/gui.hh"
 #include "util/history.hh"
 #include "util/life.hh"
+#include "util/logger.hh"
 #include "util/memento.hh"
 #include "util/node.hh"
 #include "util/node_logger.hh"
@@ -140,6 +141,7 @@ class Network : public File, public iface::DirItem, public iface::Node {
 
   class EditorContext;
   std::shared_ptr<EditorContext> ctx_;
+  LoggerTemporaryItemQueue logq_;
 
   ImVec2 canvas_size_;
 
@@ -212,8 +214,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
       std::unique_ptr<File>&& f, const ImVec2& pos) noexcept
   try {
     return std::make_unique<NodeHolder>(std::move(f), next_id_++, pos);
-  } catch (Exception&) {
-    // TODO: logging
+  } catch (Exception& e) {
+    logq_.Push(LoggerTextItem::Info(
+            abspath(), "failed to create new Node: "+e.msg()));
     return nullptr;
   }
   void Focus(NodeHolder* target) noexcept {
@@ -524,6 +527,14 @@ class Network : public File, public iface::DirItem, public iface::Node {
       return owner_->links_->GetSrcOf(in);
     }
 
+    // thread-safe
+    void Notify(const std::shared_ptr<iface::Logger::Item>& item) noexcept override {
+      auto task = [life = life_, owner = owner_, item]() {
+        if (*life) owner->logq_.Push(item);
+      };
+      Queue::main().Push(std::move(task));
+    }
+
    private:
     Network* owner_;
 
@@ -626,6 +637,7 @@ void Network::Update(Event& ev) noexcept {
     UpdateCanvas();
   }
   gui::EndWindow();
+  logq_.Flush(*this);
 }
 void Network::UpdateMenu() noexcept {
   ImGui::MenuItem("NetworkEditor", nullptr, &shown_);

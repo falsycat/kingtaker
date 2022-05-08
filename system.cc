@@ -482,6 +482,7 @@ void Logger::Update(Event& ev) noexcept {
           ImGui::Selectable(str, false, kFlags);
           if (ImGui::BeginPopupContextItem()) {
             item->UpdateMenu();
+            ImGui::EndPopup();
           }
         }
         if (ImGui::TableNextColumn()) {
