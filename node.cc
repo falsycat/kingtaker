@@ -273,10 +273,9 @@ class Network : public File, public iface::DirItem, public iface::Node {
                bool                    sel = false) :
         pos(p), select(sel),
         file_(std::move(f)),
-        node_(File::iface<iface::Node>(file_.get())),
-        memento_(File::iface<iface::Memento>(file_.get())),
+        node_(&file_->ifaceOrThrow<iface::Node>()),
+        memento_(file_->iface<iface::Memento>()),
         id_(id) {
-      if (!node_) throw Exception("File doesn't have Node interface");
       if (memento_) obs_.emplace(this);
     }
 
@@ -915,28 +914,27 @@ class Call final : public LambdaNodeDriver {
       throw Exception("call depth limit reached");
     }
 
-    auto f = &owner_->root().Resolve(octx->basepath()).Resolve(path_);
-    if (f == owner_) throw Exception("self reference");
+    auto& f = owner_->root().Resolve(octx->basepath()).Resolve(path_);
+    if (&f == owner_) throw Exception("self reference");
 
-    auto n = File::iface<iface::Node>(f);
-    if (!n) throw Exception("target doesn't have Node interface");
+    auto& n = f.ifaceOrThrow<iface::Node>();
 
     const auto& tup   = v.tuple(2);
     const auto& name  = tup[0].string();
     const auto& value = tup[1];
 
-    auto sock = n->in(name);
+    auto sock = n.in(name);
     if (!sock) throw Exception("unknown input: "+name);
 
     auto ictx = ictx_.lock();
-    if (ictx && ictx->target() != n) {
+    if (ictx && ictx->target() != &n) {
       ictx->Attach(nullptr);
       ictx = nullptr;
     }
     if (!ictx) {
       ictx = std::make_shared<NodeRedirectContext>(
-          File::Path(octx->basepath()), octx, owner_->sharedOut(0), n);
-      n->Initialize(ictx);
+          File::Path(octx->basepath()), octx, owner_->sharedOut(0), &n);
+      n.Initialize(ictx);
     }
     ictx_ = ictx;
 
@@ -1035,9 +1033,7 @@ class SugarCall final : public File, public iface::Node {
 
 
   Node& GetTargetNode() {
-    auto node = File::iface<iface::Node>(&Resolve(memento_.data().path));
-    if (!node) throw Exception("target is not a Node");
-    return *node;
+    return Resolve(memento_.data().path).ifaceOrThrow<iface::Node>();
   }
   void Rebuild() noexcept {
     const auto& udata = memento_.data();
@@ -1311,16 +1307,15 @@ class Cache final : public File, public iface::DirItem, public iface::Node {
 
     // execute the target Node and store the result to the created item
     try {
-      auto f = &Resolve(path_);
-      if (f == this) throw Exception("self reference");
+      auto& f = Resolve(path_);
+      if (&f == this) throw Exception("self reference");
 
-      auto n = File::iface<iface::Node>(f);
-      if (!n) throw Exception("it's not a Node");
+      auto& n = f.ifaceOrThrow<iface::Node>();
 
-      auto ictx = std::make_shared<InnerContext>(logq_, f->abspath(), n, item);
-      n->Initialize(ictx);
+      auto ictx = std::make_shared<InnerContext>(logq_, f.abspath(), &n, item);
+      n.Initialize(ictx);
       for (const auto& p : item->in()) {
-        const auto in = n->in();
+        const auto in = n.in();
 
         auto itr = std::find_if(in.begin(), in.end(),
                                 [&m = p.first](auto& x) { return x->name() == m; });

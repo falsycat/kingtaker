@@ -225,7 +225,7 @@ void GenericDir::UpdateItem(File* f) noexcept {
       ImGuiTreeNodeFlags_NoTreePushOnOpen |
       ImGuiTreeNodeFlags_SpanFullWidth;
 
-  auto* ditem = File::iface<iface::DirItem>(f);
+  auto ditem = f->iface<iface::DirItem>();
   if (ditem && !(ditem->flags() & kTree)) {
     flags |= ImGuiTreeNodeFlags_Leaf;
   }
@@ -362,16 +362,14 @@ class ClockPulseGenerator final : public File, public iface::DirItem {
 
   void Emit() noexcept {
     try {
-      auto& target = Resolve(path_);
+      auto& f = Resolve(path_);
+      auto& n = f.ifaceOrThrow<iface::Node>();
 
-      auto n = File::iface<iface::Node>(&target);
-      if (!n) throw Exception("target doesn't have Node interface");
-
-      auto sock = n->in(sock_name_);
+      auto sock = n.in(sock_name_);
       if (!sock) throw Exception("missing input socket, "+sock_name_);
 
-      auto ctx = std::make_shared<InnerContext>(this, target.abspath());
-      n->Initialize(ctx);
+      auto ctx = std::make_shared<InnerContext>(this, f.abspath());
+      n.Initialize(ctx);
       sock->Receive(ctx, Value::Pulse());
     } catch (Exception& e) {
       logq_->Push(LoggerTextItem::Error(abspath(), e.msg()));
