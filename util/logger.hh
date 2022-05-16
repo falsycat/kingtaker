@@ -31,17 +31,24 @@ class LoggerTemporaryItemQueue final {
   }
 
   void Flush(File& base) noexcept {
-    std::unique_lock<std::mutex> _(mtx_);
-    if (items_.empty()) return;
-    try {
-      auto& f      = base.ResolveUpward("_logger");
-      auto* logger = File::iface<iface::Logger>(&f);
-      for (auto& item : items_) {
-        logger->Push(std::move(item));
-      }
-      items_.clear();
-    } catch (File::NotFoundException&) {
+    {
+      std::unique_lock<std::mutex> _(mtx_);
+      if (items_.empty()) return;
     }
+    auto task = [this, &base]() {
+      std::unique_lock<std::mutex> _(mtx_);
+      try {
+        auto& logger = base.ResolveUpward("_logger").ifaceOrThrow<iface::Logger>();
+        for (auto& item : items_) {
+          logger.Push(std::move(item));
+        }
+        items_.clear();
+      } catch (Exception&) {
+        items_.clear();
+        throw;
+      }
+    };
+    Queue::main().Push(std::move(task));
   }
 
  private:

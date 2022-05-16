@@ -61,9 +61,7 @@ class Exception {
 // Exception with stacktrace
 class HeavyException : public Exception {
  public:
-  HeavyException(std::string_view msg, Loc loc = Loc::current()) noexcept :
-      Exception(msg, loc) {
-  }
+  using Exception::Exception;
   std::string Stringify() const noexcept override;
  private:
   boost::stacktrace::stacktrace strace_;
@@ -71,9 +69,7 @@ class HeavyException : public Exception {
 
 class DeserializeException : public HeavyException {
  public:
-  DeserializeException(std::string_view msg, Loc loc = Loc::current()) noexcept :
-      HeavyException(msg, loc) {
-  }
+  using HeavyException::HeavyException;
 };
 
 
@@ -115,6 +111,7 @@ class File {
   class Env;
   class Event;
 
+  class NotImplementedException;
   class NotFoundException;
 
   using Registry = std::map<std::string, TypeInfo*>;
@@ -122,12 +119,6 @@ class File {
   static const TypeInfo* Lookup(const std::string&) noexcept;
   static std::unique_ptr<File> Deserialize(Env*, const msgpack::object&);
   static std::unique_ptr<File> Deserialize(Env*, std::istream&);
-
-  template <typename T>
-  static T* iface(File* f, T* def = nullptr) noexcept {
-    auto ret = reinterpret_cast<T*>(f->iface(typeid(T)));
-    return ret? ret: def;
-  }
 
   static File& root() noexcept;
   static const Registry& registry() noexcept;
@@ -169,11 +160,17 @@ class File {
   // Notifies this file is moved under new parent with new name.
   void Move(File*, std::string_view) noexcept;
 
+  Path abspath() const noexcept;
+
   // Takes typeinfo of the requested interface and
   // returns a pointer of the implementation or nullptr if not implemented.
   virtual void* iface(const std::type_index&) noexcept { return nullptr; }
-
-  Path abspath() const noexcept;
+  template <typename T>
+  T* iface() noexcept {
+    return reinterpret_cast<T*>(iface(typeid(T)));
+  }
+  template <typename T>
+  T& ifaceOrThrow();
 
   const TypeInfo& type() const noexcept { return *type_; }
   Env& env() const noexcept { return *env_; }
@@ -354,11 +351,20 @@ class File::Event {
   std::unordered_set<File*> focus_;
 };
 
+class File::NotImplementedException : public Exception {
+ public:
+  using Exception::Exception;
+};
+template <typename T>
+T& File::ifaceOrThrow() {
+  if (auto ret = iface<T>()) return *ret;
+  throw NotImplementedException(
+      typeid(T).name()+" is not implemented: "s+abspath().Stringify());
+}
+
 class File::NotFoundException : public Exception {
  public:
-  NotFoundException(std::string_view msg, Loc loc = Loc::current()) noexcept :
-      Exception(msg, loc) {
-  }
+  using Exception::Exception;
 };
 
 }  // namespace kingtaker

@@ -18,9 +18,7 @@ namespace kingtaker {
 
 class ValueException : public Exception {
  public:
-  ValueException(std::string_view msg, Loc loc = Loc::current()) noexcept :
-      Exception(msg, loc) {
-  }
+  using Exception::Exception;
 };
 
 

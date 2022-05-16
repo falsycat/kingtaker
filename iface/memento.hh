@@ -86,9 +86,7 @@ class Memento::Tag {
 
 class Memento::CollapseException : public Exception {
  public:
-  CollapseException(std::string_view msg, Loc loc = Loc::current()) noexcept :
-      Exception(msg, loc) {
-  }
+  using Exception::Exception;
 };
 
 }  // namespace kingtaker::iface
